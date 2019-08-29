@@ -1,0 +1,19 @@
+{
+    "variable": {
+        "url": {
+            "description": "An http URL to make a request to"
+        }
+    },
+    "data": {
+        "http": {
+            "example" : {
+                "url": "${var.url}"
+            }
+        }  
+    },
+    "output": {
+        "req": {
+            "value": "${data.http.example.body}"
+        }   
+    }
+}

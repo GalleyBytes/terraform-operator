@@ -1,0 +1,18 @@
+apiVersion: tf.isaaguilar.com/v1alpha1
+kind: Terraform
+metadata:
+  name: example-terraform
+  labels:
+    type: example-tfapply
+spec:
+  stack:
+    source:
+      address: https://github.com/isaaguilar/Terraform_create_file.git?ref=5668434b4f73ccdc0c62509b78e3a1d3612c4711
+      # address: https://github.com/terraform-aws-modules/terraform-aws-vpc.git?ref=bc4c8a23ec3afce319d5157a60100b650c200970
+      # extras:
+      #   - get-module-sources
+
+  config:
+    env:
+      - name: TF_VAR_cidr
+        value: 10.0.0.0/24
