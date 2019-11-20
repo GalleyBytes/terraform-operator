@@ -86,6 +86,8 @@ type RunOptions struct {
 	namespace        string
 	name             string
 	tfvarsConfigMap  string
+	tfvarsFile       string
+	envFile          string
 	envVars          map[string]string
 }
 
@@ -283,22 +285,51 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		}
 		data := make(map[string]string)
 		data["tfvars"] = tfvars
-		tfvarsConfigMap := instance.Name + "-tfvars"
-		// Save the vars as a configmap so a user can query kube without having
-		// to go find the configs from the download sources.
-		// Q. Shoud this just be as ephemeral as the modules?
-		err = job.createConfigMap(tfvarsConfigMap, instance.Namespace, make(map[string][]byte), data)
+		// tfvarsConfigMap := instance.Name + "-tfvars"
+
+		// Write the tfvars to a file
+		tfvarsFile, err := ioutil.TempFile("", "tfvars")
 		if err != nil {
-			return reconcile.Result{}, fmt.Errorf("Could not create configmap %v", err)
+			return reconcile.Result{}, fmt.Errorf("error creating tfvarsFile: %v", err)
 		}
-		runOpts.tfvarsConfigMap = tfvarsConfigMap
+		defer tfvarsFile.Close()
+
+		err = ioutil.WriteFile(tfvarsFile.Name(), []byte(tfvars), 0644)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("Could not write tfvars file: %v", err)
+		}
+
+		runOpts.tfvarsFile = tfvarsFile.Name()
+
+		// // Save the vars as a configmap so a user can query kube without having
+		// // to go find the configs from the download sources.
+		// // Q. Shoud this just be as ephemeral as the modules?
+		// err = job.createConfigMap(tfvarsConfigMap, instance.Namespace, make(map[string][]byte), data)
+		// if err != nil {
+		// 	return reconcile.Result{}, fmt.Errorf("Could not create configmap %v", err)
+		// }
+		// runOpts.tfvarsConfigMap = tfvarsConfigMap
 
 		// TODO Validate spec.config.env
+		envs := ""
 		for _, env := range instance.Spec.Config.Env {
-			runOpts.updateEnvVars(env.Name, env.Value)
+			envs += "\n" + env.Name + "=" + env.Value
 		}
 
-		reqLogger.Info(fmt.Sprintf("Ready to run terraform with run options: %+v", runOpts))
+		envFile, err := ioutil.TempFile("", "env")
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("error creating envFile: %v", err)
+		}
+		defer envFile.Close()
+
+		err = ioutil.WriteFile(envFile.Name(), []byte(envs), 0644)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("Could not write envFile file: %v", err)
+		}
+
+		runOpts.envFile = envFile.Name()
+
+		// reqLogger.Info(fmt.Sprintf("Ready to run terraform with run options: %+v", runOpts))
 
 		// dep := runOpts.run()
 
@@ -368,7 +399,7 @@ func (r RunOptions) run() error {
 	reqLogger.Info("terraform init .")
 	// TODO continue the terraform planning WIP
 
-	return job
+	return nil
 }
 
 func newDownloadOptionsFromSpec(instance *tfv1alpha1.Terraform, source *tfv1alpha1.SrcOpts) (DownloadOptions, error) {
