@@ -2,7 +2,6 @@ module github.com/isaaguilar/terraform-operator
 
 require (
 	github.com/Azure/azure-sdk-for-go v33.4.0+incompatible // indirect
-	github.com/NYTimes/gziphandler v1.0.1 // indirect
 	github.com/aliyun/alibaba-cloud-sdk-go v0.0.0-20190329064014-6e358769c32a // indirect
 	github.com/aliyun/aliyun-oss-go-sdk v0.0.0-20190103054945-8205d1f41e70 // indirect
 	github.com/aliyun/aliyun-tablestore-go-sdk v4.1.2+incompatible // indirect
@@ -14,7 +13,6 @@ require (
 	github.com/baiyubin/aliyun-sts-go-sdk v0.0.0-20180326062324-cfa1a18b161f // indirect
 	github.com/blang/semver v3.5.1+incompatible // indirect
 	github.com/bmatcuk/doublestar v1.1.5 // indirect
-	github.com/boltdb/bolt v1.3.1 // indirect
 	github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e // indirect
 	github.com/chzyer/test v0.0.0-20180213035817-a1ea475d72b1 // indirect
 	github.com/cloudfoundry/go-socks5 v0.0.0-20180221174514-54f73bdb8a8e // indirect
@@ -22,7 +20,6 @@ require (
 	github.com/dylanmei/winrmtest v0.0.0-20190225150635-99b7fe2fddf1 // indirect
 	github.com/elliotchance/sshtunnel v1.0.0
 	github.com/go-openapi/spec v0.19.0
-	github.com/googleapis/gax-go v2.0.0+incompatible // indirect
 	github.com/hashicorp/go-azure-helpers v0.0.0-20190129193224-166dfd221bb2 // indirect
 	github.com/hashicorp/go-checkpoint v0.5.0 // indirect
 	github.com/hashicorp/go-getter v1.4.0
@@ -57,7 +54,6 @@ require (
 	github.com/posener/complete v1.2.1 // indirect
 	github.com/shopspring/decimal v0.0.0-20190905144223-a36b5d85f337 // indirect
 	github.com/spf13/pflag v1.0.3
-	github.com/ugorji/go v1.1.1 // indirect
 	github.com/vmihailenco/msgpack v4.0.1+incompatible // indirect
 	github.com/whilp/git-urls v0.0.0-20160530060445-31bac0d230fa
 	github.com/zclconf/go-cty v1.0.1-0.20190708163926-19588f92a98f // indirect
@@ -94,3 +90,5 @@ replace (
 )
 
 replace github.com/operator-framework/operator-sdk => github.com/operator-framework/operator-sdk v0.10.0
+
+go 1.13

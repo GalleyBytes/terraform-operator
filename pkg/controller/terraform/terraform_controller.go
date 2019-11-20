@@ -40,7 +40,6 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -285,6 +284,9 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		data := make(map[string]string)
 		data["tfvars"] = tfvars
 		tfvarsConfigMap := instance.Name + "-tfvars"
+		// Save the vars as a configmap so a user can query kube without having
+		// to go find the configs from the download sources.
+		// Q. Shoud this just be as ephemeral as the modules?
 		err = job.createConfigMap(tfvarsConfigMap, instance.Namespace, make(map[string][]byte), data)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("Could not create configmap %v", err)
@@ -298,18 +300,25 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 
 		reqLogger.Info(fmt.Sprintf("Ready to run terraform with run options: %+v", runOpts))
 
-		// TODO prototype running tf in the controller instead of as a batch job
-		dep := runOpts.run()
+		// dep := runOpts.run()
 
-		controllerutil.SetControllerReference(instance, dep, r.scheme)
-		reqLogger.Info("Creating a new Job", "Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
+		// controllerutil.SetControllerReference(instance, dep, r.scheme)
+		// reqLogger.Info("Creating a new Job", "Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
 
-		err = r.client.Create(context.TODO(), dep)
+		// err = r.client.Create(context.TODO(), dep)
+		// if err != nil {
+		// 	reqLogger.Error(err, "Failed to create new Deployment", "Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
+		// 	return reconcile.Result{}, err
+		// }
+		// // Job created successfully - return and requeue
+
+		// TODO make sure that another run does not
+		// interfere with a currently running execution of the same run
+		err = runOpts.run()
 		if err != nil {
-			reqLogger.Error(err, "Failed to create new Deployment", "Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
-			return reconcile.Result{}, err
+			return reconcile.Result{}, fmt.Errorf("Terraform Run did not finish successfully: %v", err)
 		}
-		// Job created successfully - return and requeue
+
 		return reconcile.Result{Requeue: true}, nil
 	} else if err != nil {
 		reqLogger.Error(err, "Failed to get Job")
@@ -339,138 +348,25 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 	return reconcile.Result{}, nil
 }
 
-func (r RunOptions) run() *batchv1.Job {
+func (r RunOptions) run() error {
 	reqLogger := log.WithValues("function", "run")
 	reqLogger.Info(fmt.Sprintf("Running job with this setup: %+v", r))
 
-	// TF Module
-	envs := []apiv1.EnvVar{
-		{
-			Name:  "TFOPS_MAIN_MODULE",
-			Value: r.mainModule,
-		},
-	}
-	tfModules := []apiv1.Volume{}
-	for i, v := range r.moduleConfigMaps {
-		tfModules = append(tfModules, []apiv1.Volume{
-			{
-				Name: v,
-				VolumeSource: apiv1.VolumeSource{
-					ConfigMap: &apiv1.ConfigMapVolumeSource{
-						LocalObjectReference: apiv1.LocalObjectReference{
-							Name: v,
-						},
-					},
-				},
-			},
-		}...)
+	// // Get data["tfvars"] from tfvars configmap
+	// cm, err := job.readConfigMap(instance.Name+"-status", instance.Namespace)
+	// if err != nil {
+	// 	return reconcile.Result{}, err
+	// }
+	reqLogger.Info("use a client to get a configmap")
 
-		envs = append(envs, []apiv1.EnvVar{
-			{
-				Name:  "TFOPS_MODULE" + strconv.Itoa(i),
-				Value: v,
-			},
-		}...)
-	}
+	pvDir := "/tmp/modules"
 
-	// TF Vars
-	for k, v := range r.envVars {
-		envs = append(envs, []apiv1.EnvVar{
-			{
-				Name:  k,
-				Value: v,
-			},
-		}...)
-	}
-	tfVars := []apiv1.Volume{}
-	if r.tfvarsConfigMap != "" {
-		tfVars = append(tfVars, []apiv1.Volume{
-			{
-				Name: r.tfvarsConfigMap,
-				VolumeSource: apiv1.VolumeSource{
-					ConfigMap: &apiv1.ConfigMapVolumeSource{
-						LocalObjectReference: apiv1.LocalObjectReference{
-							Name: r.tfvarsConfigMap,
-						},
-					},
-				},
-			},
-		}...)
-
-		envs = append(envs, []apiv1.EnvVar{
-			{
-				Name:  "TFOPS_VARFILE_FLAG",
-				Value: "-var-file /tfops/" + r.tfvarsConfigMap + "/tfvars",
-			},
-		}...)
-	}
-	volumes := append(tfModules, tfVars...)
-
-	// TF State
-	optional := true
-	tfState := []apiv1.Volume{
-		{
-			Name: r.name + "-tfstate",
-			VolumeSource: apiv1.VolumeSource{
-				ConfigMap: &apiv1.ConfigMapVolumeSource{
-					LocalObjectReference: apiv1.LocalObjectReference{
-						Name: r.name + "-tfstate",
-					},
-					Optional: &optional,
-				},
-			},
-		},
-	}
-	envs = append(envs, []apiv1.EnvVar{
-		{
-			Name:  "TFOPS_STATE_FILE",
-			Value: "/tfops/" + r.name + "-tfstate/terraform.tfstate",
-		},
-	}...)
-	volumes = append(volumes, tfState...)
-
-	volumeMounts := []apiv1.VolumeMount{}
-
-	for _, v := range volumes {
-		// setting up volumeMounts
-		volumeMounts = append(volumeMounts, []apiv1.VolumeMount{
-			{
-				Name:      v.Name,
-				MountPath: "/tfops/" + v.Name,
-			},
-		}...)
-	}
-
-	// Schedule a job that will execute the terraform plan
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.name,
-			Namespace: r.namespace,
-		},
-		Spec: batchv1.JobSpec{
-			Template: apiv1.PodTemplateSpec{
-				Spec: apiv1.PodSpec{
-					ServiceAccountName: "terraform-operator", // make new sa for least-priv
-					RestartPolicy:      "Never",
-					Containers: []apiv1.Container{
-						{
-							Name:            "tf",
-							Image:           "isaaguilar/tfops:0.11.14",
-							ImagePullPolicy: "Always",
-							Env: append(envs, []apiv1.EnvVar{
-								{
-									Name:  "INSTANCE_NAME",
-									Value: r.name,
-								},
-							}...),
-							VolumeMounts: volumeMounts,
-						},
-					},
-					Volumes: volumes,
-				},
-			},
-		},
-	}
+	// This doesn't actually do anything, I'm just putting some placeholders in
+	// for when I write the actual command. Making sure the print statements
+	// look correct
+	reqLogger.Info("cd " + pvDir + "/" + r.mainModule)
+	reqLogger.Info("terraform init .")
+	// TODO continue the terraform planning WIP
 
 	return job
 }
@@ -605,15 +501,6 @@ func (d DownloadOptions) tfvarFiles() (string, error) {
 	}
 	// TODO validate tfvars
 	return tfvars, nil
-}
-
-func inlineSource(job k8sClient, inline *tfv1alpha1.Inline, namespace, name string) (string, error) {
-	name = name + "-runcmd"
-	err := job.createConfigMap(name, namespace, make(map[string][]byte), inline.ConfigMapFiles)
-	if err != nil {
-		return "", fmt.Errorf("Could not create configmap %v", err)
-	}
-	return name, nil
 }
 
 // downloadFromSource will downlaod the files locally. It will also download
@@ -1029,14 +916,20 @@ func (d DownloadOptions) downloadSource(job k8sClient, namespace string, instanc
 	}
 
 	// Write all to a configmap
-	binaryData, err := tarBinaryData(fullpath, d.hash)
-	if err != nil {
-		return fmt.Errorf("Error creating binary data: %v", err)
-	}
+	// binaryData, err := tarBinaryData(fullpath, d.hash)
+	// if err != nil {
+	// 	return fmt.Errorf("Error creating binary data: %v", err)
+	// }
+	//
+	// err = job.createConfigMap(d.hash, namespace, binaryData, make(map[string]string))
+	// if err != nil {
+	// 	return fmt.Errorf("Error creating binary data: %v", err)
+	// }
 
-	err = job.createConfigMap(d.hash, namespace, binaryData, make(map[string]string))
+	pvDir := "/tmp/modules" // TODO use a better file location for persistence
+	err = CopyDirectory(fullpath, filepath.Join(pvDir+"/"+d.hash))
 	if err != nil {
-		return fmt.Errorf("Error creating binary data: %v", err)
+		return fmt.Errorf("Error copying module dir to pv: %v", err)
 	}
 
 	r.updateDownloadedModules(d.hash)
