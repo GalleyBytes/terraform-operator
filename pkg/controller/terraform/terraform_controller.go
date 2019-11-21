@@ -350,7 +350,7 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 			return reconcile.Result{}, fmt.Errorf("Terraform Run did not finish successfully: %v", err)
 		}
 
-		return reconcile.Result{Requeue: true}, nil
+		return reconcile.Result{}, nil
 	} else if err != nil {
 		reqLogger.Error(err, "Failed to get Job")
 		return reconcile.Result{}, err
@@ -397,6 +397,14 @@ func (r RunOptions) run() error {
 	// look correct
 	reqLogger.Info("cd " + pvDir + "/" + r.mainModule)
 	reqLogger.Info("terraform init .")
+	// Set envs
+	if r.envFile != "" {
+		reqLogger.Info(fmt.Sprintf("export $(egrep -v '^#' %s | xargs)", r.envFile))
+	}
+	if r.tfvarsFile != "" {
+		reqLogger.Info(fmt.Sprintf("terraform plan -var-file %s -out plan.out .", r.tfvarsFile))
+	}
+
 	// TODO continue the terraform planning WIP
 
 	return nil
