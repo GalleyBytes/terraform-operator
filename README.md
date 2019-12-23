@@ -5,7 +5,9 @@ This project is not ready for usage. The concept is still being developed.  Lots
 
 - status of a deployment to be used in reconciliation
 - `terraform.state` file management
+    - This would be perfect with consul deployed in the same cluster. This can be deployed as part of the terraform-operator, otherwise a pre-requisite to the terraform-operator installation. 
 - cloud provider permissions to deploy cloud resources
+- Use a shared filesystem so pods could read/write modules to it
 - and lots lots more to consider...
 
 Below, however, is a functional example of the basic idea of the project.
