@@ -3,8 +3,9 @@ RUN wget https://storage.googleapis.com/kubernetes-release/release/`wget -qO- ht
     chmod +x kubectl
 
 FROM hashicorp/terraform:0.11.14
-RUN apk add bash
+RUN apk add bash gettext
 COPY --from=kubectl /kubectl /usr/local/bin/kubectl
 COPY run.sh /run.sh
+COPY backend.tf /backend.tf
 ENTRYPOINT ["/bin/bash"]
 CMD ["run.sh"]

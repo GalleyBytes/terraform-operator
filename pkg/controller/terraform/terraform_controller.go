@@ -3,7 +3,6 @@ package terraform
 import (
 	"archive/tar"
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -13,14 +12,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/elliotchance/sshtunnel"
+	"github.com/go-logr/logr"
 	getter "github.com/hashicorp/go-getter"
-	tfconfig "github.com/hashicorp/terraform/config"
-	goSocks5 "github.com/isaaguilar/socks5-proxy"
 	tfv1alpha1 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1"
+	"github.com/isaaguilar/terraform-operator/pkg/utils"
+	goSocks5 "github.com/isaaguilar/socks5-proxy"
 	giturl "github.com/whilp/git-urls"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/net/proxy"
@@ -36,10 +35,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -64,20 +65,17 @@ type ParsedAddress struct {
 }
 
 type DownloadOptions struct {
-	Address   string
-	Directory string
-	Extras    []string
-	Auth      tfv1alpha1.AuthOpts
-	SSHProxy  tfv1alpha1.ProxyOpts
+	Address          string
+	Directory        string
+	Extras           []string
+	SSHKeySecretRefs []tfv1alpha1.SSHKeySecretRef
+	TokenSecretRefs  []tfv1alpha1.TokenSecretRef
+	SSHProxy         tfv1alpha1.ProxyOpts
 	ParsedAddress
 }
 
 func (d *DownloadOptions) getProxyOpts(proxyOptions tfv1alpha1.ProxyOpts) {
 	d.SSHProxy = proxyOptions
-}
-
-func (d *DownloadOptions) getAuthOpts(authOptions tfv1alpha1.AuthOpts) {
-	d.Auth = authOptions
 }
 
 type RunOptions struct {
@@ -86,9 +84,11 @@ type RunOptions struct {
 	namespace        string
 	name             string
 	tfvarsConfigMap  string
-	tfvarsFile       string
-	envFile          string
 	envVars          map[string]string
+	cloudProfile     string
+	stack            ParsedAddress
+	token            string
+	sshConfig        string
 }
 
 func newRunOptions(namespace, name string) RunOptions {
@@ -106,6 +106,8 @@ func (r *RunOptions) updateDownloadedModules(module string) {
 func (r *RunOptions) updateEnvVars(k, v string) {
 	r.envVars[k] = v
 }
+
+const terraformFinalizer = "finalizer.tf.isaaguilar.com"
 
 var log = logf.Log.WithName("controller_terraform")
 
@@ -182,9 +184,8 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 	reqLogger := log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
 	reqLogger.Info("Reconciling Terraform")
 
-	// I set up a client here based on the only way I knew how to set up a
-	// client before... Instead I'm going to try and  recycle the
-	// runtime-controller client
+	// I set up a client here based on the only way I knew how to set up a client before
+	//TODO: try and recycle the runtime-controller client
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		panic(err.Error())
@@ -202,11 +203,13 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 	// Fetch the Terraform instance
 	instance := &tfv1alpha1.Terraform{}
 	err = r.client.Get(context.TODO(), request.NamespacedName, instance)
+	// reqLogger.Info(fmt.Sprintf("Here is the object's status before starting %+v", instance.Status))
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
 			// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
 			// Return and don't requeue
+			reqLogger.Info(fmt.Sprintf("Not found, instance is defined as: %+v", instance))
 			reqLogger.Info("Terraform resource not found. Ignoring since object must be deleted")
 			return reconcile.Result{}, nil
 		}
@@ -215,14 +218,69 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		return reconcile.Result{}, err
 	}
 
+	// Check if the job is marked to be deleted, which is
+	// indicated by the deletion timestamp being set.
+	isMarkedToBeDeleted := instance.GetDeletionTimestamp() != nil
+	if isMarkedToBeDeleted {
+		if utils.ListContainsStr(instance.GetFinalizers(), terraformFinalizer) {
+			// Run finalization logic for terraformFinalizer. If the
+			// finalization logic fails, don't remove the finalizer so
+			// that we can retry during the next reconciliation.
+
+			// let's make sure that a destroy job doesn't already exists
+
+			d := types.NamespacedName{Namespace: request.Namespace, Name: request.Name + "-destroy"}
+			destroyFound := &batchv1.Job{}
+			err = r.client.Get(context.TODO(), d, destroyFound)
+			if err != nil && errors.IsNotFound(err) {
+				if err := r.finalizeTerraform(reqLogger, instance, job); err != nil {
+					return reconcile.Result{}, err
+				}
+			} else if err != nil {
+				reqLogger.Error(err, "Failed to get Job")
+				return reconcile.Result{}, err
+			}
+
+			for {
+				reqLogger.Info("Checking if destroy task is done")
+				destroyFound = &batchv1.Job{}
+				err = r.client.Get(context.TODO(), d, destroyFound)
+				if err == nil {
+					if destroyFound.Status.Succeeded > 0 {
+						break
+					}
+					if destroyFound.Status.Failed > 6 {
+						break
+					}
+				}
+				time.Sleep(30 * time.Second)
+			}
+
+			// Remove terraformFinalizer. Once all finalizers have been
+			// removed, the object will be deleted.
+			instance.SetFinalizers(utils.ListRemoveStr(instance.GetFinalizers(), terraformFinalizer))
+			err := r.client.Update(context.TODO(), instance)
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+		}
+		return reconcile.Result{}, nil
+	}
+
+	if !utils.ListContainsStr(instance.GetFinalizers(), terraformFinalizer) {
+		if err := r.addFinalizer(reqLogger, instance); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
+
 	// Check if the deployment already exists, if not create a new one
-	found := &batchv1.Job{}
+	found := &batchv1.Job{} // found gets updated in the next line
 	err = r.client.Get(context.TODO(), request.NamespacedName, found)
+
 	if err != nil && errors.IsNotFound(err) {
-		// =-=-=-=-=- MEMCACHED EXAMPLE STEP: Define a new deployment =-=-=-=-
-		// dep := r.deploymentForMemcached(memcached)
 
 		runOpts := newRunOptions(instance.Namespace, instance.Name)
+		runOpts.updateEnvVars("DEPLOYMENT", instance.Name)
 		// runOpts.namespace = instance.Namespace
 
 		// Stack Download
@@ -232,42 +290,66 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		} // else if (tfv1alpha1.SrcOpts{}) == *instance.Spec.Stack.Source {
 		// 	return reconcile.Result{}, fmt.Errorf("No stack source defined")
 		// }
-		stackDownloadOptions, err := newDownloadOptionsFromSpec(instance, instance.Spec.Stack.Source)
+		address := instance.Spec.Stack.Source.Address
+		stackDownloadOptions, err := newDownloadOptionsFromSpec(instance, address)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("Error in newDownloadOptionsFromSpec: %v", err)
 		}
-		reqLogger.Info("Downloading Stack")
-		err = stackDownloadOptions.download(job, instance.Namespace)
-		if err != nil {
-			return reconcile.Result{}, fmt.Errorf("Error in download: %v", err)
-		}
-		reqLogger.Info(fmt.Sprintf("Stack was downloaded and updated DownloadOptions: %+v", stackDownloadOptions))
 
-		// Download module sources. This is usually handled by terraform but
-		// go-getter (the hashicorp tool to fetch sources) would need some kind of
-		// vpn or transparent proxy to get resources behind some firewalls. Even
-		// though it can be handled by the terraform worker pod, this option will
-		// download all the sources and create configmaps that get injected into
-		// the terraform worker pod so go-getter does not have to make any fetches.
-		if ListContainsStr(stackDownloadOptions.Extras, "get-module-sources") {
-			err = stackDownloadOptions.downloadSource(job, instance.Namespace, instance, []string{}, &runOpts)
-			if err != nil {
-				return reconcile.Result{}, fmt.Errorf("Error in downloadSource: %v", err)
-			}
-		} else {
-			runOpts.updateDownloadedModules(stackDownloadOptions.hash)
+		err = stackDownloadOptions.getParsedAddress()
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("Error in parsing address: %v", err)
 		}
+
+		// Since we're not going to download this to a configmap, we need to
+		// pass the information to the pod to do it. We should be able to
+		// use stackDownloadOptions.parsedAddress and just send that to
+		// the pod's environment vars.
+
+		runOpts.updateDownloadedModules(stackDownloadOptions.hash)
+		runOpts.stack = stackDownloadOptions.ParsedAddress
+
+		for i := range stackDownloadOptions.TokenSecretRefs {
+			// I think Terraform only allows for one token and one SSH key
+			// This will continue to iterate thru all the provided secrets, but
+			// only the last one will be used
+
+			name := stackDownloadOptions.TokenSecretRefs[i].Name
+			key := stackDownloadOptions.TokenSecretRefs[i].Key
+			if key == "" {
+				key = "token"
+			}
+			ns := stackDownloadOptions.TokenSecretRefs[i].Namespace
+			if ns == "" {
+				ns = instance.Namespace
+			}
+
+			gitPassword, err := job.loadPassword(key, name, ns)
+			if err != nil {
+				return reconcile.Result{}, fmt.Errorf("Error getting token: %v", err)
+			}
+			runOpts.token = gitPassword
+		}
+		for i := range stackDownloadOptions.SSHKeySecretRefs {
+			// I think Terraform only allows for one token and one SSH key
+			// This will continue to iterate thru all the provided secrets, but
+			// only the last one will be used
+			runOpts.sshConfig = stackDownloadOptions.SSHKeySecretRefs[i].Name
+		}
+
 		runOpts.mainModule = stackDownloadOptions.hash
-		reqLogger.Info(fmt.Sprintf("All moduleConfigMaps: %v", runOpts.moduleConfigMaps))
+		// reqLogger.Info(fmt.Sprintf("All moduleConfigMaps: %v", runOpts.moduleConfigMaps))
 
 		// Download the tfvar configs
 		reqLogger.Info("Reading spec.config ")
 		// TODO Validate spec.config exists
 		// TODO validate spec.config.sources exists && len > 0
+		runOpts.cloudProfile = instance.Spec.Config.CloudProfile
 		tfvars := ""
 		for _, s := range instance.Spec.Config.Sources {
+			address := s.Address
 			// Loop thru all the sources in spec.config
-			configDownloadOptions, err := newDownloadOptionsFromSpec(instance, s)
+			configDownloadOptions, err := newDownloadOptionsFromSpec(instance, address)
 			if err != nil {
 				return reconcile.Result{}, fmt.Errorf("Error in newDownloadOptionsFromSpec: %v", err)
 			}
@@ -275,7 +357,7 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 			if err != nil {
 				return reconcile.Result{}, fmt.Errorf("Error in download: %v", err)
 			}
-			reqLogger.Info(fmt.Sprintf("Config was downloaded and updated DownloadOptions: %+v", configDownloadOptions))
+			// reqLogger.Info(fmt.Sprintf("Config was downloaded and updated DownloadOptions: %+v", configDownloadOptions))
 
 			tfvarSource, err := configDownloadOptions.tfvarFiles()
 			if err != nil {
@@ -285,135 +367,454 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		}
 		data := make(map[string]string)
 		data["tfvars"] = tfvars
-		// tfvarsConfigMap := instance.Name + "-tfvars"
-
-		// Write the tfvars to a file
-		tfvarsFile, err := ioutil.TempFile("", "tfvars")
+		tfvarsConfigMap := instance.Name + "-tfvars"
+		err = job.createConfigMap(tfvarsConfigMap, instance.Namespace, make(map[string][]byte), data)
 		if err != nil {
-			return reconcile.Result{}, fmt.Errorf("error creating tfvarsFile: %v", err)
+			return reconcile.Result{}, fmt.Errorf("Could not create configmap %v", err)
 		}
-		defer tfvarsFile.Close()
-
-		err = ioutil.WriteFile(tfvarsFile.Name(), []byte(tfvars), 0644)
-		if err != nil {
-			return reconcile.Result{}, fmt.Errorf("Could not write tfvars file: %v", err)
-		}
-
-		runOpts.tfvarsFile = tfvarsFile.Name()
-
-		// // Save the vars as a configmap so a user can query kube without having
-		// // to go find the configs from the download sources.
-		// // Q. Shoud this just be as ephemeral as the modules?
-		// err = job.createConfigMap(tfvarsConfigMap, instance.Namespace, make(map[string][]byte), data)
-		// if err != nil {
-		// 	return reconcile.Result{}, fmt.Errorf("Could not create configmap %v", err)
-		// }
-		// runOpts.tfvarsConfigMap = tfvarsConfigMap
+		runOpts.tfvarsConfigMap = tfvarsConfigMap
 
 		// TODO Validate spec.config.env
-		envs := ""
 		for _, env := range instance.Spec.Config.Env {
-			envs += "\n" + env.Name + "=" + env.Value
+			runOpts.updateEnvVars(env.Name, env.Value)
 		}
-
-		envFile, err := ioutil.TempFile("", "env")
-		if err != nil {
-			return reconcile.Result{}, fmt.Errorf("error creating envFile: %v", err)
-		}
-		defer envFile.Close()
-
-		err = ioutil.WriteFile(envFile.Name(), []byte(envs), 0644)
-		if err != nil {
-			return reconcile.Result{}, fmt.Errorf("Could not write envFile file: %v", err)
-		}
-
-		runOpts.envFile = envFile.Name()
 
 		// reqLogger.Info(fmt.Sprintf("Ready to run terraform with run options: %+v", runOpts))
 
-		// dep := runOpts.run()
+		dep := runOpts.run()
 
-		// controllerutil.SetControllerReference(instance, dep, r.scheme)
+		controllerutil.SetControllerReference(instance, dep, r.scheme)
 		// reqLogger.Info("Creating a new Job", "Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
 
-		// err = r.client.Create(context.TODO(), dep)
-		// if err != nil {
-		// 	reqLogger.Error(err, "Failed to create new Deployment", "Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
-		// 	return reconcile.Result{}, err
-		// }
-		// // Job created successfully - return and requeue
-
-		// TODO make sure that another run does not
-		// interfere with a currently running execution of the same run
-		err = runOpts.run()
+		err = r.client.Create(context.TODO(), dep)
 		if err != nil {
-			return reconcile.Result{}, fmt.Errorf("Terraform Run did not finish successfully: %v", err)
+			reqLogger.Error(err, "Failed to create new Deployment", "Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
+			return reconcile.Result{}, err
 		}
-
-		return reconcile.Result{}, nil
+		// Job created successfully - return and requeue
+		return reconcile.Result{Requeue: true}, nil
 	} else if err != nil {
 		reqLogger.Error(err, "Failed to get Job")
 		return reconcile.Result{}, err
+	} else {
+		// Found
+		// reqLogger.Info(fmt.Sprintf("Job if found, printing status: %+v", found.Status))
 	}
 
 	if found.Status.Active != 0 {
 		// The terraform is still being executed, wait until 0 active
-		return reconcile.Result{Requeue: true}, nil
+		instance.Status.Phase = "running"
+		r.client.Status().Update(context.TODO(), instance)
+		requeueAfter := time.Duration(30 * time.Second)
+		return reconcile.Result{Requeue: true, RequeueAfter: requeueAfter}, nil
+
 	}
 
 	if found.Status.Succeeded > 0 {
+		now := time.Now()
 		// The terraform is still being executed, wait until 0 active
 		cm, err := job.readConfigMap(instance.Name+"-status", instance.Namespace)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
 		reqLogger.Info(fmt.Sprintf("Setting status of terraform plan as %v", cm.Data))
-		return reconcile.Result{}, nil
+		instance.Status.Phase = "stopped"
+		requeue := false
+		client := job.clientset
+
+		// Remove the successful pod
+		collection, err := client.CoreV1().Pods(instance.Namespace).List(metav1.ListOptions{LabelSelector: fmt.Sprintf("job-name=%s", instance.Name)})
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+
+		if len(collection.Items) == 0 {
+			requeue = true
+		}
+		for _, pod := range collection.Items {
+			// keep the pod around for 1 hour
+			diff := now.Sub(pod.Status.StartTime.Time)
+			if diff.Minutes() > 60 {
+				client.CoreV1().Pods(instance.Namespace).Delete(pod.Name, &metav1.DeleteOptions{})
+			}
+			// TODO fix the status here becuase setting status here will prevent changes that occur to the cr within 1 hour
+			instance.Status.LastGeneration = instance.ObjectMeta.Generation
+		}
+
+		// reqLogger.Info(fmt.Sprintf("The current generation of the terraform object is %d", instance.ObjectMeta.Generation))
+		r.client.Status().Update(context.TODO(), instance)
+
+		if instance.Status.LastGeneration != instance.ObjectMeta.Generation {
+			// Delete the current job and restart
+			err = client.BatchV1().Jobs(instance.Namespace).Delete(instance.Name, &metav1.DeleteOptions{})
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+			return reconcile.Result{Requeue: requeue}, nil
+		}
+
+		requeueAfter := time.Duration(60 * time.Second)
+		return reconcile.Result{Requeue: true, RequeueAfter: requeueAfter}, nil
+
 	}
 
-	// TODO How is tfstate handled? Do I create volume for tfstate? Store it in s3? Can I use a backend config? Do I need backends?
-	// TODO run terraform when CR changes
-	// TODO auto start reconciliation
-	// TODO figure out what triggers apply/destroy
+	// TODO should tf operator "auto" reconciliate (eg plan+apply)?
+	// TODO manually triggers apply/destroy
 
 	return reconcile.Result{}, nil
 }
 
-func (r RunOptions) run() error {
-	reqLogger := log.WithValues("function", "run")
-	reqLogger.Info(fmt.Sprintf("Running job with this setup: %+v", r))
+func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, c k8sClient) error {
+	// TODO(user): Add the cleanup steps that the operator
+	// needs to do before the CR can be deleted. Examples
+	// of finalizers include performing backups and deleting
+	// resources that are not owned by this CR, like a PVC.
 
-	// // Get data["tfvars"] from tfvars configmap
-	// cm, err := job.readConfigMap(instance.Name+"-status", instance.Namespace)
-	// if err != nil {
-	// 	return reconcile.Result{}, err
+	runOpts := newRunOptions(instance.Namespace, instance.Name+"-destroy")
+	runOpts.updateEnvVars("DEPLOYMENT", instance.Name)
+	// runOpts.namespace = instance.Namespace
+
+	// Stack Download
+	reqLogger.Info("Reading spec.stack config")
+	if (tfv1alpha1.TerraformStack{}) == *instance.Spec.Stack {
+		return fmt.Errorf("No stack source defined")
+	} // else if (tfv1alpha1.SrcOpts{}) == *instance.Spec.Stack.Source {
+	// 	return reconcile.Result{}, fmt.Errorf("No stack source defined")
 	// }
-	reqLogger.Info("use a client to get a configmap")
-
-	pvDir := "/tmp/modules"
-
-	// This doesn't actually do anything, I'm just putting some placeholders in
-	// for when I write the actual command. Making sure the print statements
-	// look correct
-	reqLogger.Info("cd " + pvDir + "/" + r.mainModule)
-	reqLogger.Info("terraform init .")
-	// Set envs
-	if r.envFile != "" {
-		reqLogger.Info(fmt.Sprintf("export $(egrep -v '^#' %s | xargs)", r.envFile))
-	}
-	if r.tfvarsFile != "" {
-		reqLogger.Info(fmt.Sprintf("terraform plan -var-file %s -out plan.out .", r.tfvarsFile))
+	address := instance.Spec.Stack.Source.Address
+	stackDownloadOptions, err := newDownloadOptionsFromSpec(instance, address)
+	if err != nil {
+		return fmt.Errorf("Error in newDownloadOptionsFromSpec: %v", err)
 	}
 
-	// TODO continue the terraform planning WIP
+	err = stackDownloadOptions.getParsedAddress()
+	if err != nil {
+		return fmt.Errorf("Error in parsing address: %v", err)
+	}
 
+	// Since we're not going to download this to a configmap, we need to
+	// pass the information to the pod to do it. We should be able to
+	// use stackDownloadOptions.parsedAddress and just send that to
+	// the pod's environment vars.
+
+	runOpts.updateDownloadedModules(stackDownloadOptions.hash)
+	runOpts.stack = stackDownloadOptions.ParsedAddress
+
+	for i := range stackDownloadOptions.TokenSecretRefs {
+		// I think Terraform only allows for one token and one SSH key
+		// This will continue to iterate thru all the provided secrets, but
+		// only the last one will be used
+
+		name := stackDownloadOptions.TokenSecretRefs[i].Name
+		key := stackDownloadOptions.TokenSecretRefs[i].Key
+		if key == "" {
+			key = "token"
+		}
+		ns := stackDownloadOptions.TokenSecretRefs[i].Namespace
+		if ns == "" {
+			ns = instance.Namespace
+		}
+
+		gitPassword, err := c.loadPassword(key, name, ns)
+		if err != nil {
+			return fmt.Errorf("Error getting token: %v", err)
+		}
+		runOpts.token = gitPassword
+	}
+	for i := range stackDownloadOptions.SSHKeySecretRefs {
+		// I think Terraform only allows for one token and one SSH key
+		// This will continue to iterate thru all the provided secrets, but
+		// only the last one will be used
+		runOpts.sshConfig = stackDownloadOptions.SSHKeySecretRefs[i].Name
+	}
+
+	runOpts.mainModule = stackDownloadOptions.hash
+	runOpts.cloudProfile = instance.Spec.Config.CloudProfile
+	tfvars := ""
+	for _, s := range instance.Spec.Config.Sources {
+		address := s.Address
+		// Loop thru all the sources in spec.config
+		configDownloadOptions, err := newDownloadOptionsFromSpec(instance, address)
+		if err != nil {
+			return fmt.Errorf("Error in newDownloadOptionsFromSpec: %v", err)
+		}
+		err = configDownloadOptions.download(c, instance.Namespace)
+		if err != nil {
+			return fmt.Errorf("Error in download: %v", err)
+		}
+		// reqLogger.Info(fmt.Sprintf("Config was downloaded and updated DownloadOptions: %+v", configDownloadOptions))
+
+		tfvarSource, err := configDownloadOptions.tfvarFiles()
+		if err != nil {
+			return fmt.Errorf("Error in reading tfvarFiles: %v", err)
+		}
+		tfvars += tfvarSource
+	}
+	data := make(map[string]string)
+	data["tfvars"] = tfvars
+	tfvarsConfigMap := instance.Name + "-tfvars"
+	err = c.createConfigMap(tfvarsConfigMap, instance.Namespace, make(map[string][]byte), data)
+	if err != nil {
+		return fmt.Errorf("Could not create configmap %v", err)
+	}
+	runOpts.tfvarsConfigMap = tfvarsConfigMap
+
+	// TODO Validate spec.config.env
+	for _, env := range instance.Spec.Config.Env {
+		runOpts.updateEnvVars(env.Name, env.Value)
+	}
+	runOpts.envVars["PLAN_DESTROY"] = "true"
+
+	dep := runOpts.run()
+
+	controllerutil.SetControllerReference(instance, dep, r.scheme)
+	// reqLogger.Info("Creating a new Job", "Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
+
+	err = r.client.Create(context.TODO(), dep)
+	if err != nil {
+		reqLogger.Error(err, "Failed to create destroy job", "Job.Namespace", dep.Namespace, "Job.Name", dep.Name)
+		return err
+	}
+	// // Job created successfully - return and requeue
+	// return reconcile.Result{Requeue: true}, nil
+
+	reqLogger.V(0).Info(fmt.Sprintf("Successfully finalized terraform on: %+v", instance))
 	return nil
 }
 
-func newDownloadOptionsFromSpec(instance *tfv1alpha1.Terraform, source *tfv1alpha1.SrcOpts) (DownloadOptions, error) {
+func (r *ReconcileTerraform) addFinalizer(reqLogger logr.Logger, instance *tfv1alpha1.Terraform) error {
+	reqLogger.Info("Adding Finalizer for terraform")
+	instance.SetFinalizers(append(instance.GetFinalizers(), terraformFinalizer))
+
+	// Update CR
+	err := r.client.Update(context.TODO(), instance)
+	if err != nil {
+		reqLogger.Error(err, "Failed to update terraform with finalizer")
+		return err
+	}
+	return nil
+}
+
+func (r RunOptions) run() *batchv1.Job {
+	reqLogger := log.WithValues("function", "run")
+	reqLogger.Info(fmt.Sprintf("Running job with this setup: %+v", r))
+
+	// TF Module
+	envs := []apiv1.EnvVar{}
+	if r.mainModule == "" {
+		r.mainModule = "main_module"
+	}
+	envs = append(envs, []apiv1.EnvVar{
+		{
+			Name:  "TFOPS_MAIN_MODULE",
+			Value: r.mainModule,
+		},
+	}...)
+	tfModules := []apiv1.Volume{}
+	// Check if stack is in a subdir
+	if r.stack.repo != "" {
+		envs = append(envs, []apiv1.EnvVar{
+			{
+				Name:  "STACK_REPO",
+				Value: r.stack.repo,
+			},
+			{
+				Name:  "STACK_REPO_HASH",
+				Value: r.stack.hash,
+			},
+			{
+				Name:  "GIT_PASSWORD",
+				Value: r.token,
+			},
+		}...)
+		if r.token != "" {
+			envs = append(envs, []apiv1.EnvVar{
+				{
+					Name:  "GIT_PASSWORD",
+					Value: r.token,
+				},
+			}...)
+		}
+		if len(r.stack.subdirs) > 0 {
+			envs = append(envs, []apiv1.EnvVar{
+				{
+					Name:  "STACK_REPO_SUBDIR",
+					Value: r.stack.subdirs[0],
+				},
+			}...)
+		}
+	} else {
+		for i, v := range r.moduleConfigMaps {
+			tfModules = append(tfModules, []apiv1.Volume{
+				{
+					Name: v,
+					VolumeSource: apiv1.VolumeSource{
+						ConfigMap: &apiv1.ConfigMapVolumeSource{
+							LocalObjectReference: apiv1.LocalObjectReference{
+								Name: v,
+							},
+						},
+					},
+				},
+			}...)
+
+			envs = append(envs, []apiv1.EnvVar{
+				{
+					Name:  "TFOPS_MODULE" + strconv.Itoa(i),
+					Value: v,
+				},
+			}...)
+		}
+	}
+
+	// TF Vars
+	for k, v := range r.envVars {
+		envs = append(envs, []apiv1.EnvVar{
+			{
+				Name:  k,
+				Value: v,
+			},
+		}...)
+	}
+	tfVars := []apiv1.Volume{}
+	if r.tfvarsConfigMap != "" {
+		tfVars = append(tfVars, []apiv1.Volume{
+			{
+				Name: r.tfvarsConfigMap,
+				VolumeSource: apiv1.VolumeSource{
+					ConfigMap: &apiv1.ConfigMapVolumeSource{
+						LocalObjectReference: apiv1.LocalObjectReference{
+							Name: r.tfvarsConfigMap,
+						},
+					},
+				},
+			},
+		}...)
+
+		envs = append(envs, []apiv1.EnvVar{
+			{
+				Name:  "TFOPS_VARFILE_FLAG",
+				Value: "-var-file /tfops/" + r.tfvarsConfigMap + "/tfvars",
+			},
+		}...)
+	}
+	volumes := append(tfModules, tfVars...)
+
+	// TF State
+	optional := true
+	tfState := []apiv1.Volume{
+		{
+			Name: r.name + "-tfstate",
+			VolumeSource: apiv1.VolumeSource{
+				ConfigMap: &apiv1.ConfigMapVolumeSource{
+					LocalObjectReference: apiv1.LocalObjectReference{
+						Name: r.name + "-tfstate",
+					},
+					Optional: &optional,
+				},
+			},
+		},
+	}
+	envs = append(envs, []apiv1.EnvVar{
+		{
+			Name:  "TFOPS_STATE_FILE",
+			Value: "/tfops/" + r.name + "-tfstate/terraform.tfstate",
+		},
+	}...)
+	volumes = append(volumes, tfState...)
+
+	volumeMounts := []apiv1.VolumeMount{}
+
+	for _, v := range volumes {
+		// setting up volumeMounts
+		volumeMounts = append(volumeMounts, []apiv1.VolumeMount{
+			{
+				Name:      v.Name,
+				MountPath: "/tfops/" + v.Name,
+			},
+		}...)
+	}
+
+	if r.sshConfig != "" {
+		mode := int32(0600)
+		volumes = append(volumes, []apiv1.Volume{
+			{
+				Name: "ssh-key",
+				VolumeSource: apiv1.VolumeSource{
+					Secret: &apiv1.SecretVolumeSource{
+						SecretName:  r.sshConfig,
+						DefaultMode: &mode,
+					},
+				},
+			},
+		}...)
+		volumeMounts = append(volumeMounts, []apiv1.VolumeMount{
+			{
+				Name:      "ssh-key",
+				MountPath: "/root/.ssh/",
+			},
+		}...)
+	}
+
+	annotations := make(map[string]string)
+	envFrom := []apiv1.EnvFromSource{}
+	if strings.Contains(r.cloudProfile, "kiam") {
+		annotations["iam.amazonaws.com/role"] = r.cloudProfile
+	} else {
+		envFrom = append(envFrom, []apiv1.EnvFromSource{
+			{
+				SecretRef: &apiv1.SecretEnvSource{
+					LocalObjectReference: apiv1.LocalObjectReference{
+						Name: r.cloudProfile,
+					},
+				},
+			},
+		}...)
+	}
+
+	// Schedule a job that will execute the terraform plan
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.name,
+			Namespace: r.namespace,
+		},
+		Spec: batchv1.JobSpec{
+			Template: apiv1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: annotations,
+				},
+				Spec: apiv1.PodSpec{
+					ServiceAccountName: strings.ReplaceAll(r.name, "-destroy", ""), // make new sa for least-priv
+					RestartPolicy:      "OnFailure",
+					Containers: []apiv1.Container{
+						{
+							Name:            "tf",
+							Image:           "isaaguilar/tfops:0.11.14",
+							ImagePullPolicy: "Always",
+							EnvFrom:         envFrom,
+							Env: append(envs, []apiv1.EnvVar{
+								{
+									Name:  "INSTANCE_NAME",
+									Value: r.name,
+								},
+							}...),
+							VolumeMounts: volumeMounts,
+						},
+					},
+					Volumes: volumes,
+				},
+			},
+		},
+	}
+
+	return job
+}
+
+func newDownloadOptionsFromSpec(instance *tfv1alpha1.Terraform, address string) (DownloadOptions, error) {
 	d := DownloadOptions{}
 	var sshProxyOptions tfv1alpha1.ProxyOpts
-	var tfAuthOptions tfv1alpha1.AuthOpts
+
+	// var tfAuthOptions []tfv1alpha1.AuthOpts
 
 	// TODO allow configmaps as a source. This has to be parsed differently
 	// before being passed to terraform's parsing mechanism
@@ -425,32 +826,16 @@ func newDownloadOptionsFromSpec(instance *tfv1alpha1.Terraform, source *tfv1alph
 	defer os.RemoveAll(temp) // clean up
 
 	d = DownloadOptions{
-		Address:   source.Address,
+		Address:   address,
 		Directory: temp,
-		Extras:    source.Extras,
 	}
+	d.SSHKeySecretRefs = instance.Spec.SSHKeySecretRefs
+	d.TokenSecretRefs = instance.Spec.TokenSecretRefs
 
-	if source.SSHProxy != nil {
-		if source.SSHProxy.Host != "" {
-			sshProxyOptions = tfv1alpha1.ProxyOpts{
-				Host: source.SSHProxy.Host,
-				User: source.SSHProxy.User,
-				Auth: source.SSHProxy.Auth,
-			}
-		}
-	} else if instance.Spec.SSHProxy != nil {
+	if instance.Spec.SSHProxy != nil {
 		sshProxyOptions = *instance.Spec.SSHProxy
 	}
-
 	d.getProxyOpts(sshProxyOptions)
-
-	if source.Auth != nil {
-		tfAuthOptions = *source.Auth
-	} else if instance.Spec.Auth != nil {
-		tfAuthOptions = *instance.Spec.Auth
-	}
-	d.getAuthOpts(tfAuthOptions)
-
 	return d, nil
 }
 
@@ -489,7 +874,7 @@ func (d DownloadOptions) tfvarFiles() (string, error) {
 	tfvars := ""
 
 	// TODO Should path definitions walk the path?
-	if ListContainsStr(d.Extras, "subdirs-as-files") {
+	if utils.ListContainsStr(d.Extras, "subdirs-as-files") {
 		for _, filename := range d.subdirs {
 			file := filepath.Join(d.Directory, filename)
 			content, err := ioutil.ReadFile(file)
@@ -540,6 +925,15 @@ func (d DownloadOptions) tfvarFiles() (string, error) {
 	}
 	// TODO validate tfvars
 	return tfvars, nil
+}
+
+func inlineSource(job k8sClient, inline *tfv1alpha1.Inline, namespace, name string) (string, error) {
+	name = name + "-runcmd"
+	err := job.createConfigMap(name, namespace, make(map[string][]byte), inline.ConfigMapFiles)
+	if err != nil {
+		return "", fmt.Errorf("Could not create configmap %v", err)
+	}
+	return name, nil
 }
 
 // downloadFromSource will downlaod the files locally. It will also download
@@ -614,7 +1008,7 @@ func tarBinaryData(fullpath, filename string) (map[string][]byte, error) {
 	// expect result of untar to be same as filename. Copy src to a
 	// "filename" dir instead of it's current dir
 	// targetSrc := filepath.Join(target, fmt.Sprintf("%s", filename))
-	err = CopyDirectory(fullpath, tarSource)
+	err = utils.CopyDirectory(fullpath, tarSource)
 	if err != nil {
 		return binaryData, err
 	}
@@ -832,151 +1226,10 @@ func untar(tarball, target string) error {
 	return nil
 }
 
-func ListContainsStr(s []string, e string) bool {
-	for _, a := range s {
-		if a == e {
-			return true
-		}
-	}
-	return false
-}
-
-func (d DownloadOptions) downloadSource(job k8sClient, namespace string, instance *tfv1alpha1.Terraform, downloadedSources []string, r *RunOptions) error {
-	// Make sure we want to download the module sources
-	// if !instance.Spec.Stack.Source.getModuleSources {
-	// 	return fmt.Errorf("Skip fetching module sources")
-	// }
-	reqLogger := log.WithValues("Namespace", namespace, "Function", "downloadSource")
-	fullpath := filepath.Join(d.Directory, d.subdirs[0])
-
-	tfConfigs, err := tfconfig.LoadDir(fullpath)
-	if err != nil {
-		return fmt.Errorf("Unable to LoadDir %s because %v", fullpath, err)
-	}
-
-	replacements := make(map[string]string)
-	for _, m := range tfConfigs.Modules {
-		// find the terraform method used to parse Sources
-		if strings.Contains(m.Source, "http") || strings.Contains(m.Source, "ssh") || strings.Contains(m.Source, "git@") {
-			if replacements[m.Source] != "" {
-				continue
-			}
-
-			var sshProxyOptions tfv1alpha1.ProxyOpts
-			var tfAuthOptions tfv1alpha1.AuthOpts
-			directory, err := ioutil.TempDir("", "repo")
-			if err != nil {
-				return fmt.Errorf("Unable to make directory: %v", err)
-			}
-			defer os.RemoveAll(directory) // clean up
-
-			moduleDownloadOptions := DownloadOptions{
-				Address:   m.Source,
-				Directory: directory,
-			}
-
-			if instance.Spec.SSHProxy != nil {
-				sshProxyOptions = *instance.Spec.SSHProxy
-			}
-			moduleDownloadOptions.getProxyOpts(sshProxyOptions)
-
-			if instance.Spec.Auth != nil {
-				tfAuthOptions = *instance.Spec.Auth
-			}
-			moduleDownloadOptions.getAuthOpts(tfAuthOptions)
-
-			err = moduleDownloadOptions.download(job, instance.Namespace)
-			if err != nil {
-				return fmt.Errorf("Error in download: %v", err)
-			}
-			reqLogger.Info(fmt.Sprintf("Module was downloaded and updated DownloadOptions: %+t", moduleDownloadOptions))
-
-			// Iterate thru all the files and download modules
-			// TODO make sure we don't end up in an endless loop if we see the same module being downloaded
-
-			if ListContainsStr(downloadedSources, m.Source) {
-				replacements[m.Source] = "/" + moduleDownloadOptions.hash
-				continue
-			} else {
-				downloadedSources = append(downloadedSources, m.Source)
-
-				err = moduleDownloadOptions.downloadSource(job, namespace, instance, downloadedSources, r)
-				if err != nil {
-					return err
-				}
-			}
-
-			// Will this update the module source file?
-			// Update source using basic search/replace functionality in dir
-			replacements[m.Source] = "/" + moduleDownloadOptions.hash
-
-			// if (tfv1alpha1.ProxyOpts{}) != d.SSHProxy {
-			// 	reqLogger.Info(fmt.Sprintf("Downloading %+v to .__modules__", m.Source))
-			// }
-
-		}
-		// reqLogger.Info(fmt.Sprintf("Downloading %+v", m))
-	}
-
-	if len(replacements) > 0 {
-		files, err := ioutil.ReadDir(fullpath)
-		if err != nil {
-			return fmt.Errorf("Error with ReadDir: %v", err)
-		}
-
-		for _, f := range files {
-			if !f.IsDir() {
-				filename := filepath.Join(fullpath, f.Name())
-				input, err := ioutil.ReadFile(filename)
-				if err != nil {
-					return fmt.Errorf("Error with ReadFile: %v", err)
-				}
-
-				lines := strings.Split(string(input), "\n")
-
-				for i, line := range lines {
-					if strings.Contains(line, "source") {
-						for k, v := range replacements {
-							if strings.Contains(line, k) {
-								lines[i] = string(bytes.Replace([]byte(lines[i]), []byte(k), []byte(v), -1))
-							}
-						}
-
-					}
-				}
-				output := strings.Join(lines, "\n")
-				err = ioutil.WriteFile(filename, []byte(output), 0644)
-				if err != nil {
-					return fmt.Errorf("Error with WriteFile: %v", err)
-				}
-			}
-
-		}
-	}
-
-	// Write all to a configmap
-	// binaryData, err := tarBinaryData(fullpath, d.hash)
-	// if err != nil {
-	// 	return fmt.Errorf("Error creating binary data: %v", err)
-	// }
-	//
-	// err = job.createConfigMap(d.hash, namespace, binaryData, make(map[string]string))
-	// if err != nil {
-	// 	return fmt.Errorf("Error creating binary data: %v", err)
-	// }
-
-	pvDir := "/tmp/modules" // TODO use a better file location for persistence
-	err = CopyDirectory(fullpath, filepath.Join(pvDir+"/"+d.hash))
-	if err != nil {
-		return fmt.Errorf("Error copying module dir to pv: %v", err)
-	}
-
-	r.updateDownloadedModules(d.hash)
-	reqLogger.Info(fmt.Sprintf("Created configmap for %s", d.hash))
-	return nil
-}
-
 func (d *DownloadOptions) download(job k8sClient, namespace string) error {
+	// This function only supports git modules. There's no explicit check
+	// for this yet.
+	// TODO document available options for sources
 	reqLogger := log.WithValues("Download", d.Address, "Namespace", namespace, "Function", "download")
 	reqLogger.Info("Starting download function")
 	err := d.getParsedAddress()
@@ -1082,7 +1335,7 @@ func (d *DownloadOptions) download(job k8sClient, namespace string) error {
 	}
 	reqLogger.Info(fmt.Sprintf("Getting ready to download source %s", repo))
 
-	gitAuthMethod, err := d.getGitAuthMethod(job, namespace)
+	gitAuthMethod, err := d.getGitAuthMethod(job, namespace, d.protocol)
 	if err != nil {
 		return fmt.Errorf("Error getting gitAuthMethod: %v", err)
 	}
@@ -1204,158 +1457,101 @@ func (d *DownloadOptions) getParsedAddress() error {
 
 func (d DownloadOptions) getProxyAuthMethod(job k8sClient, namespace string) (ssh.AuthMethod, error) {
 	var proxyAuthMethod ssh.AuthMethod
-	if d.SSHProxy.Auth.Type == "key" {
-		sshKey, err := job.loadPrivateKey(d.SSHProxy.Auth.Key, d.SSHProxy.Auth.Name, namespace)
-		if err != nil {
-			return proxyAuthMethod, fmt.Errorf("unable to get privkey: %v", err)
-		}
-		defer os.Remove(sshKey.Name())
-		defer sshKey.Close()
-		proxyAuthMethod = sshtunnel.PrivateKeyFile(sshKey.Name())
-	} else if d.SSHProxy.Auth.Type == "password" {
-		password, err := job.loadPassword(d.SSHProxy.Auth.Key, d.SSHProxy.Auth.Name, namespace)
-		if err != nil {
-			return proxyAuthMethod, fmt.Errorf("unable to get proxy password: %v", err)
-		}
-		proxyAuthMethod = ssh.Password(password)
+
+	name := d.SSHProxy.SSHKeySecretRef.Name
+	key := d.SSHProxy.SSHKeySecretRef.Key
+	if key == "" {
+		key = "id_rsa"
 	}
+	ns := d.SSHProxy.SSHKeySecretRef.Namespace
+	if ns == "" {
+		ns = namespace
+	}
+
+	sshKey, err := job.loadPrivateKey(key, name, ns)
+	if err != nil {
+		return proxyAuthMethod, fmt.Errorf("unable to get privkey: %v", err)
+	}
+	defer os.Remove(sshKey.Name())
+	defer sshKey.Close()
+	proxyAuthMethod = sshtunnel.PrivateKeyFile(sshKey.Name())
+
 	return proxyAuthMethod, nil
 }
 
-func (d *DownloadOptions) getGitAuthMethod(job k8sClient, namespace string) (gitauth.AuthMethod, error) {
+func (d *DownloadOptions) getGitAuthMethod(job k8sClient, namespace, protocol string) (gitauth.AuthMethod, error) {
 	var auth gitauth.AuthMethod
-	if d.Auth.Type == "key" {
-		sshKey, _ := job.loadPrivateKey(d.Auth.Key, d.Auth.Name, namespace)
-		defer os.Remove(sshKey.Name())
-		defer sshKey.Close()
 
-		key, err := ioutil.ReadFile(sshKey.Name())
-		if err != nil {
-			return auth, fmt.Errorf("unable to read private key: %v", err)
-		}
+	if protocol == "ssh" {
+		for i := range d.SSHKeySecretRefs {
 
-		// Create the Signer for this private key.
-		signer, err := ssh.ParsePrivateKey(key)
-		if err != nil {
-			return auth, fmt.Errorf("unable to parse private key: %v", err)
-		}
-
-		auth = &gitssh.PublicKeys{
-			User:   d.user,
-			Signer: signer,
-			HostKeyCallbackHelper: gitssh.HostKeyCallbackHelper{
-				HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-			},
-		}
-	} else if d.Auth.Type == "password" {
-		gitPassword, err := job.loadPassword(d.Auth.Key, d.Auth.Name, namespace)
-		if err != nil {
-			return auth, fmt.Errorf("unable to get password: %v", err)
-		}
-		auth = &githttp.BasicAuth{
-			Username: d.user,
-			Password: gitPassword,
-		}
-	}
-	return auth, nil
-}
-
-func CopyDirectory(scrDir, dest string) error {
-	entries, err := ioutil.ReadDir(scrDir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		sourcePath := filepath.Join(scrDir, entry.Name())
-		destPath := filepath.Join(dest, entry.Name())
-
-		fileInfo, err := os.Stat(sourcePath)
-		if err != nil {
-			return err
-		}
-
-		stat, ok := fileInfo.Sys().(*syscall.Stat_t)
-		if !ok {
-			return fmt.Errorf("failed to get raw syscall.Stat_t data for '%s'", sourcePath)
-		}
-
-		switch fileInfo.Mode() & os.ModeType {
-		case os.ModeDir:
-			if err := CreateIfNotExists(destPath, 0755); err != nil {
-				return err
+			name := d.SSHKeySecretRefs[i].Name
+			key := d.SSHKeySecretRefs[i].Key
+			if key == "" {
+				key = "id_rsa"
 			}
-			if err := CopyDirectory(sourcePath, destPath); err != nil {
-				return err
+			ns := d.SSHKeySecretRefs[i].Namespace
+			if ns == "" {
+				ns = namespace
 			}
-		case os.ModeSymlink:
-			if err := CopySymLink(sourcePath, destPath); err != nil {
-				return err
-			}
-		default:
-			if err := Copy(sourcePath, destPath); err != nil {
-				return err
-			}
-		}
 
-		if err := os.Lchown(destPath, int(stat.Uid), int(stat.Gid)); err != nil {
-			return err
-		}
+			sshKey, _ := job.loadPrivateKey(key, name, ns)
+			defer os.Remove(sshKey.Name())
+			defer sshKey.Close()
 
-		isSymlink := entry.Mode()&os.ModeSymlink != 0
-		if !isSymlink {
-			if err := os.Chmod(destPath, entry.Mode()); err != nil {
-				return err
+			keyF, err := ioutil.ReadFile(sshKey.Name())
+			if err != nil {
+				return auth, fmt.Errorf("unable to read private key: %v", err)
+			}
+
+			// Create the Signer for this private key.
+			signer, err := ssh.ParsePrivateKey(keyF)
+			if err != nil {
+				return auth, fmt.Errorf("unable to parse private key: %v", err)
+			}
+
+			auth = &gitssh.PublicKeys{
+				User:   d.user,
+				Signer: signer,
+				HostKeyCallbackHelper: gitssh.HostKeyCallbackHelper{
+					HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+				},
+			}
+
+			if auth.Name() != "" {
+				return auth, nil
 			}
 		}
 	}
-	return nil
-}
 
-func Copy(srcFile, dstFile string) error {
-	out, err := os.Create(dstFile)
-	defer out.Close()
-	if err != nil {
-		return err
+	if strings.Contains(protocol, "http") {
+		for i := range d.TokenSecretRefs {
+
+			name := d.TokenSecretRefs[i].Name
+			key := d.TokenSecretRefs[i].Key
+			if key == "" {
+				key = "token"
+			}
+			ns := d.TokenSecretRefs[i].Namespace
+			if ns == "" {
+				ns = namespace
+			}
+
+			gitPassword, err := job.loadPassword(key, name, ns)
+			if err != nil {
+				return auth, fmt.Errorf("unable to get password: %v", err)
+			}
+			auth = &githttp.BasicAuth{
+				Username: d.user,
+				Password: gitPassword,
+			}
+
+			if auth.Name() != "" {
+				return auth, nil
+			}
+		}
 	}
 
-	in, err := os.Open(srcFile)
-	defer in.Close()
-	if err != nil {
-		return err
-	}
+	return auth, fmt.Errorf("Unable to get gitauth Method")
 
-	_, err = io.Copy(out, in)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func Exists(filePath string) bool {
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		return false
-	}
-
-	return true
-}
-
-func CreateIfNotExists(dir string, perm os.FileMode) error {
-	if Exists(dir) {
-		return nil
-	}
-
-	if err := os.MkdirAll(dir, perm); err != nil {
-		return fmt.Errorf("failed to create directory: '%s', error: '%s'", dir, err.Error())
-	}
-
-	return nil
-}
-
-func CopySymLink(source, dest string) error {
-	link, err := os.Readlink(source)
-	if err != nil {
-		return err
-	}
-	return os.Symlink(link, dest)
 }

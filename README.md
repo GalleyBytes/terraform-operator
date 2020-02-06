@@ -12,6 +12,15 @@ This project is not ready for usage. The concept is still being developed.  Lots
 
 Below, however, is a functional example of the basic idea of the project.
 
+## Setting up Development Cluster (WIP/POC)
+
+Backend configs are overridden with a consul backend that must be installed in the cluster at `hashicorp-consul-server.default:8500`. This is a WIP and will probalby be enviromentalized for production. Set up a simple consule server by running the following commands: 
+
+```
+git clone --single-branch --branch v0.8.1 https://github.com/hashicorp/consul-helm.git
+helm install --name hashicorp ./consul-helm --set server.replicas=1 --set server.bootstrapExpect=1
+```
+
 
 ## Install the Operator and CRDs
 

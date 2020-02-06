@@ -82,9 +82,28 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 							Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts"),
 						},
 					},
-					"auth": {
+					"sshKeySecretRefs": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.AuthOpts"),
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SSHKeySecretRef"),
+									},
+								},
+							},
+						},
+					},
+					"tokenSecretRefs": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TokenSecretRef"),
+									},
+								},
+							},
 						},
 					},
 				},
@@ -92,7 +111,7 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 			},
 		},
 		Dependencies: []string{
-			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.AuthOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformConfig", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformStack"},
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SSHKeySecretRef", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformConfig", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformStack", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TokenSecretRef"},
 	}
 }
 
@@ -101,7 +120,22 @@ func schema_pkg_apis_tf_v1alpha1_TerraformStatus(ref common.ReferenceCallback) c
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
 				Description: "TerraformStatus defines the observed state of Terraform",
-				Properties:  map[string]spec.Schema{},
+				Properties: map[string]spec.Schema{
+					"phase": {
+						SchemaProps: spec.SchemaProps{
+							Description: "INSERT ADDITIONAL STATUS FIELD - define observed state of cluster Important: Run \"operator-sdk generate k8s\" to regenerate code after modifying this file Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"lastGeneration": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"integer"},
+							Format: "int64",
+						},
+					},
+				},
+				Required: []string{"phase", "lastGeneration"},
 			},
 		},
 		Dependencies: []string{},

@@ -33,23 +33,17 @@ spec:
           type: object
         spec:
           properties:
-            auth:
-              properties:
-                key:
-                  type: string
-                name:
-                  type: string
-                type:
-                  description: Type is either 'key' or 'password' or omit to skip
-                    creds
-                  type: string
-              required:
-              - type
-              - key
-              - name
-              type: object
             config:
               properties:
+                cloudProfile:
+                  description: CloudProfile defines the selector to cloud access keys
+                    or roles to attach to the terraform job executor. If it begines
+                    with "kiam-", the controller will assume this is a role and add
+                    the kiam annotation. Other clouds may have different role based
+                    mechanisms so other prefixes would need to be hard coded in the
+                    controller's if statements later. The default behaviour is to
+                    load the CloudProfile from a secret as environment vars.
+                  type: string
                 env:
                   items:
                     properties:
@@ -73,77 +67,52 @@ spec:
                           to define dir or tfvar files. This can be used multiple
                           times for multiple items.
                         type: string
-                      auth:
-                        properties:
-                          key:
-                            type: string
-                          name:
-                            type: string
-                          type:
-                            description: Type is either 'key' or 'password' or omit
-                              to skip creds
-                            type: string
-                        required:
-                        - type
-                        - key
-                        - name
-                        type: object
-                      extras:
-                        items:
-                          type: string
-                        type: array
-                      sshProxy:
-                        description: SSHProxy can be defined for each source, or omit
-                          this to use global
-                        properties:
-                          auth:
-                            properties:
-                              key:
-                                type: string
-                              name:
-                                type: string
-                              type:
-                                description: Type is either 'key' or 'password' or
-                                  omit to skip creds
-                                type: string
-                            required:
-                            - type
-                            - key
-                            - name
-                            type: object
-                          host:
-                            description: Auth   string  `json:"auth,omitempty"`
-                            type: string
-                          user:
-                            type: string
-                        type: object
                     required:
                     - address
                     type: object
                   type: array
               type: object
+            sshKeySecretRefs:
+              items:
+                properties:
+                  key:
+                    description: Key in the secret ref. Default to `id_rsa`
+                    type: string
+                  name:
+                    description: Name the secret name that has the SSH key
+                    type: string
+                  namespace:
+                    description: Namespace of the secret; Default is the namespace
+                      of the terraform resource
+                    type: string
+                required:
+                - name
+                type: object
+              type: array
             sshProxy:
+              description: TODO refactor to SSHTunnel
               properties:
-                auth:
+                host:
+                  type: string
+                sshKeySecretRef:
                   properties:
                     key:
+                      description: Key in the secret ref. Default to `id_rsa`
                       type: string
                     name:
+                      description: Name the secret name that has the SSH key
                       type: string
-                    type:
-                      description: Type is either 'key' or 'password' or omit to skip
-                        creds
+                    namespace:
+                      description: Namespace of the secret; Default is the namespace
+                        of the terraform resource
                       type: string
                   required:
-                  - type
-                  - key
                   - name
                   type: object
-                host:
-                  description: Auth   string  `json:"auth,omitempty"`
-                  type: string
                 user:
                   type: string
+              required:
+              - sshKeySecretRef
               type: object
             stack:
               description: 'INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
@@ -162,59 +131,45 @@ spec:
                         used to define dir or tfvar files. This can be used multiple
                         times for multiple items.
                       type: string
-                    auth:
-                      properties:
-                        key:
-                          type: string
-                        name:
-                          type: string
-                        type:
-                          description: Type is either 'key' or 'password' or omit
-                            to skip creds
-                          type: string
-                      required:
-                      - type
-                      - key
-                      - name
-                      type: object
-                    extras:
-                      items:
-                        type: string
-                      type: array
-                    sshProxy:
-                      description: SSHProxy can be defined for each source, or omit
-                        this to use global
-                      properties:
-                        auth:
-                          properties:
-                            key:
-                              type: string
-                            name:
-                              type: string
-                            type:
-                              description: Type is either 'key' or 'password' or omit
-                                to skip creds
-                              type: string
-                          required:
-                          - type
-                          - key
-                          - name
-                          type: object
-                        host:
-                          description: Auth   string  `json:"auth,omitempty"`
-                          type: string
-                        user:
-                          type: string
-                      type: object
                   required:
                   - address
                   type: object
               type: object
+            tokenSecretRefs:
+              items:
+                properties:
+                  key:
+                    description: Key in the secret ref. Default to `token`
+                    type: string
+                  name:
+                    description: Name the secret name that has the token or password
+                    type: string
+                  namespace:
+                    description: Namespace of the secret; Default is the namespace
+                      of the terraform resource
+                    type: string
+                required:
+                - name
+                type: object
+              type: array
           required:
           - stack
           - config
           type: object
         status:
+          properties:
+            lastGeneration:
+              format: int64
+              type: integer
+            phase:
+              description: 'INSERT ADDITIONAL STATUS FIELD - define observed state
+                of cluster Important: Run "operator-sdk generate k8s" to regenerate
+                code after modifying this file Add custom validation using kubebuilder
+                tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html'
+              type: string
+          required:
+          - phase
+          - lastGeneration
           type: object
   version: v1alpha1
   versions:

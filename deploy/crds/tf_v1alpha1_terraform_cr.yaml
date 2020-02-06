@@ -1,18 +1,67 @@
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: example
+
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: example
+subjects:
+- kind: ServiceAccount
+  name: example
+roleRef:
+  kind: ClusterRole
+  name: terraform-operator
+  apiGroup: rbac.authorization.k8s.io
+
+---
 apiVersion: tf.isaaguilar.com/v1alpha1
 kind: Terraform
 metadata:
-  name: example-terraform
+  name: example
   labels:
     type: example-tfapply
 spec:
+
+  # sshProxy:
+  #   host: 10.0.0.200
+  #   user: ec2-user
+  #   sshKeySecretRef: 
+  #     name: proxysshkey
+
+  sshKeySecretRefs:   # currently only supports one key
+  - name: gitsshkey
+    # key:            # `id_rsa` (default)
+    # namespace:      # default to the resource's namespace
+
+  tokenSecretRefs:    # currently only supports one token
+  - name: gittoken
+    # key:            # `token` (default)
+    # namespace:      # default to the resource's namespace
+ 
   stack:
     source:
-      address: https://github.com/isaaguilar/Terraform_create_file.git?ref=5668434b4f73ccdc0c62509b78e3a1d3612c4711
-      # address: https://github.com/terraform-aws-modules/terraform-aws-vpc.git?ref=bc4c8a23ec3afce319d5157a60100b650c200970
-      extras:
-        - get-module-sources
+      address: https://github.com/isaaguilar/simple-aws-s3-bucket.git
 
   config:
+    cloudProfile: opensession  # AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
     env:
-      - name: TF_VAR_cidr
-        value: 10.0.0.0/24
+      - name: TF_VAR_profile
+        value: isaaguilar
+      - name: TF_VAR_region
+        value: us-east-1                   # Bucket Region
+      - name: TF_VAR_bucket
+        value: terraform-operator-example
+      - name: TF_VAR_tags
+        value: |-
+          {
+            Owner = "Isa Aguilar"
+            ManagedBy = "terraform-operator"
+          }
+    sources:
+    # - address:    # some git path to .tfvars
+

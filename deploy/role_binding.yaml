@@ -5,10 +5,7 @@ metadata:
 subjects:
 - kind: ServiceAccount
   name: terraform-operator
-  namespace: default
-- kind: ServiceAccount
-  name: terraform-operator
-  namespace: isa
+  namespace: tf-system
 roleRef:
   kind: ClusterRole
   name: terraform-operator

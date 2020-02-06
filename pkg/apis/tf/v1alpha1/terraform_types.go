@@ -30,8 +30,11 @@ type TerraformSpec struct {
 	Stack  *TerraformStack  `json:"stack"`
 	Config *TerraformConfig `json:"config"`
 
+	// TODO refactor to SSHTunnel
 	SSHProxy *ProxyOpts `json:"sshProxy,omitempty"`
-	Auth     *AuthOpts  `json:"auth,omitempty"`
+
+	SSHKeySecretRefs []SSHKeySecretRef `json:"sshKeySecretRefs,omitempty"`
+	TokenSecretRefs  []TokenSecretRef  `json:"tokenSecretRefs,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -53,6 +56,15 @@ type TerraformStack struct {
 type TerraformConfig struct {
 	Sources []*SrcOpts `json:"sources,omitempty"`
 	Env     []EnvVar   `json:"env,omitempty"`
+
+	// CloudProfile defines the selector to cloud access keys or roles to
+	// attach to the terraform job executor. If it begines with "kiam-", the
+	// controller will assume this is a role and add the kiam annotation.
+	// Other clouds may have different role based mechanisms so other prefixes
+	// would need to be hard coded in the controller's if statements later.
+	// The default behaviour is to load the CloudProfile from a secret
+	// as environment vars.
+	CloudProfile string `json:"cloudProfile,omitempty"`
 }
 
 // EnvVar defines key/value pairs of env vars that get picked up by terraform
@@ -73,7 +85,7 @@ type ConfigMapOpts struct {
 	Keys []string `json:"keys,omitempty"`
 }
 
-// SrcOpts defines a source for tf resources
+// SrcOpts defines a terraform source location (eg git::SSH or git::HTTPS)
 type SrcOpts struct {
 
 	// Address defines the source address of the tf resources. This this var
@@ -82,28 +94,34 @@ type SrcOpts struct {
 	// When downloading `tfvars`, the double slash `//` syntax is used to
 	// define dir or tfvar files. This can be used multiple times for
 	// multiple items.
-	Address string    `json:"address"`
-	Auth    *AuthOpts `json:"auth,omitempty"`
-	Extras  []string  `json:"extras,omitempty"`
-
-	// SSHProxy can be defined for each source, or omit this to use global
-	SSHProxy *ProxyOpts `json:"sshProxy,omitempty"`
+	Address string `json:"address"`
 }
 
 // SSHProxy configures ssh tunnel/socks5 for downloading ssh/https resources
 type ProxyOpts struct {
-	// Auth   string  `json:"auth,omitempty"`
-	Host string    `json:"host,omitempty"`
-	User string    `json:"user,omitempty"`
-	Auth *AuthOpts `json:"auth,omitempty"`
+	Host            string          `json:"host,omitempty"`
+	User            string          `json:"user,omitempty"`
+	SSHKeySecretRef SSHKeySecretRef `json:"sshKeySecretRef"`
 }
 
-// Auth defines the name and key to extract
-type AuthOpts struct {
-	// Type is either 'key' or 'password' or omit to skip creds
-	Type string `json:"type"`
-	Key  string `json:"key"`
+// SSHKeySecretRef defines the secret where the SSH key (for the proxy, git, etc) is stored
+type SSHKeySecretRef struct {
+	// Name the secret name that has the SSH key
 	Name string `json:"name"`
+	// Namespace of the secret; Default is the namespace of the terraform resource
+	Namespace string `json:"namespace,omitempty"`
+	// Key in the secret ref. Default to `id_rsa`
+	Key string `json:"key,omitempty"`
+}
+
+// TokenSecetRef defines the token or password that can be used to log into a system (eg git)
+type TokenSecretRef struct {
+	// Name the secret name that has the token or password
+	Name string `json:"name"`
+	// Namespace of the secret; Default is the namespace of the terraform resource
+	Namespace string `json:"namespace,omitempty"`
+	// Key in the secret ref. Default to `token`
+	Key string `json:"key,omitempty"`
 }
 
 // Inline definitions of configmaps
@@ -117,7 +135,8 @@ type TerraformStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
 	// Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html
-
+	Phase          string `json:"phase"`
+	LastGeneration int64  `json:"lastGeneration"`
 }
 
 func init() {
