@@ -207,7 +207,7 @@ func (in *TerraformConfig) DeepCopy() *TerraformConfig {
 func (in *TerraformList) DeepCopyInto(out *TerraformList) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
-	out.ListMeta = in.ListMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
 	if in.Items != nil {
 		in, out := &in.Items, &out.Items
 		*out = make([]Terraform, len(*in))
