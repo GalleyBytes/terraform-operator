@@ -1,0 +1,40 @@
+apiVersion: tf.isaaguilar.com/v1alpha1
+kind: Terraform
+metadata:
+  name: iam-role-and-policy-example
+  labels:
+    type: iam
+spec:
+  sshProxy:
+    host: 10.151.14.31
+    user: ec2-user
+    sshKeySecretRef: 
+      name: proxysshkey
+  sshKeySecretRefs:   # currently only supports one key
+  - name: gitsshkey
+    # key:            # `id_rsa` (default)
+    # namespace:      # default to the resource's namespace
+  tokenSecretRefs:    # currently only supports one token
+  - name: gittoken
+    # key:            # `token` (default)
+    # namespace:      # default to the resource's namespace
+  stack:
+    source:
+      address: https://github.com/isaaguilar/simple-aws-tf-modules.git//iam-role-and-policy
+  config:
+    terraformVersion: 0.12.21
+    applyOnCreate: true
+    applyOnUpdate: true
+    applyOnDelete: true
+    reconcile:
+      enable: false
+      syncPeriod: 60 # int in minutes
+    cloudProfile: opensession  # AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
+    # cloudProfile: kiam-terraform
+    env:
+      - name: TF_VAR_profile
+        value: isaaguilar
+      - name: TF_VAR_region
+        value: us-west-2
+    sources:
+    - address: git@git.isaaguilar.com:iaguilar/scratch.git//iam-tfvars # tags.tfvars

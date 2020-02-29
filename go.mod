@@ -1,28 +1,5 @@
 module github.com/isaaguilar/terraform-operator
 
-require (
-	github.com/aws/aws-sdk-go v1.22.0 // indirect
-	github.com/cloudfoundry/go-socks5 v0.0.0-20180221174514-54f73bdb8a8e // indirect
-	github.com/cloudfoundry/socks5-proxy v0.2.0 // indirect
-	github.com/elliotchance/sshtunnel v1.0.0
-	github.com/go-logr/logr v0.1.0
-	github.com/go-openapi/spec v0.19.4
-	github.com/hashicorp/go-getter v1.4.0
-	github.com/isaaguilar/socks5-proxy v0.3.0
-	github.com/operator-framework/operator-sdk v0.15.1
-	github.com/spf13/pflag v1.0.5
-	github.com/whilp/git-urls v0.0.0-20160530060445-31bac0d230fa
-	golang.org/x/crypto v0.0.0-20191028145041-f83a4685e152
-	golang.org/x/net v0.0.0-20191028085509-fe3aa8a45271
-	gopkg.in/src-d/go-git.v4 v4.13.1
-	k8s.io/api v0.0.0
-	k8s.io/apimachinery v0.0.0
-	k8s.io/client-go v12.0.0+incompatible
-	k8s.io/kube-openapi v0.0.0-20190918143330-0270cf2f1c1d
-	sigs.k8s.io/controller-runtime v0.4.0
-	sigs.k8s.io/controller-tools v0.2.4
-)
-
 // Pinned to kubernetes-1.16.2
 replace (
 	k8s.io/api => k8s.io/api v0.0.0-20191016110408-35e52d86657a
@@ -49,7 +26,7 @@ replace (
 )
 
 replace (
-	github.com/coreos/prometheus-operator => github.com/coreos/prometheus-operator v0.29.0
+	github.com/coreos/prometheus-operator => github.com/coreos/prometheus-operator v0.32.0
 	// Pinned to v2.9.2 (kubernetes-1.13.1) so https://proxy.golang.org can
 	// resolve it correctly.
 	github.com/prometheus/prometheus => github.com/prometheus/prometheus v0.0.0-20190424153033-d3245f150225
@@ -58,10 +35,32 @@ replace (
 	sigs.k8s.io/controller-tools => sigs.k8s.io/controller-tools v0.1.11-0.20190411181648-9d55346c2bde
 )
 
-//replace github.com/operator-framework/operator-sdk => github.com/operator-framework/operator-sdk v0.13.1
+replace github.com/operator-framework/operator-sdk => github.com/operator-framework/operator-sdk v0.15.1
 
 replace github.com/docker/docker => github.com/moby/moby v0.7.3-0.20190826074503-38ab9da00309 // Required by Helm
 
 replace github.com/openshift/api => github.com/openshift/api v0.0.0-20190924102528-32369d4db2ad // Required until https://github.com/operator-framework/operator-lifecycle-manager/pull/1241 is resolved
 
 go 1.13
+
+require (
+	github.com/Azure/go-autorest v13.3.3+incompatible // indirect
+	github.com/Azure/go-autorest/autorest/adal v0.8.2 // indirect
+	github.com/cloudfoundry/go-socks5 v0.0.0-20180221174514-54f73bdb8a8e // indirect
+	github.com/elliotchance/sshtunnel v1.0.0
+	github.com/go-logr/logr v0.1.0
+	github.com/go-openapi/spec v0.19.6
+	github.com/hashicorp/go-getter v1.4.1
+	github.com/isaaguilar/socks5-proxy v0.3.0
+	github.com/operator-framework/operator-sdk v0.0.0-00010101000000-000000000000
+	github.com/spf13/pflag v1.0.5
+	github.com/whilp/git-urls v0.0.0-20191001220047-6db9661140c0
+	golang.org/x/crypto v0.0.0-20200210222208-86ce3cb69678
+	golang.org/x/net v0.0.0-20200202094626-16171245cfb2
+	gopkg.in/src-d/go-git.v4 v4.13.1
+	k8s.io/api v0.0.0
+	k8s.io/apimachinery v0.0.0
+	k8s.io/client-go v12.0.0+incompatible
+	k8s.io/kube-openapi v0.0.0-20200204173128-addea2498afe
+	sigs.k8s.io/controller-runtime v0.4.0
+)

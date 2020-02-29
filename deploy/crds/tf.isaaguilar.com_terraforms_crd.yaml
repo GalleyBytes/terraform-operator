@@ -39,6 +39,16 @@ spec:
               description: TerraformConfig points to the tfvars to deploy against
                 the stack
               properties:
+                applyOnCreate:
+                  description: ApplyOnCreate is used to apply any planned changes
+                    when the resource is first created. Omitting this or setting it
+                    to false will resort to on demand apply.
+                  type: boolean
+                applyOnUpdate:
+                  description: ApplyOnUpdate is used to apply any planned changes
+                    when the resource is updated. Omitting this or setting it to false
+                    will resort to on demand apply.
+                  type: boolean
                 cloudProfile:
                   description: CloudProfile defines the selector to cloud access keys
                     or roles to attach to the terraform job executor. If it begines
@@ -62,6 +72,21 @@ spec:
                     - value
                     type: object
                   type: array
+                reconcile:
+                  description: Reconcile are the settings used for auto-reconciliation
+                  properties:
+                    enable:
+                      description: Enable used to turn on the auto reconciliation
+                        of tfstate to actual provisions. Default to false
+                      type: boolean
+                    syncPeriod:
+                      description: SyncPeriod can be used to set a custom time to
+                        check actual provisions to tfstate. Defaults to 60 minutes
+                      format: int64
+                      type: integer
+                  required:
+                  - enable
+                  type: object
                 sources:
                   items:
                     description: SrcOpts defines a terraform source location (eg git::SSH

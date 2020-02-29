@@ -65,6 +65,40 @@ type TerraformConfig struct {
 	// The default behaviour is to load the CloudProfile from a secret
 	// as environment vars.
 	CloudProfile string `json:"cloudProfile,omitempty"`
+
+	// ApplyOnCreate is used to apply any planned changes when the resource is
+	// first created. Omitting this or setting it to false will resort to
+	// on demand apply. Defaults to false.
+	ApplyOnCreate bool `json:"applyOnCreate,omitempty"`
+
+	// ApplyOnUpdate is used to apply any planned changes when the resource is
+	// updated. Omitting this or setting it to false will resort to
+	// on demand apply. Defaults to false.
+	ApplyOnUpdate bool `json:"applyOnUpdate,omitempty"`
+
+	// ApplyOnDelete is used to apply the destroy plan when the terraform
+	// resource is being deleted. Omitting this or setting it to false will
+	// require "on-demand" apply. Defaults to false.
+	ApplyOnDelete bool `json:"applyOnDelete,omitempty"`
+
+	// Reconcile are the settings used for auto-reconciliation
+	Reconcile *ReconcileTerraformDeployment `json:"reconcile,omitempty"`
+
+	// TerraformVersion helps the operator decide which terraform image to
+	// run the terraform in. Defaults to v0.11.14
+	TerraformVersion string `json:"terraformVersion,omitempty"`
+}
+
+// ReconcileTerraformDeployment is used to configure auto watching the resources
+// created by terraform and re-applying them automatically if they are not
+// in-sync with the terraform state.
+type ReconcileTerraformDeployment struct {
+	// Enable used to turn on the auto reconciliation of tfstate to actual
+	// provisions. Default to false
+	Enable bool `json:"enable"`
+	// SyncPeriod can be used to set a custom time to check actual provisions
+	// to tfstate. Defaults to 60 minutes
+	SyncPeriod int64 `json:"syncPeriod,omitempty"`
 }
 
 // EnvVar defines key/value pairs of env vars that get picked up by terraform

@@ -14,11 +14,11 @@ import (
 	"strings"
 	"time"
 
+	tfv1alpha1 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1"
+	"github.com/isaaguilar/terraform-operator/pkg/utils"
 	"github.com/elliotchance/sshtunnel"
 	"github.com/go-logr/logr"
 	getter "github.com/hashicorp/go-getter"
-	tfv1alpha1 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1"
-	"github.com/isaaguilar/terraform-operator/pkg/utils"
 	goSocks5 "github.com/isaaguilar/socks5-proxy"
 	giturl "github.com/whilp/git-urls"
 	"golang.org/x/crypto/ssh"
@@ -31,13 +31,15 @@ import (
 	githttp "gopkg.in/src-d/go-git.v4/plumbing/transport/http"
 	gitssh "gopkg.in/src-d/go-git.v4/plumbing/transport/ssh"
 	batchv1 "k8s.io/api/batch/v1"
-	apiv1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -89,13 +91,41 @@ type RunOptions struct {
 	stack            ParsedAddress
 	token            string
 	sshConfig        string
+	applyAction      bool
+	isNewResource    bool
+	terraformVersion string
 }
 
-func newRunOptions(namespace, name string) RunOptions {
+func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
+	// TODO Read the tfstate and decide IF_NEW_RESOURCE based on that
+	isNewResource := false
+	applyAction := false
+	name := instance.Name
+	terraformVersion := "0.11.14"
+
+	if isDestroy {
+		isNewResource = false
+		applyAction = instance.Spec.Config.ApplyOnDelete
+		name = name + "-destroy"
+	} else if instance.ObjectMeta.Generation > 1 {
+		isNewResource = false
+		applyAction = instance.Spec.Config.ApplyOnUpdate
+	} else {
+		isNewResource = true
+		applyAction = instance.Spec.Config.ApplyOnCreate
+	}
+
+	if instance.Spec.Config.TerraformVersion != "" {
+		terraformVersion = instance.Spec.Config.TerraformVersion
+	}
+
 	return RunOptions{
-		namespace: namespace,
-		name:      name,
-		envVars:   make(map[string]string),
+		namespace:        instance.Namespace,
+		name:             name,
+		envVars:          make(map[string]string),
+		isNewResource:    isNewResource,
+		applyAction:      applyAction,
+		terraformVersion: terraformVersion,
 	}
 }
 
@@ -124,7 +154,11 @@ func Add(mgr manager.Manager) error {
 
 // newReconciler returns a new reconcile.Reconciler
 func newReconciler(mgr manager.Manager) reconcile.Reconciler {
-	return &ReconcileTerraform{client: mgr.GetClient(), scheme: mgr.GetScheme()}
+	return &ReconcileTerraform{
+		client:   mgr.GetClient(),
+		scheme:   mgr.GetScheme(),
+		recorder: mgr.GetEventRecorderFor("terraform-controller"),
+	}
 }
 
 // add adds a new Controller to mgr with r as the reconcile.Reconciler
@@ -151,7 +185,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 	}
 
 	// // Watch for changes to secondary resource Pods and requeue the owner Terraform
-	// err = c.Watch(&source.Kind{Type: &apiv1.Pod{}}, &handler.EnqueueRequestForOwner{
+	// err = c.Watch(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForOwner{
 	// 	IsController: true,
 	// 	OwnerType:    &tfv1alpha1.Terraform{},
 	// })
@@ -169,9 +203,24 @@ var _ reconcile.Reconciler = &ReconcileTerraform{}
 type ReconcileTerraform struct {
 	// This client, initialized using mgr.Client() above, is a split client
 	// that reads objects from the cache and writes to the apiserver
-	client client.Client
-	scheme *runtime.Scheme
+	client   client.Client
+	scheme   *runtime.Scheme
+	recorder record.EventRecorder
 }
+
+// func (r *ReconcileTerraform) manageError(obj metav1.Object, issue error) (reconcile.Result, error) {
+// 	runtimeObj, ok := (obj).(runtime.Object)
+// 	if !ok {
+// 		return reconcile.Result{}, nil
+// 	}
+// 	var retryInterval time.Duration
+// 	r.recorder.Event(runtimeObj, "Warning", "ProcessingError", issue.Error())
+
+// 	return reconcile.Result{
+// 		RequeueAfter: time.Duration(math.Min(float64(retryInterval.Nanoseconds()*2), float64(time.Hour.Nanoseconds()*6))),
+// 		Requeue:      true,
+// 	}, nil
+// }
 
 // Reconcile reads that state of the cluster for a Terraform object and makes changes based on the state read
 // and what is in the Terraform.Spec
@@ -234,10 +283,12 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 			err = r.client.Get(context.TODO(), d, destroyFound)
 			if err != nil && errors.IsNotFound(err) {
 				if err := r.finalizeTerraform(reqLogger, instance, job); err != nil {
+					r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 					return reconcile.Result{}, err
 				}
 			} else if err != nil {
 				reqLogger.Error(err, "Failed to get Job")
+				r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 				return reconcile.Result{}, err
 			}
 
@@ -261,6 +312,7 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 			instance.SetFinalizers(utils.ListRemoveStr(instance.GetFinalizers(), terraformFinalizer))
 			err := r.client.Update(context.TODO(), instance)
 			if err != nil {
+				r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 				return reconcile.Result{}, err
 			}
 		}
@@ -269,6 +321,7 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 
 	if !utils.ListContainsStr(instance.GetFinalizers(), terraformFinalizer) {
 		if err := r.addFinalizer(reqLogger, instance); err != nil {
+			r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 			return reconcile.Result{}, err
 		}
 	}
@@ -279,13 +332,14 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 
 	if err != nil && errors.IsNotFound(err) {
 
-		runOpts := newRunOptions(instance.Namespace, instance.Name)
+		runOpts := newRunOptions(instance, false)
 		runOpts.updateEnvVars("DEPLOYMENT", instance.Name)
 		// runOpts.namespace = instance.Namespace
 
 		// Stack Download
 		reqLogger.Info("Reading spec.stack config")
 		if (tfv1alpha1.TerraformStack{}) == *instance.Spec.Stack {
+			r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 			return reconcile.Result{}, fmt.Errorf("No stack source defined")
 		} // else if (tfv1alpha1.SrcOpts{}) == *instance.Spec.Stack.Source {
 		// 	return reconcile.Result{}, fmt.Errorf("No stack source defined")
@@ -293,11 +347,13 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		address := instance.Spec.Stack.Source.Address
 		stackDownloadOptions, err := newDownloadOptionsFromSpec(instance, address)
 		if err != nil {
+			r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in newDownloadOptionsFromSpec: %v", err).Error())
 			return reconcile.Result{}, fmt.Errorf("Error in newDownloadOptionsFromSpec: %v", err)
 		}
 
 		err = stackDownloadOptions.getParsedAddress()
 		if err != nil {
+			r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in parsing address: %v", err).Error())
 			return reconcile.Result{}, fmt.Errorf("Error in parsing address: %v", err)
 		}
 
@@ -326,6 +382,7 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 
 			gitPassword, err := job.loadPassword(key, name, ns)
 			if err != nil {
+				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error getting token: %v", err).Error())
 				return reconcile.Result{}, fmt.Errorf("Error getting token: %v", err)
 			}
 			runOpts.token = gitPassword
@@ -346,30 +403,46 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		// TODO validate spec.config.sources exists && len > 0
 		runOpts.cloudProfile = instance.Spec.Config.CloudProfile
 		tfvars := ""
+		otherConfigFiles := make(map[string]string)
 		for _, s := range instance.Spec.Config.Sources {
 			address := s.Address
 			// Loop thru all the sources in spec.config
 			configDownloadOptions, err := newDownloadOptionsFromSpec(instance, address)
 			if err != nil {
+				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in newDownloadOptionsFromSpec: %v", err).Error())
 				return reconcile.Result{}, fmt.Errorf("Error in newDownloadOptionsFromSpec: %v", err)
 			}
 			err = configDownloadOptions.download(job, instance.Namespace)
 			if err != nil {
+				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in download: %v", err).Error())
 				return reconcile.Result{}, fmt.Errorf("Error in download: %v", err)
 			}
 			// reqLogger.Info(fmt.Sprintf("Config was downloaded and updated DownloadOptions: %+v", configDownloadOptions))
 
 			tfvarSource, err := configDownloadOptions.tfvarFiles()
 			if err != nil {
+				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in reading tfvarFiles: %v", err).Error())
 				return reconcile.Result{}, fmt.Errorf("Error in reading tfvarFiles: %v", err)
 			}
 			tfvars += tfvarSource
+
+			otherConfigFiles, err = configDownloadOptions.otherConfigFiles()
+			if err != nil {
+				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in getting otherConfigFiles: %v", err).Error())
+				return reconcile.Result{}, fmt.Errorf("Error in reading otherConfigFiles: %v", err)
+			}
+
 		}
 		data := make(map[string]string)
 		data["tfvars"] = tfvars
+		for k, v := range otherConfigFiles {
+			data[k] = v
+		}
+
 		tfvarsConfigMap := instance.Name + "-tfvars"
 		err = job.createConfigMap(tfvarsConfigMap, instance.Namespace, make(map[string][]byte), data)
 		if err != nil {
+			r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Could not create configmap %v", err).Error())
 			return reconcile.Result{}, fmt.Errorf("Could not create configmap %v", err)
 		}
 		runOpts.tfvarsConfigMap = tfvarsConfigMap
@@ -380,17 +453,13 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		}
 
 		// reqLogger.Info(fmt.Sprintf("Ready to run terraform with run options: %+v", runOpts))
-
-		dep := runOpts.run()
-
-		controllerutil.SetControllerReference(instance, dep, r.scheme)
-		// reqLogger.Info("Creating a new Job", "Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
-
-		err = r.client.Create(context.TODO(), dep)
+		err = r.run(reqLogger, instance, runOpts)
 		if err != nil {
-			reqLogger.Error(err, "Failed to create new Deployment", "Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
+			reqLogger.Error(err, "Failed to run job")
+			r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 			return reconcile.Result{}, err
 		}
+
 		// Job created successfully - return and requeue
 		return reconcile.Result{Requeue: true}, nil
 	} else if err != nil {
@@ -411,18 +480,33 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 	}
 
 	if found.Status.Succeeded > 0 {
+
+		// Check if job has already been stopped before and "generations" match.
+		// The second predicate will be true when terraform spec is updated
+		// after an already successful deployment.
+		client := job.clientset
+		if instance.Status.Phase == "stopped" && instance.Status.LastGeneration != instance.ObjectMeta.Generation {
+			// Delete the current job and restart
+			err = client.BatchV1().Jobs(instance.Namespace).Delete(instance.Name, &metav1.DeleteOptions{})
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+			return reconcile.Result{Requeue: true}, nil
+		}
 		now := time.Now()
+		requeue := false
+		instance.Status.Phase = "stopped"
+		instance.Status.LastGeneration = instance.ObjectMeta.Generation
+		r.client.Status().Update(context.TODO(), instance)
+
 		// The terraform is still being executed, wait until 0 active
 		cm, err := job.readConfigMap(instance.Name+"-status", instance.Namespace)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
 		reqLogger.Info(fmt.Sprintf("Setting status of terraform plan as %v", cm.Data))
-		instance.Status.Phase = "stopped"
-		requeue := false
-		client := job.clientset
 
-		// Remove the successful pod
+		// Find the successful pod
 		collection, err := client.CoreV1().Pods(instance.Namespace).List(metav1.ListOptions{LabelSelector: fmt.Sprintf("job-name=%s", instance.Name)})
 		if err != nil {
 			return reconcile.Result{}, err
@@ -432,29 +516,15 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 			requeue = true
 		}
 		for _, pod := range collection.Items {
-			// keep the pod around for 1 hour
+			// keep the pod around for 6 houra
 			diff := now.Sub(pod.Status.StartTime.Time)
-			if diff.Minutes() > 60 {
+			if diff.Minutes() > 360 {
 				client.CoreV1().Pods(instance.Namespace).Delete(pod.Name, &metav1.DeleteOptions{})
 			}
-			// TODO fix the status here becuase setting status here will prevent changes that occur to the cr within 1 hour
-			instance.Status.LastGeneration = instance.ObjectMeta.Generation
-		}
-
-		// reqLogger.Info(fmt.Sprintf("The current generation of the terraform object is %d", instance.ObjectMeta.Generation))
-		r.client.Status().Update(context.TODO(), instance)
-
-		if instance.Status.LastGeneration != instance.ObjectMeta.Generation {
-			// Delete the current job and restart
-			err = client.BatchV1().Jobs(instance.Namespace).Delete(instance.Name, &metav1.DeleteOptions{})
-			if err != nil {
-				return reconcile.Result{}, err
-			}
-			return reconcile.Result{Requeue: requeue}, nil
 		}
 
 		requeueAfter := time.Duration(60 * time.Second)
-		return reconcile.Result{Requeue: true, RequeueAfter: requeueAfter}, nil
+		return reconcile.Result{Requeue: requeue, RequeueAfter: requeueAfter}, nil
 
 	}
 
@@ -470,7 +540,7 @@ func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *
 	// of finalizers include performing backups and deleting
 	// resources that are not owned by this CR, like a PVC.
 
-	runOpts := newRunOptions(instance.Namespace, instance.Name+"-destroy")
+	runOpts := newRunOptions(instance, true)
 	runOpts.updateEnvVars("DEPLOYMENT", instance.Name)
 	// runOpts.namespace = instance.Namespace
 
@@ -531,6 +601,7 @@ func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *
 	runOpts.mainModule = stackDownloadOptions.hash
 	runOpts.cloudProfile = instance.Spec.Config.CloudProfile
 	tfvars := ""
+	otherConfigFiles := make(map[string]string)
 	for _, s := range instance.Spec.Config.Sources {
 		address := s.Address
 		// Loop thru all the sources in spec.config
@@ -549,9 +620,19 @@ func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *
 			return fmt.Errorf("Error in reading tfvarFiles: %v", err)
 		}
 		tfvars += tfvarSource
+
+		otherConfigFiles, err = configDownloadOptions.otherConfigFiles()
+		if err != nil {
+			return fmt.Errorf("Error in reading otherConfigFiles: %v", err)
+		}
+
 	}
 	data := make(map[string]string)
 	data["tfvars"] = tfvars
+	for k, v := range otherConfigFiles {
+		data[k] = v
+	}
+
 	tfvarsConfigMap := instance.Name + "-tfvars"
 	err = c.createConfigMap(tfvarsConfigMap, instance.Namespace, make(map[string][]byte), data)
 	if err != nil {
@@ -563,20 +644,14 @@ func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *
 	for _, env := range instance.Spec.Config.Env {
 		runOpts.updateEnvVars(env.Name, env.Value)
 	}
-	runOpts.envVars["PLAN_DESTROY"] = "true"
+	runOpts.envVars["DESTROY"] = "true"
 
-	dep := runOpts.run()
-
-	controllerutil.SetControllerReference(instance, dep, r.scheme)
-	// reqLogger.Info("Creating a new Job", "Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
-
-	err = r.client.Create(context.TODO(), dep)
+	// RUN
+	err = r.run(reqLogger, instance, runOpts)
 	if err != nil {
-		reqLogger.Error(err, "Failed to create destroy job", "Job.Namespace", dep.Namespace, "Job.Name", dep.Name)
+		reqLogger.Error(err, "Failed to run job")
 		return err
 	}
-	// // Job created successfully - return and requeue
-	// return reconcile.Result{Requeue: true}, nil
 
 	reqLogger.V(0).Info(fmt.Sprintf("Successfully finalized terraform on: %+v", instance))
 	return nil
@@ -595,25 +670,97 @@ func (r *ReconcileTerraform) addFinalizer(reqLogger logr.Logger, instance *tfv1a
 	return nil
 }
 
-func (r RunOptions) run() *batchv1.Job {
+func (r RunOptions) generateServiceAccount() *corev1.ServiceAccount {
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.name,
+			Namespace: r.namespace,
+		},
+	}
+	return sa
+}
+
+func (r RunOptions) generateActionConfigMap() *corev1.ConfigMap {
+	data := make(map[string]string)
+
+	if r.applyAction {
+		data["action"] = "apply"
+	} else {
+		data["action"] = "plan-only"
+	}
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.name + "-action",
+			Namespace: r.namespace,
+		},
+		Data: data,
+	}
+	return cm
+}
+
+func (r RunOptions) generateRole() *rbacv1.Role {
+	role := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.name,
+			Namespace: r.namespace,
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				Verbs:     []string{"*"},
+				APIGroups: []string{""},
+				Resources: []string{"configmaps"},
+			},
+		},
+	}
+	return role
+}
+
+func (r RunOptions) generateRoleBinding() *rbacv1.RoleBinding {
+	rb := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.name,
+			Namespace: r.namespace,
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      r.name,
+				Namespace: r.namespace,
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			Kind:     "Role",
+			Name:     r.name,
+			APIGroup: "rbac.authorization.k8s.io",
+		},
+	}
+	return rb
+}
+
+func (r RunOptions) generateJob() *batchv1.Job {
 	reqLogger := log.WithValues("function", "run")
 	reqLogger.Info(fmt.Sprintf("Running job with this setup: %+v", r))
 
 	// TF Module
-	envs := []apiv1.EnvVar{}
+	envs := []corev1.EnvVar{}
 	if r.mainModule == "" {
 		r.mainModule = "main_module"
 	}
-	envs = append(envs, []apiv1.EnvVar{
+	envs = append(envs, []corev1.EnvVar{
 		{
 			Name:  "TFOPS_MAIN_MODULE",
 			Value: r.mainModule,
 		},
+		{
+			Name:  "NAMESPACE",
+			Value: r.namespace,
+		},
 	}...)
-	tfModules := []apiv1.Volume{}
+	tfModules := []corev1.Volume{}
 	// Check if stack is in a subdir
 	if r.stack.repo != "" {
-		envs = append(envs, []apiv1.EnvVar{
+		envs = append(envs, []corev1.EnvVar{
 			{
 				Name:  "STACK_REPO",
 				Value: r.stack.repo,
@@ -628,7 +775,7 @@ func (r RunOptions) run() *batchv1.Job {
 			},
 		}...)
 		if r.token != "" {
-			envs = append(envs, []apiv1.EnvVar{
+			envs = append(envs, []corev1.EnvVar{
 				{
 					Name:  "GIT_PASSWORD",
 					Value: r.token,
@@ -636,7 +783,7 @@ func (r RunOptions) run() *batchv1.Job {
 			}...)
 		}
 		if len(r.stack.subdirs) > 0 {
-			envs = append(envs, []apiv1.EnvVar{
+			envs = append(envs, []corev1.EnvVar{
 				{
 					Name:  "STACK_REPO_SUBDIR",
 					Value: r.stack.subdirs[0],
@@ -645,12 +792,12 @@ func (r RunOptions) run() *batchv1.Job {
 		}
 	} else {
 		for i, v := range r.moduleConfigMaps {
-			tfModules = append(tfModules, []apiv1.Volume{
+			tfModules = append(tfModules, []corev1.Volume{
 				{
 					Name: v,
-					VolumeSource: apiv1.VolumeSource{
-						ConfigMap: &apiv1.ConfigMapVolumeSource{
-							LocalObjectReference: apiv1.LocalObjectReference{
+					VolumeSource: corev1.VolumeSource{
+						ConfigMap: &corev1.ConfigMapVolumeSource{
+							LocalObjectReference: corev1.LocalObjectReference{
 								Name: v,
 							},
 						},
@@ -658,7 +805,7 @@ func (r RunOptions) run() *batchv1.Job {
 				},
 			}...)
 
-			envs = append(envs, []apiv1.EnvVar{
+			envs = append(envs, []corev1.EnvVar{
 				{
 					Name:  "TFOPS_MODULE" + strconv.Itoa(i),
 					Value: v,
@@ -667,23 +814,33 @@ func (r RunOptions) run() *batchv1.Job {
 		}
 	}
 
+	// Check if is new resource
+	if r.isNewResource {
+		envs = append(envs, []corev1.EnvVar{
+			{
+				Name:  "IS_NEW_RESOURCE",
+				Value: "true",
+			},
+		}...)
+	}
+
 	// TF Vars
 	for k, v := range r.envVars {
-		envs = append(envs, []apiv1.EnvVar{
+		envs = append(envs, []corev1.EnvVar{
 			{
 				Name:  k,
 				Value: v,
 			},
 		}...)
 	}
-	tfVars := []apiv1.Volume{}
+	tfVars := []corev1.Volume{}
 	if r.tfvarsConfigMap != "" {
-		tfVars = append(tfVars, []apiv1.Volume{
+		tfVars = append(tfVars, []corev1.Volume{
 			{
 				Name: r.tfvarsConfigMap,
-				VolumeSource: apiv1.VolumeSource{
-					ConfigMap: &apiv1.ConfigMapVolumeSource{
-						LocalObjectReference: apiv1.LocalObjectReference{
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{
 							Name: r.tfvarsConfigMap,
 						},
 					},
@@ -691,43 +848,23 @@ func (r RunOptions) run() *batchv1.Job {
 			},
 		}...)
 
-		envs = append(envs, []apiv1.EnvVar{
+		envs = append(envs, []corev1.EnvVar{
 			{
 				Name:  "TFOPS_VARFILE_FLAG",
 				Value: "-var-file /tfops/" + r.tfvarsConfigMap + "/tfvars",
+			},
+			{
+				Name:  "TFOPS_CONFIGMAP_PATH",
+				Value: "/tfops/" + r.tfvarsConfigMap,
 			},
 		}...)
 	}
 	volumes := append(tfModules, tfVars...)
 
-	// TF State
-	optional := true
-	tfState := []apiv1.Volume{
-		{
-			Name: r.name + "-tfstate",
-			VolumeSource: apiv1.VolumeSource{
-				ConfigMap: &apiv1.ConfigMapVolumeSource{
-					LocalObjectReference: apiv1.LocalObjectReference{
-						Name: r.name + "-tfstate",
-					},
-					Optional: &optional,
-				},
-			},
-		},
-	}
-	envs = append(envs, []apiv1.EnvVar{
-		{
-			Name:  "TFOPS_STATE_FILE",
-			Value: "/tfops/" + r.name + "-tfstate/terraform.tfstate",
-		},
-	}...)
-	volumes = append(volumes, tfState...)
-
-	volumeMounts := []apiv1.VolumeMount{}
-
+	volumeMounts := []corev1.VolumeMount{}
 	for _, v := range volumes {
 		// setting up volumeMounts
-		volumeMounts = append(volumeMounts, []apiv1.VolumeMount{
+		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
 			{
 				Name:      v.Name,
 				MountPath: "/tfops/" + v.Name,
@@ -737,18 +874,18 @@ func (r RunOptions) run() *batchv1.Job {
 
 	if r.sshConfig != "" {
 		mode := int32(0600)
-		volumes = append(volumes, []apiv1.Volume{
+		volumes = append(volumes, []corev1.Volume{
 			{
 				Name: "ssh-key",
-				VolumeSource: apiv1.VolumeSource{
-					Secret: &apiv1.SecretVolumeSource{
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
 						SecretName:  r.sshConfig,
 						DefaultMode: &mode,
 					},
 				},
 			},
 		}...)
-		volumeMounts = append(volumeMounts, []apiv1.VolumeMount{
+		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
 			{
 				Name:      "ssh-key",
 				MountPath: "/root/.ssh/",
@@ -757,14 +894,14 @@ func (r RunOptions) run() *batchv1.Job {
 	}
 
 	annotations := make(map[string]string)
-	envFrom := []apiv1.EnvFromSource{}
+	envFrom := []corev1.EnvFromSource{}
 	if strings.Contains(r.cloudProfile, "kiam") {
 		annotations["iam.amazonaws.com/role"] = r.cloudProfile
 	} else {
-		envFrom = append(envFrom, []apiv1.EnvFromSource{
+		envFrom = append(envFrom, []corev1.EnvFromSource{
 			{
-				SecretRef: &apiv1.SecretEnvSource{
-					LocalObjectReference: apiv1.LocalObjectReference{
+				SecretRef: &corev1.SecretEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{
 						Name: r.cloudProfile,
 					},
 				},
@@ -779,20 +916,21 @@ func (r RunOptions) run() *batchv1.Job {
 			Namespace: r.namespace,
 		},
 		Spec: batchv1.JobSpec{
-			Template: apiv1.PodTemplateSpec{
+			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: annotations,
 				},
-				Spec: apiv1.PodSpec{
-					ServiceAccountName: strings.ReplaceAll(r.name, "-destroy", ""), // make new sa for least-priv
+				Spec: corev1.PodSpec{
+					ServiceAccountName: r.name, // make new sa for least-priv
 					RestartPolicy:      "OnFailure",
-					Containers: []apiv1.Container{
+					Containers: []corev1.Container{
 						{
-							Name:            "tf",
-							Image:           "isaaguilar/tfops:0.11.14",
+							Name: "tf",
+							// TODO Version docker images more specifically than static versions
+							Image:           "isaaguilar/tfops:" + r.terraformVersion,
 							ImagePullPolicy: "Always",
 							EnvFrom:         envFrom,
-							Env: append(envs, []apiv1.EnvVar{
+							Env: append(envs, []corev1.EnvVar{
 								{
 									Name:  "INSTANCE_NAME",
 									Value: r.name,
@@ -808,6 +946,63 @@ func (r RunOptions) run() *batchv1.Job {
 	}
 
 	return job
+}
+
+func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, runOpts RunOptions) error {
+	serviceAccount := runOpts.generateServiceAccount()
+	roleBinding := runOpts.generateRoleBinding()
+	role := runOpts.generateRole()
+	configMap := runOpts.generateActionConfigMap()
+	job := runOpts.generateJob()
+
+	controllerutil.SetControllerReference(instance, serviceAccount, r.scheme)
+	controllerutil.SetControllerReference(instance, roleBinding, r.scheme)
+	controllerutil.SetControllerReference(instance, role, r.scheme)
+	controllerutil.SetControllerReference(instance, configMap, r.scheme)
+	controllerutil.SetControllerReference(instance, job, r.scheme)
+
+	err := r.client.Create(context.TODO(), serviceAccount)
+	if err != nil && errors.IsNotFound(err) {
+		return err
+	} else if err != nil {
+		reqLogger.Info(err.Error())
+	}
+
+	err = r.client.Create(context.TODO(), role)
+	if err != nil && errors.IsNotFound(err) {
+		return err
+	} else if err != nil {
+		reqLogger.Info(err.Error())
+	}
+
+	err = r.client.Create(context.TODO(), roleBinding)
+	if err != nil && errors.IsNotFound(err) {
+		return err
+	} else if err != nil {
+		reqLogger.Info(err.Error())
+	}
+
+	err = r.client.Create(context.TODO(), configMap)
+	if err != nil && errors.IsNotFound(err) {
+		return err
+	} else if err != nil {
+		reqLogger.Info(fmt.Sprintf("ConfigMap %s already exists", configMap.Name))
+		updateErr := r.client.Update(context.TODO(), configMap)
+		if updateErr != nil && errors.IsNotFound(updateErr) {
+			return updateErr
+		} else if updateErr != nil {
+			reqLogger.Info(err.Error())
+		}
+	}
+
+	err = r.client.Create(context.TODO(), job)
+	if err != nil && errors.IsNotFound(err) {
+		return err
+	} else if err != nil {
+		reqLogger.Info(err.Error())
+	}
+
+	return nil
 }
 
 func newDownloadOptionsFromSpec(instance *tfv1alpha1.Terraform, address string) (DownloadOptions, error) {
@@ -927,6 +1122,65 @@ func (d DownloadOptions) tfvarFiles() (string, error) {
 	return tfvars, nil
 }
 
+// TODO combine this with the tfvars and make it a generic  get configs method
+func (d DownloadOptions) otherConfigFiles() (map[string]string, error) {
+	// create a configmap entry per source file
+	configFiles := make(map[string]string)
+
+	// TODO Should path definitions walk the path?
+	if utils.ListContainsStr(d.Extras, "subdirs-as-files") {
+		for _, filename := range d.subdirs {
+			file := filepath.Join(d.Directory, filename)
+			content, err := ioutil.ReadFile(file)
+			if err != nil {
+				return configFiles, fmt.Errorf("error reading file: %v", err)
+			}
+			configFiles[filename] = string(content)
+		}
+	} else if len(d.subdirs) > 0 {
+		for _, s := range d.subdirs {
+			subdir := filepath.Join(d.Directory, s)
+			lsdir, err := ioutil.ReadDir(subdir)
+			if err != nil {
+				return configFiles, fmt.Errorf("error listing dir: %v", err)
+			}
+
+			for _, f := range lsdir {
+
+				file := filepath.Join(subdir, f.Name())
+
+				content, err := ioutil.ReadFile(file)
+				if err != nil {
+					return configFiles, fmt.Errorf("error reading file: %v", err)
+				}
+
+				configFiles[f.Name()] = string(content)
+
+			}
+		}
+	} else {
+		lsdir, err := ioutil.ReadDir(d.Directory)
+		if err != nil {
+			return configFiles, fmt.Errorf("error listing dir: %v", err)
+		}
+
+		for _, f := range lsdir {
+
+			file := filepath.Join(d.Directory, f.Name())
+
+			content, err := ioutil.ReadFile(file)
+			if err != nil {
+				return configFiles, fmt.Errorf("error reading file: %v", err)
+			}
+
+			configFiles[f.Name()] = string(content)
+
+		}
+	}
+	// TODO validate tfvars
+	return configFiles, nil
+}
+
 func inlineSource(job k8sClient, inline *tfv1alpha1.Inline, namespace, name string) (string, error) {
 	name = name + "-runcmd"
 	err := job.createConfigMap(name, namespace, make(map[string][]byte), inline.ConfigMapFiles)
@@ -1034,11 +1288,11 @@ func tarBinaryData(fullpath, filename string) (map[string][]byte, error) {
 	return binaryData, nil
 }
 
-func (c *k8sClient) readConfigMap(name, namespace string) (*apiv1.ConfigMap, error) {
+func (c *k8sClient) readConfigMap(name, namespace string) (*corev1.ConfigMap, error) {
 
 	configMap, err := c.clientset.CoreV1().ConfigMaps(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
-		return &apiv1.ConfigMap{}, fmt.Errorf("error reading configmap: %v", err)
+		return &corev1.ConfigMap{}, fmt.Errorf("error reading configmap: %v", err)
 	}
 
 	return configMap, nil
@@ -1046,7 +1300,7 @@ func (c *k8sClient) readConfigMap(name, namespace string) (*apiv1.ConfigMap, err
 
 func (c *k8sClient) createConfigMap(name, namespace string, binaryData map[string][]byte, data map[string]string) error {
 
-	configMapObject := &apiv1.ConfigMap{
+	configMapObject := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
@@ -1292,18 +1546,17 @@ func (d *DownloadOptions) download(job k8sClient, namespace string) error {
 			// reqLogger.Info(fmt.Sprintf("Setting up proxy: %s@%s", user, host))
 
 			// Setup the tunnel, but do not yet start it yet.
-			tunnel := sshtunnel.NewSSHTunnel(
-				// User and host of tunnel server, it will default to port 22
-				// if not specified.
-				proxyServerWithUser,
+			// // User and host of tunnel server, it will default to port 22
+			// // if not specified.
+			// proxyServerWithUser,
 
-				// Pick ONE of the following authentication methods:
-				// sshtunnel.PrivateKeyFile(filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa")), // 1. private key
-				proxyAuthMethod,
+			// // Pick ONE of the following authentication methods:
+			// // sshtunnel.PrivateKeyFile(filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa")), // 1. private key
+			// proxyAuthMethod,
 
-				// The destination host and port of the actual server.
-				destination,
-			)
+			// // The destination host and port of the actual server.
+			// destination,
+			tunnel := sshtunnel.NewSSHTunnel(proxyServerWithUser, proxyAuthMethod, destination)
 
 			// NewSSHTunnel will bind to a random port so that you can have
 			// multiple SSH tunnels available. The port is available through:
@@ -1321,7 +1574,7 @@ func (d *DownloadOptions) download(job k8sClient, namespace string) error {
 			// small amount of time for it to bind to the localhost port
 			// before you can start sending connections.
 			go tunnel.Start()
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(1000 * time.Millisecond)
 
 			port := strconv.Itoa(tunnel.Local.Port)
 
