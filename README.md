@@ -6,6 +6,9 @@ This project is not ready for production usage, but is in a functional state. Th
 - status of a deployment to be used in reconciliation
 - cloud provider permissions to deploy cloud resources
 
+Below is a diagram of the basic idea of the project:
+
+![](tfop_1.png)
 
 ## Development
 
