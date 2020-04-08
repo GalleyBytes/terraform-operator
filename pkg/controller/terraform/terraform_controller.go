@@ -67,12 +67,11 @@ type ParsedAddress struct {
 }
 
 type DownloadOptions struct {
-	Address          string
-	Directory        string
-	Extras           []string
-	SSHKeySecretRefs []tfv1alpha1.SSHKeySecretRef
-	TokenSecretRefs  []tfv1alpha1.TokenSecretRef
-	SSHProxy         tfv1alpha1.ProxyOpts
+	Address        string
+	Directory      string
+	Extras         []string
+	SCMAuthMethods []tfv1alpha1.SCMAuthMethod
+	SSHProxy       tfv1alpha1.ProxyOpts
 	ParsedAddress
 }
 
@@ -90,7 +89,9 @@ type RunOptions struct {
 	cloudProfile     string
 	stack            ParsedAddress
 	token            string
+	tokenSecret      *tfv1alpha1.TokenSecretRef
 	sshConfig        string
+	sshConfigData    map[string][]byte
 	applyAction      bool
 	isNewResource    bool
 	terraformVersion string
@@ -365,33 +366,23 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		runOpts.updateDownloadedModules(stackDownloadOptions.hash)
 		runOpts.stack = stackDownloadOptions.ParsedAddress
 
-		for i := range stackDownloadOptions.TokenSecretRefs {
-			// I think Terraform only allows for one token and one SSH key
-			// This will continue to iterate thru all the provided secrets, but
-			// only the last one will be used
-
-			name := stackDownloadOptions.TokenSecretRefs[i].Name
-			key := stackDownloadOptions.TokenSecretRefs[i].Key
-			if key == "" {
-				key = "token"
+		// I think Terraform only allows for one git token. Add the first one
+		// to the job's env vars as GIT_PASSWORD.
+		for _, m := range stackDownloadOptions.SCMAuthMethods {
+			if m.Git.HTTPS != nil {
+				runOpts.tokenSecret = m.Git.HTTPS.TokenSecretRef
+				if runOpts.tokenSecret.Key == "" {
+					runOpts.tokenSecret.Key = "token"
+				}
 			}
-			ns := stackDownloadOptions.TokenSecretRefs[i].Namespace
-			if ns == "" {
-				ns = instance.Namespace
+			if m.Git.SSH != nil {
+				sshConfigData, err := formatJobSSHConfig(reqLogger, instance, job)
+				if err != nil {
+					return reconcile.Result{}, fmt.Errorf("Error setting up sshconfig: %v", err)
+				}
+				runOpts.sshConfigData = sshConfigData
 			}
-
-			gitPassword, err := job.loadPassword(key, name, ns)
-			if err != nil {
-				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error getting token: %v", err).Error())
-				return reconcile.Result{}, fmt.Errorf("Error getting token: %v", err)
-			}
-			runOpts.token = gitPassword
-		}
-		for i := range stackDownloadOptions.SSHKeySecretRefs {
-			// I think Terraform only allows for one token and one SSH key
-			// This will continue to iterate thru all the provided secrets, but
-			// only the last one will be used
-			runOpts.sshConfig = stackDownloadOptions.SSHKeySecretRefs[i].Name
+			break
 		}
 
 		runOpts.mainModule = stackDownloadOptions.hash
@@ -534,6 +525,80 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 	return reconcile.Result{}, nil
 }
 
+func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, c k8sClient) (map[string][]byte, error) {
+	data := make(map[string]string)
+	dataAsByte := make(map[string][]byte)
+	if instance.Spec.SSHProxy != nil {
+		data["config"] = fmt.Sprintf("Host proxy\n"+
+			"\tStrictHostKeyChecking no\n"+
+			"\tUserKnownHostsFile=/dev/null\n"+
+			"\tUser %s\n"+
+			"\tHostname %s\n"+
+			"\tIdentityFile ~/.ssh/proxy_key\n",
+			instance.Spec.SSHProxy.User,
+			instance.Spec.SSHProxy.Host)
+		k := instance.Spec.SSHProxy.SSHKeySecretRef.Key
+		if k == "" {
+			k = "id_rsa"
+		}
+		ns := instance.Spec.SSHProxy.SSHKeySecretRef.Namespace
+		if ns == "" {
+			ns = instance.Namespace
+		}
+		key, err := c.loadPassword(k, instance.Spec.SSHProxy.SSHKeySecretRef.Name, ns)
+		if err != nil {
+			return dataAsByte, err
+		}
+		data["proxy_key"] = key
+
+	}
+
+	for _, m := range instance.Spec.SCMAuthMethods {
+
+		// TODO validate SSH in resource manifest
+		if m.Git.SSH != nil {
+			if m.Git.SSH.RequireProxy {
+				data["config"] += fmt.Sprintf("\nHost %s\n"+
+					"\tStrictHostKeyChecking no\n"+
+					"\tUserKnownHostsFile=/dev/null\n"+
+					"\tHostname %s\n"+
+					"\tIdentityFile ~/.ssh/%s\n"+
+					"\tProxyJump proxy",
+					m.Host,
+					m.Host,
+					m.Host)
+			} else {
+				data["config"] += fmt.Sprintf("\nHost %s\n"+
+					"\tStrictHostKeyChecking no\n"+
+					"\tUserKnownHostsFile=/dev/null\n"+
+					"\tHostname %s\n"+
+					"\tIdentityFile ~/.ssh/%s\n",
+					m.Host,
+					m.Host)
+			}
+			k := m.Git.SSH.SSHKeySecretRef.Key
+			if k == "" {
+				k = "id_rsa"
+			}
+			ns := m.Git.SSH.SSHKeySecretRef.Namespace
+			if ns == "" {
+				ns = instance.Namespace
+			}
+			key, err := c.loadPassword(k, m.Git.SSH.SSHKeySecretRef.Name, ns)
+			if err != nil {
+				return dataAsByte, err
+			}
+			data[m.Host] = key
+		}
+	}
+
+	for k, v := range data {
+		dataAsByte[k] = []byte(v)
+	}
+
+	return dataAsByte, nil
+}
+
 func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, c k8sClient) error {
 	// TODO(user): Add the cleanup steps that the operator
 	// needs to do before the CR can be deleted. Examples
@@ -570,32 +635,23 @@ func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *
 	runOpts.updateDownloadedModules(stackDownloadOptions.hash)
 	runOpts.stack = stackDownloadOptions.ParsedAddress
 
-	for i := range stackDownloadOptions.TokenSecretRefs {
-		// I think Terraform only allows for one token and one SSH key
-		// This will continue to iterate thru all the provided secrets, but
-		// only the last one will be used
-
-		name := stackDownloadOptions.TokenSecretRefs[i].Name
-		key := stackDownloadOptions.TokenSecretRefs[i].Key
-		if key == "" {
-			key = "token"
+	// I think Terraform only allows for one git token. Add the first one
+	// to the job's env vars as GIT_PASSWORD.
+	for _, m := range stackDownloadOptions.SCMAuthMethods {
+		if m.Git.HTTPS != nil {
+			runOpts.tokenSecret = m.Git.HTTPS.TokenSecretRef
+			if runOpts.tokenSecret.Key == "" {
+				runOpts.tokenSecret.Key = "token"
+			}
 		}
-		ns := stackDownloadOptions.TokenSecretRefs[i].Namespace
-		if ns == "" {
-			ns = instance.Namespace
+		if m.Git.SSH != nil {
+			sshConfigData, err := formatJobSSHConfig(reqLogger, instance, c)
+			if err != nil {
+				return fmt.Errorf("Error setting up sshconfig: %v", err)
+			}
+			runOpts.sshConfigData = sshConfigData
 		}
-
-		gitPassword, err := c.loadPassword(key, name, ns)
-		if err != nil {
-			return fmt.Errorf("Error getting token: %v", err)
-		}
-		runOpts.token = gitPassword
-	}
-	for i := range stackDownloadOptions.SSHKeySecretRefs {
-		// I think Terraform only allows for one token and one SSH key
-		// This will continue to iterate thru all the provided secrets, but
-		// only the last one will be used
-		runOpts.sshConfig = stackDownloadOptions.SSHKeySecretRefs[i].Name
+		break
 	}
 
 	runOpts.mainModule = stackDownloadOptions.hash
@@ -769,19 +825,29 @@ func (r RunOptions) generateJob() *batchv1.Job {
 				Name:  "STACK_REPO_HASH",
 				Value: r.stack.hash,
 			},
-			{
-				Name:  "GIT_PASSWORD",
-				Value: r.token,
-			},
 		}...)
-		if r.token != "" {
-			envs = append(envs, []corev1.EnvVar{
-				{
-					Name:  "GIT_PASSWORD",
-					Value: r.token,
-				},
-			}...)
+		if r.tokenSecret != nil {
+			if r.tokenSecret.Name != "" {
+				envs = append(envs, []corev1.EnvVar{
+					{
+						Name: "GIT_PASSWORD",
+						ValueFrom: &corev1.EnvVarSource{
+							SecretKeyRef: &corev1.SecretKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{
+									Name: r.tokenSecret.Name,
+								},
+								Key: r.tokenSecret.Key,
+							},
+						},
+					},
+				}...)
+			}
 		}
+
+		// r.tokenSecret.Name
+		// if r.token != "" {
+
+		// }
 		if len(r.stack.subdirs) > 0 {
 			envs = append(envs, []corev1.EnvVar{
 				{
@@ -949,12 +1015,16 @@ func (r RunOptions) generateJob() *batchv1.Job {
 }
 
 func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, runOpts RunOptions) error {
+	runOpts.sshConfig = instance.Name + "-ssh-config"
+
+	secret := generateSecretObject(runOpts.sshConfig, instance.Namespace, runOpts.sshConfigData)
 	serviceAccount := runOpts.generateServiceAccount()
 	roleBinding := runOpts.generateRoleBinding()
 	role := runOpts.generateRole()
 	configMap := runOpts.generateActionConfigMap()
 	job := runOpts.generateJob()
 
+	controllerutil.SetControllerReference(instance, secret, r.scheme)
 	controllerutil.SetControllerReference(instance, serviceAccount, r.scheme)
 	controllerutil.SetControllerReference(instance, roleBinding, r.scheme)
 	controllerutil.SetControllerReference(instance, role, r.scheme)
@@ -995,6 +1065,19 @@ func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terr
 		}
 	}
 
+	err = r.client.Create(context.TODO(), secret)
+	if err != nil && errors.IsNotFound(err) {
+		return err
+	} else if err != nil {
+		reqLogger.Info(fmt.Sprintf("Secret %s already exists", secret.Name))
+		updateErr := r.client.Update(context.TODO(), secret)
+		if updateErr != nil && errors.IsNotFound(updateErr) {
+			return updateErr
+		} else if updateErr != nil {
+			reqLogger.Info(err.Error())
+		}
+	}
+
 	err = r.client.Create(context.TODO(), job)
 	if err != nil && errors.IsNotFound(err) {
 		return err
@@ -1024,8 +1107,7 @@ func newDownloadOptionsFromSpec(instance *tfv1alpha1.Terraform, address string) 
 		Address:   address,
 		Directory: temp,
 	}
-	d.SSHKeySecretRefs = instance.Spec.SSHKeySecretRefs
-	d.TokenSecretRefs = instance.Spec.TokenSecretRefs
+	d.SCMAuthMethods = instance.Spec.SCMAuthMethods
 
 	if instance.Spec.SSHProxy != nil {
 		sshProxyOptions = *instance.Spec.SSHProxy
@@ -1309,6 +1391,7 @@ func (c *k8sClient) createConfigMap(name, namespace string, binaryData map[strin
 		BinaryData: binaryData,
 	}
 
+	// TODO Make the terraform the referenced Owner of this resource
 	_, err := c.clientset.CoreV1().ConfigMaps(namespace).Create(configMapObject)
 	if err != nil {
 		_, err = c.clientset.CoreV1().ConfigMaps(namespace).Update(configMapObject)
@@ -1318,6 +1401,19 @@ func (c *k8sClient) createConfigMap(name, namespace string, binaryData map[strin
 	}
 
 	return nil
+}
+
+func generateSecretObject(name, namespace string, data map[string][]byte) *corev1.Secret {
+	secretType := corev1.SecretType("opaque")
+	secretObject := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Data: data,
+		Type: secretType,
+	}
+	return secretObject
 }
 
 func (c *k8sClient) loadPassword(key, name, namespace string) (string, error) {
@@ -1588,7 +1684,7 @@ func (d *DownloadOptions) download(job k8sClient, namespace string) error {
 	}
 	reqLogger.Info(fmt.Sprintf("Getting ready to download source %s", repo))
 
-	gitAuthMethod, err := d.getGitAuthMethod(job, namespace, d.protocol)
+	gitAuthMethod, err := d.getGitAuthMethod(job, namespace, d.protocol, reqLogger)
 	if err != nil {
 		return fmt.Errorf("Error getting gitAuthMethod: %v", err)
 	}
@@ -1732,75 +1828,78 @@ func (d DownloadOptions) getProxyAuthMethod(job k8sClient, namespace string) (ss
 	return proxyAuthMethod, nil
 }
 
-func (d *DownloadOptions) getGitAuthMethod(job k8sClient, namespace, protocol string) (gitauth.AuthMethod, error) {
+func (d *DownloadOptions) getGitAuthMethod(job k8sClient, namespace, protocol string, reqLogger logr.Logger) (gitauth.AuthMethod, error) {
 	var auth gitauth.AuthMethod
-
+	reqLogger.Info(fmt.Sprintf("Fetching gitAuthMethod for host: %s", d.ParsedAddress.host))
 	if protocol == "ssh" {
-		for i := range d.SSHKeySecretRefs {
+		for _, m := range d.SCMAuthMethods {
+			if m.Host == d.ParsedAddress.host && m.Git.SSH != nil {
+				reqLogger.Info("Using Git over SSH with a key")
+				name := m.Git.SSH.SSHKeySecretRef.Name
+				key := m.Git.SSH.SSHKeySecretRef.Key
+				if key == "" {
+					key = "id_rsa"
+				}
+				ns := m.Git.SSH.SSHKeySecretRef.Namespace
+				if ns == "" {
+					ns = namespace
+				}
+				sshKey, _ := job.loadPrivateKey(key, name, ns)
+				defer os.Remove(sshKey.Name())
+				defer sshKey.Close()
 
-			name := d.SSHKeySecretRefs[i].Name
-			key := d.SSHKeySecretRefs[i].Key
-			if key == "" {
-				key = "id_rsa"
-			}
-			ns := d.SSHKeySecretRefs[i].Namespace
-			if ns == "" {
-				ns = namespace
-			}
+				keyF, err := ioutil.ReadFile(sshKey.Name())
+				if err != nil {
+					return auth, fmt.Errorf("unable to read private key: %v", err)
+				}
 
-			sshKey, _ := job.loadPrivateKey(key, name, ns)
-			defer os.Remove(sshKey.Name())
-			defer sshKey.Close()
+				// Create the Signer for this private key.
+				signer, err := ssh.ParsePrivateKey(keyF)
+				if err != nil {
+					return auth, fmt.Errorf("unable to parse private key: %v", err)
+				}
 
-			keyF, err := ioutil.ReadFile(sshKey.Name())
-			if err != nil {
-				return auth, fmt.Errorf("unable to read private key: %v", err)
-			}
+				auth = &gitssh.PublicKeys{
+					User:   d.user,
+					Signer: signer,
+					HostKeyCallbackHelper: gitssh.HostKeyCallbackHelper{
+						HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+					},
+				}
 
-			// Create the Signer for this private key.
-			signer, err := ssh.ParsePrivateKey(keyF)
-			if err != nil {
-				return auth, fmt.Errorf("unable to parse private key: %v", err)
-			}
-
-			auth = &gitssh.PublicKeys{
-				User:   d.user,
-				Signer: signer,
-				HostKeyCallbackHelper: gitssh.HostKeyCallbackHelper{
-					HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-				},
-			}
-
-			if auth.Name() != "" {
-				return auth, nil
+				if auth.Name() != "" {
+					return auth, nil
+				}
 			}
 		}
 	}
 
 	if strings.Contains(protocol, "http") {
-		for i := range d.TokenSecretRefs {
+		for _, m := range d.SCMAuthMethods {
+			if m.Host == d.ParsedAddress.host && m.Git.HTTPS != nil {
+				reqLogger.Info("Using Git over HTTPS with a token")
+				name := m.Git.HTTPS.TokenSecretRef.Name
+				key := m.Git.HTTPS.TokenSecretRef.Key
+				if key == "" {
+					key = "token"
+				}
+				ns := m.Git.HTTPS.TokenSecretRef.Namespace
+				if ns == "" {
+					ns = namespace
+				}
 
-			name := d.TokenSecretRefs[i].Name
-			key := d.TokenSecretRefs[i].Key
-			if key == "" {
-				key = "token"
-			}
-			ns := d.TokenSecretRefs[i].Namespace
-			if ns == "" {
-				ns = namespace
-			}
+				gitPassword, err := job.loadPassword(key, name, ns)
+				if err != nil {
+					return auth, fmt.Errorf("unable to get password: %v", err)
+				}
+				auth = &githttp.BasicAuth{
+					Username: d.user,
+					Password: gitPassword,
+				}
 
-			gitPassword, err := job.loadPassword(key, name, ns)
-			if err != nil {
-				return auth, fmt.Errorf("unable to get password: %v", err)
-			}
-			auth = &githttp.BasicAuth{
-				Username: d.user,
-				Password: gitPassword,
-			}
-
-			if auth.Name() != "" {
-				return auth, nil
+				if auth.Name() != "" {
+					return auth, nil
+				}
 			}
 		}
 	}

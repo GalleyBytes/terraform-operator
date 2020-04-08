@@ -42,12 +42,17 @@ spec:
                 applyOnCreate:
                   description: ApplyOnCreate is used to apply any planned changes
                     when the resource is first created. Omitting this or setting it
-                    to false will resort to on demand apply.
+                    to false will resort to on demand apply. Defaults to false.
+                  type: boolean
+                applyOnDelete:
+                  description: ApplyOnDelete is used to apply the destroy plan when
+                    the terraform resource is being deleted. Omitting this or setting
+                    it to false will require "on-demand" apply. Defaults to false.
                   type: boolean
                 applyOnUpdate:
                   description: ApplyOnUpdate is used to apply any planned changes
                     when the resource is updated. Omitting this or setting it to false
-                    will resort to on demand apply.
+                    will resort to on demand apply. Defaults to false.
                   type: boolean
                 cloudProfile:
                   description: CloudProfile defines the selector to cloud access keys
@@ -104,24 +109,80 @@ spec:
                     - address
                     type: object
                   type: array
+                terraformVersion:
+                  description: TerraformVersion helps the operator decide which terraform
+                    image to run the terraform in. Defaults to v0.11.14
+                  type: string
               type: object
-            sshKeySecretRefs:
+            scmAuthMethods:
+              description: SCMAuthMethods define multiple SCMs that require tokens/keys
               items:
-                description: SSHKeySecretRef defines the secret where the SSH key
-                  (for the proxy, git, etc) is stored
+                description: SCMAuthMethod definition of SCMs that require tokens/keys
                 properties:
-                  key:
-                    description: Key in the secret ref. Default to `id_rsa`
-                    type: string
-                  name:
-                    description: Name the secret name that has the SSH key
-                    type: string
-                  namespace:
-                    description: Namespace of the secret; Default is the namespace
-                      of the terraform resource
+                  git:
+                    description: SCM define the SCM for a host which is defined at
+                      a higher-level
+                    properties:
+                      https:
+                        description: GitHTTPS configures the setup for git over https
+                          using tokens. Proxy is not supported in the terraform job
+                          pod at this moment TODO HTTPS Proxy support
+                        properties:
+                          requireProxy:
+                            type: boolean
+                          tokenSecretRef:
+                            description: TokenSecetRef defines the token or password
+                              that can be used to log into a system (eg git)
+                            properties:
+                              key:
+                                description: Key in the secret ref. Default to `token`
+                                type: string
+                              name:
+                                description: Name the secret name that has the token
+                                  or password
+                                type: string
+                              namespace:
+                                description: Namespace of the secret; Default is the
+                                  namespace of the terraform resource
+                                type: string
+                            required:
+                            - name
+                            type: object
+                        required:
+                        - tokenSecretRef
+                        type: object
+                      ssh:
+                        description: GitSSH configurs the setup for git over ssh with
+                          optional proxy
+                        properties:
+                          requireProxy:
+                            type: boolean
+                          sshKeySecretRef:
+                            description: SSHKeySecretRef defines the secret where
+                              the SSH key (for the proxy, git, etc) is stored
+                            properties:
+                              key:
+                                description: Key in the secret ref. Default to `id_rsa`
+                                type: string
+                              name:
+                                description: Name the secret name that has the SSH
+                                  key
+                                type: string
+                              namespace:
+                                description: Namespace of the secret; Default is the
+                                  namespace of the terraform resource
+                                type: string
+                            required:
+                            - name
+                            type: object
+                        required:
+                        - sshKeySecretRef
+                        type: object
+                    type: object
+                  host:
                     type: string
                 required:
-                - name
+                - host
                 type: object
               type: array
             sshProxy:
@@ -174,25 +235,6 @@ spec:
                   - address
                   type: object
               type: object
-            tokenSecretRefs:
-              items:
-                description: TokenSecetRef defines the token or password that can
-                  be used to log into a system (eg git)
-                properties:
-                  key:
-                    description: Key in the secret ref. Default to `token`
-                    type: string
-                  name:
-                    description: Name the secret name that has the token or password
-                    type: string
-                  namespace:
-                    description: Namespace of the secret; Default is the namespace
-                      of the terraform resource
-                    type: string
-                required:
-                - name
-                type: object
-              type: array
           required:
           - config
           - stack

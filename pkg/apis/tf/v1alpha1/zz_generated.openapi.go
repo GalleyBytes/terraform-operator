@@ -102,25 +102,14 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 							Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts"),
 						},
 					},
-					"sshKeySecretRefs": {
+					"scmAuthMethods": {
 						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
+							Description: "SCMAuthMethods define multiple SCMs that require tokens/keys",
+							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
-										Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SSHKeySecretRef"),
-									},
-								},
-							},
-						},
-					},
-					"tokenSecretRefs": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TokenSecretRef"),
+										Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod"),
 									},
 								},
 							},
@@ -131,7 +120,7 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 			},
 		},
 		Dependencies: []string{
-			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SSHKeySecretRef", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformConfig", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformStack", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TokenSecretRef"},
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformConfig", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformStack"},
 	}
 }
 

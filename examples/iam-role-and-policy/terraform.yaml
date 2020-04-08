@@ -1,40 +1,33 @@
 apiVersion: tf.isaaguilar.com/v1alpha1
 kind: Terraform
 metadata:
-  name: iam-role-and-policy-example
+  name: irsa-role-and-policy-example
   labels:
-    type: iam
+    type: irsa
 spec:
   sshProxy:
-    host: 10.151.14.31
-    user: ec2-user
-    sshKeySecretRef: 
+    host: 10.0.0.200
+    user: admin
+    sshKeySecretRef:
       name: proxysshkey
-  sshKeySecretRefs:   # currently only supports one key
-  - name: gitsshkey
-    # key:            # `id_rsa` (default)
-    # namespace:      # default to the resource's namespace
-  tokenSecretRefs:    # currently only supports one token
-  - name: gittoken
-    # key:            # `token` (default)
-    # namespace:      # default to the resource's namespace
+  scmAuthMethods:
+  - host: git.example.com
+    git:
+      ssh:
+        requireProxy: true
+        sshKeySecretRef:
+          name: gitsshkey
   stack:
     source:
-      address: https://github.com/isaaguilar/simple-aws-tf-modules.git//iam-role-and-policy
+      address: git@git.example.com:cloudops/terraform.git//modules/irsa-role-and-policy
   config:
-    terraformVersion: 0.12.21
+    terraformVersion: 0.12.23
     applyOnCreate: true
     applyOnUpdate: true
     applyOnDelete: true
     reconcile:
       enable: false
       syncPeriod: 60 # int in minutes
-    cloudProfile: opensession  # AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
-    # cloudProfile: kiam-terraform
-    env:
-      - name: TF_VAR_profile
-        value: isaaguilar
-      - name: TF_VAR_region
-        value: us-west-2
+    cloudProfile: admin-cloud-credentials
     sources:
-    - address: git@git.isaaguilar.com:iaguilar/scratch.git//iam-tfvars # tags.tfvars
+    - address: git@git.example.com:cloudops/tfvars.git//irsa-example

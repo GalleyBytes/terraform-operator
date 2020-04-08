@@ -33,8 +33,35 @@ type TerraformSpec struct {
 	// TODO refactor to SSHTunnel
 	SSHProxy *ProxyOpts `json:"sshProxy,omitempty"`
 
-	SSHKeySecretRefs []SSHKeySecretRef `json:"sshKeySecretRefs,omitempty"`
-	TokenSecretRefs  []TokenSecretRef  `json:"tokenSecretRefs,omitempty"`
+	// SCMAuthMethods define multiple SCMs that require tokens/keys
+	SCMAuthMethods []SCMAuthMethod `json:"scmAuthMethods,omitempty"`
+}
+
+// SCMAuthMethod definition of SCMs that require tokens/keys
+type SCMAuthMethod struct {
+	Host string `json:"host"`
+	// SCM define the SCM for a host which is defined at a higher-level
+	Git *GitSCM `json:"git,omitempty"`
+}
+
+// GitSCM define the auth methods of git
+type GitSCM struct {
+	SSH   *GitSSH   `json:"ssh,omitempty"`
+	HTTPS *GitHTTPS `json:"https,omitempty"`
+}
+
+// GitSSH configurs the setup for git over ssh with optional proxy
+type GitSSH struct {
+	RequireProxy    bool             `json:"requireProxy,omitempty"`
+	SSHKeySecretRef *SSHKeySecretRef `json:"sshKeySecretRef"`
+}
+
+// GitHTTPS configures the setup for git over https using tokens. Proxy is not
+// supported in the terraform job pod at this moment
+// TODO HTTPS Proxy support
+type GitHTTPS struct {
+	RequireProxy   bool            `json:"requireProxy,omitempty"`
+	TokenSecretRef *TokenSecretRef `json:"tokenSecretRef"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
