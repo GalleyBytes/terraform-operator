@@ -77,6 +77,10 @@ type TerraformList struct {
 type TerraformStack struct {
 	ConfigMap string   `json:"configMap,omitempty"`
 	Source    *SrcOpts `json:"source,omitempty"`
+
+	// TerraformVersion helps the operator decide which terraform image to
+	// run the terraform in. Defaults to v0.11.14
+	TerraformVersion string `json:"terraformVersion,omitempty"`
 }
 
 // TerraformConfig points to the tfvars to deploy against the stack
@@ -108,12 +112,16 @@ type TerraformConfig struct {
 	// require "on-demand" apply. Defaults to false.
 	ApplyOnDelete bool `json:"applyOnDelete,omitempty"`
 
+	// IgnoreDelete will bypass the finalization process and remove the tf
+	// resource without running any delete jobs.
+	IgnoreDelete bool `json:"ignoreDelete,omitempty"`
+
 	// Reconcile are the settings used for auto-reconciliation
 	Reconcile *ReconcileTerraformDeployment `json:"reconcile,omitempty"`
 
-	// TerraformVersion helps the operator decide which terraform image to
-	// run the terraform in. Defaults to v0.11.14
-	TerraformVersion string `json:"terraformVersion,omitempty"`
+	// CustomBackend will allow the user to configure the backend of their
+	// choice. If this is omitted, the default consul template will be used.
+	CustomBackend string `json:"customBackend,omitempty"`
 }
 
 // ReconcileTerraformDeployment is used to configure auto watching the resources

@@ -63,6 +63,11 @@ spec:
                     controller's if statements later. The default behaviour is to
                     load the CloudProfile from a secret as environment vars.
                   type: string
+                customBackend:
+                  description: CustomBackend will allow the user to configure the
+                    backend of their choice. If this is omitted, the default consul
+                    template will be used.
+                  type: string
                 env:
                   items:
                     description: EnvVar defines key/value pairs of env vars that get
@@ -77,6 +82,10 @@ spec:
                     - value
                     type: object
                   type: array
+                ignoreDelete:
+                  description: IgnoreDelete will bypass the finalization process and
+                    remove the tf resource without running any delete jobs.
+                  type: boolean
                 reconcile:
                   description: Reconcile are the settings used for auto-reconciliation
                   properties:
@@ -109,10 +118,6 @@ spec:
                     - address
                     type: object
                   type: array
-                terraformVersion:
-                  description: TerraformVersion helps the operator decide which terraform
-                    image to run the terraform in. Defaults to v0.11.14
-                  type: string
               type: object
             scmAuthMethods:
               description: SCMAuthMethods define multiple SCMs that require tokens/keys
@@ -234,6 +239,10 @@ spec:
                   required:
                   - address
                   type: object
+                terraformVersion:
+                  description: TerraformVersion helps the operator decide which terraform
+                    image to run the terraform in. Defaults to v0.11.14
+                  type: string
               type: object
           required:
           - config

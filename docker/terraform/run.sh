@@ -66,6 +66,30 @@ function get_action {
     export action
 }
 
+if [ "${AWS_WEB_IDENTITY_TOKEN_FILE}" != "" ] ;then
+    apk add --update-cache \
+        python \
+        python-dev \
+        py-pip \
+        build-base \
+        && pip install boto3
+    cat << EOF_HERE > .get_assumed_credentials.py
+#!/usr/bin/python
+import os
+import boto3
+session = boto3.Session()
+credentials = session.get_credentials().get_frozen_credentials()
+print('export AWS_ACCESS_KEY_ID="{0}"\nexport AWS_SECRET_ACCESS_KEY="{1}"\nexport AWS_SECURITY_TOKEN="{2}"\nexport AWS_SESSION_TOKEN="{2}"'.format(credentials.access_key, credentials.secret_key, credentials.token))
+EOF_HERE
+
+    chmod +x .get_assumed_credentials.py
+    eval `./.get_assumed_credentials.py`
+    rm .get_assumed_credentials.py
+    
+    unset AWS_ROLE_ARN
+    unset AWS_WEB_IDENTITY_TOKEN_FILE
+fi
+
 if [ "$GIT_PASSWORD" != "" ];then
     echo setting git password
     ASKPASS=`mktemp`
@@ -116,9 +140,14 @@ fi
 cd /$TFOPS_MAIN_MODULE
 
 # Load a custom backend
-set -x
-envsubst < /backend.tf > /backend_override.tf
-mv /backend_override.tf .
+if stat backend_override.tf >/dev/null 2>/dev/null; then
+    echo "Using custom backend"
+else
+    echo "Loading hashicorp backend"
+    set -x
+    envsubst < /backend.tf > /backend_override.tf
+    mv /backend_override.tf .
+fi
 
 WAIT_TIME=${WAIT_TIME:-60}
 ATTEMPTS=${ATTEMPTS:-10}

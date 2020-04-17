@@ -67,7 +67,7 @@ spec:
     terraformVersion: 0.12.23
     applyOnCreate: true
     applyOnUpdate: true
-    applyOnDelete: true
+    ignoreDelete: true 
     cloudProfile: admin-cloud-credentials
     sources:
     - address: git@<tf-var-repo>

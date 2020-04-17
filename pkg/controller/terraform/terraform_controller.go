@@ -95,6 +95,7 @@ type RunOptions struct {
 	applyAction      bool
 	isNewResource    bool
 	terraformVersion string
+	serviceAccount   string
 }
 
 func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
@@ -116,8 +117,8 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 		applyAction = instance.Spec.Config.ApplyOnCreate
 	}
 
-	if instance.Spec.Config.TerraformVersion != "" {
-		terraformVersion = instance.Spec.Config.TerraformVersion
+	if instance.Spec.Stack.TerraformVersion != "" {
+		terraformVersion = instance.Spec.Stack.TerraformVersion
 	}
 
 	return RunOptions{
@@ -127,6 +128,7 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 		isNewResource:    isNewResource,
 		applyAction:      applyAction,
 		terraformVersion: terraformVersion,
+		serviceAccount:   "tf-" + name,
 	}
 }
 
@@ -277,37 +279,38 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 			// finalization logic fails, don't remove the finalizer so
 			// that we can retry during the next reconciliation.
 
-			// let's make sure that a destroy job doesn't already exists
-
-			d := types.NamespacedName{Namespace: request.Namespace, Name: request.Name + "-destroy"}
-			destroyFound := &batchv1.Job{}
-			err = r.client.Get(context.TODO(), d, destroyFound)
-			if err != nil && errors.IsNotFound(err) {
-				if err := r.finalizeTerraform(reqLogger, instance, job); err != nil {
+			// Completely ignore the finilization process if ignoreDelete is set
+			if !instance.Spec.Config.IgnoreDelete {
+				// let's make sure that a destroy job doesn't already exists
+				d := types.NamespacedName{Namespace: request.Namespace, Name: request.Name + "-destroy"}
+				destroyFound := &batchv1.Job{}
+				err = r.client.Get(context.TODO(), d, destroyFound)
+				if err != nil && errors.IsNotFound(err) {
+					if err := r.finalizeTerraform(reqLogger, instance, job); err != nil {
+						r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+						return reconcile.Result{}, err
+					}
+				} else if err != nil {
+					reqLogger.Error(err, "Failed to get Job")
 					r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 					return reconcile.Result{}, err
 				}
-			} else if err != nil {
-				reqLogger.Error(err, "Failed to get Job")
-				r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
-				return reconcile.Result{}, err
-			}
 
-			for {
-				reqLogger.Info("Checking if destroy task is done")
-				destroyFound = &batchv1.Job{}
-				err = r.client.Get(context.TODO(), d, destroyFound)
-				if err == nil {
-					if destroyFound.Status.Succeeded > 0 {
-						break
+				for {
+					reqLogger.Info("Checking if destroy task is done")
+					destroyFound = &batchv1.Job{}
+					err = r.client.Get(context.TODO(), d, destroyFound)
+					if err == nil {
+						if destroyFound.Status.Succeeded > 0 {
+							break
+						}
+						if destroyFound.Status.Failed > 6 {
+							break
+						}
 					}
-					if destroyFound.Status.Failed > 6 {
-						break
-					}
+					time.Sleep(30 * time.Second)
 				}
-				time.Sleep(30 * time.Second)
 			}
-
 			// Remove terraformFinalizer. Once all finalizers have been
 			// removed, the object will be deleted.
 			instance.SetFinalizers(utils.ListRemoveStr(instance.GetFinalizers(), terraformFinalizer))
@@ -428,6 +431,11 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		data["tfvars"] = tfvars
 		for k, v := range otherConfigFiles {
 			data[k] = v
+		}
+
+		// Override the backend.tf by inserting a custom backend
+		if instance.Spec.Config.CustomBackend != "" {
+			data["backend_override.tf"] = instance.Spec.Config.CustomBackend
 		}
 
 		tfvarsConfigMap := instance.Name + "-tfvars"
@@ -689,6 +697,11 @@ func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *
 		data[k] = v
 	}
 
+	// Override the backend.tf by inserting a custom backend
+	if instance.Spec.Config.CustomBackend != "" {
+		data["backend_override.tf"] = instance.Spec.Config.CustomBackend
+	}
+
 	tfvarsConfigMap := instance.Name + "-tfvars"
 	err = c.createConfigMap(tfvarsConfigMap, instance.Namespace, make(map[string][]byte), data)
 	if err != nil {
@@ -727,10 +740,17 @@ func (r *ReconcileTerraform) addFinalizer(reqLogger logr.Logger, instance *tfv1a
 }
 
 func (r RunOptions) generateServiceAccount() *corev1.ServiceAccount {
+	annotations := make(map[string]string)
+
+	if strings.Contains(r.cloudProfile, "irsa") {
+		annotations["eks.amazonaws.com/role-arn"] = r.cloudProfile
+	}
+
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.name,
-			Namespace: r.namespace,
+			Name:        r.serviceAccount,
+			Namespace:   r.namespace,
+			Annotations: annotations,
 		},
 	}
 	return sa
@@ -781,7 +801,7 @@ func (r RunOptions) generateRoleBinding() *rbacv1.RoleBinding {
 		Subjects: []rbacv1.Subject{
 			{
 				Kind:      "ServiceAccount",
-				Name:      r.name,
+				Name:      r.serviceAccount,
 				Namespace: r.namespace,
 			},
 		},
@@ -963,6 +983,8 @@ func (r RunOptions) generateJob() *batchv1.Job {
 	envFrom := []corev1.EnvFromSource{}
 	if strings.Contains(r.cloudProfile, "kiam") {
 		annotations["iam.amazonaws.com/role"] = r.cloudProfile
+	} else if strings.Contains(r.cloudProfile, "irsa") {
+		// Annotations added to service-account
 	} else {
 		envFrom = append(envFrom, []corev1.EnvFromSource{
 			{
@@ -987,7 +1009,7 @@ func (r RunOptions) generateJob() *batchv1.Job {
 					Annotations: annotations,
 				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName: r.name, // make new sa for least-priv
+					ServiceAccountName: r.serviceAccount,
 					RestartPolicy:      "OnFailure",
 					Containers: []corev1.Container{
 						{
