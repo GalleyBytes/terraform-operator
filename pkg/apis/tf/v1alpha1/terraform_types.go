@@ -122,6 +122,33 @@ type TerraformConfig struct {
 	// CustomBackend will allow the user to configure the backend of their
 	// choice. If this is omitted, the default consul template will be used.
 	CustomBackend string `json:"customBackend,omitempty"`
+
+	// ExportRepo allows the user to define
+	ExportRepo *ExportRepo `json:"exportRepo,omitempty"`
+
+	// PrerunScript lets the user define a script that will run before
+	// terraform commands are executed on the terraform-execution pod. The pod
+	// will have already set up cloudProfile (eg cloud credentials) so the
+	// script can make use of it.
+	//
+	// Setting this field will create a key in the tfvars configmap called
+	// "prerun.sh". This means the user can also pass in a prerun.sh file via
+	// config "Sources".
+	PrerunScript string `json:"prerunScript,omitempty"`
+}
+
+// ExportRepo is used to allow the tfvars passed into the job to also be
+// exported to a different git repo. The main use-case for this would be to
+// allow terraform execution outside of the terraform-operator for any reason
+type ExportRepo struct {
+	// Address is the git repo to save to. At this time, only SSH is allowed
+	Address string `json:"address"`
+
+	// TFVarsFile is the full path relative to the root of the repo
+	TFVarsFile string `json:"tfvarsFile"`
+
+	// ConfFile is the full path relative to the root of the repo
+	ConfFile string `json:"confFile,omitempty"`
 }
 
 // ReconcileTerraformDeployment is used to configure auto watching the resources
@@ -164,6 +191,10 @@ type SrcOpts struct {
 	// define dir or tfvar files. This can be used multiple times for
 	// multiple items.
 	Address string `json:"address"`
+
+	// Extras will allow for giving the controller specific instructions for
+	// fetching files from the address.
+	Extras []string `json:"extras,omitempty"`
 }
 
 // SSHProxy configures ssh tunnel/socks5 for downloading ssh/https resources

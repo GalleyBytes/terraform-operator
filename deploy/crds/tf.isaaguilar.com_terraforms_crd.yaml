@@ -82,10 +82,37 @@ spec:
                     - value
                     type: object
                   type: array
+                exportRepo:
+                  description: ExportRepo allows the user to define
+                  properties:
+                    address:
+                      description: Address is the git repo to save to. At this time,
+                        only SSH is allowed
+                      type: string
+                    confFile:
+                      description: ConfFile is the full path relative to the root
+                        of the repo
+                      type: string
+                    tfvarsFile:
+                      description: TFVarsFile is the full path relative to the root
+                        of the repo
+                      type: string
+                  required:
+                  - address
+                  - tfvarsFile
+                  type: object
                 ignoreDelete:
                   description: IgnoreDelete will bypass the finalization process and
                     remove the tf resource without running any delete jobs.
                   type: boolean
+                prerunScript:
+                  description: "PrerunScript lets the user define a script that will
+                    run before terraform commands are executed on the terraform-execution
+                    pod. The pod will have already set up cloudProfile (eg cloud credentials)
+                    so the script can make use of it. \n Setting this field will create
+                    a key in the tfvars configmap called \"prerun.sh\". This means
+                    the user can also pass in a prerun.sh file via config \"Sources\"."
+                  type: string
                 reconcile:
                   description: Reconcile are the settings used for auto-reconciliation
                   properties:
@@ -114,6 +141,12 @@ spec:
                           to define dir or tfvar files. This can be used multiple
                           times for multiple items.
                         type: string
+                      extras:
+                        description: Extras will allow for giving the controller specific
+                          instructions for fetching files from the address.
+                        items:
+                          type: string
+                        type: array
                     required:
                     - address
                     type: object
@@ -236,6 +269,12 @@ spec:
                         used to define dir or tfvar files. This can be used multiple
                         times for multiple items.
                       type: string
+                    extras:
+                      description: Extras will allow for giving the controller specific
+                        instructions for fetching files from the address.
+                      items:
+                        type: string
+                      type: array
                   required:
                   - address
                   type: object

@@ -149,6 +149,14 @@ else
     mv /backend_override.tf .
 fi
 
+# Run the prerun script
+if stat prerun.sh >/dev/null 2>/dev/null; then
+    # prerun.sh needs exec privileges 
+    chmod +x prerun.sh
+    ./prerun.sh
+fi
+
+
 WAIT_TIME=${WAIT_TIME:-60}
 ATTEMPTS=${ATTEMPTS:-10}
 i=0

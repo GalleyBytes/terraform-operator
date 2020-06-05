@@ -3,6 +3,7 @@ package terraform
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -10,12 +11,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	tfv1alpha1 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1"
 	"github.com/isaaguilar/terraform-operator/pkg/utils"
+	"github.com/isaaguilar/terraform-operator/pkg/gitclient"
 	"github.com/elliotchance/sshtunnel"
 	"github.com/go-logr/logr"
 	getter "github.com/hashicorp/go-getter"
@@ -23,13 +26,8 @@ import (
 	giturl "github.com/whilp/git-urls"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/net/proxy"
-	git "gopkg.in/src-d/go-git.v4"
-	"gopkg.in/src-d/go-git.v4/config"
-	"gopkg.in/src-d/go-git.v4/plumbing"
-	gitauth "gopkg.in/src-d/go-git.v4/plumbing/transport"
-	gitclient "gopkg.in/src-d/go-git.v4/plumbing/transport/client"
+	gitTransportClient "gopkg.in/src-d/go-git.v4/plumbing/transport/client"
 	githttp "gopkg.in/src-d/go-git.v4/plumbing/transport/http"
-	gitssh "gopkg.in/src-d/go-git.v4/plumbing/transport/ssh"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -66,17 +64,14 @@ type ParsedAddress struct {
 	repo      string
 }
 
-type DownloadOptions struct {
+type GitRepoAccessOptions struct {
+	Client         gitclient.GitRepo
 	Address        string
 	Directory      string
 	Extras         []string
 	SCMAuthMethods []tfv1alpha1.SCMAuthMethod
 	SSHProxy       tfv1alpha1.ProxyOpts
 	ParsedAddress
-}
-
-func (d *DownloadOptions) getProxyOpts(proxyOptions tfv1alpha1.ProxyOpts) {
-	d.SSHProxy = proxyOptions
 }
 
 type RunOptions struct {
@@ -349,13 +344,13 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		// 	return reconcile.Result{}, fmt.Errorf("No stack source defined")
 		// }
 		address := instance.Spec.Stack.Source.Address
-		stackDownloadOptions, err := newDownloadOptionsFromSpec(instance, address)
+		stackRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
 		if err != nil {
-			r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in newDownloadOptionsFromSpec: %v", err).Error())
-			return reconcile.Result{}, fmt.Errorf("Error in newDownloadOptionsFromSpec: %v", err)
+			r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err).Error())
+			return reconcile.Result{}, fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 		}
 
-		err = stackDownloadOptions.getParsedAddress()
+		err = stackRepoAccessOptions.getParsedAddress()
 		if err != nil {
 			r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in parsing address: %v", err).Error())
 			return reconcile.Result{}, fmt.Errorf("Error in parsing address: %v", err)
@@ -363,15 +358,15 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 
 		// Since we're not going to download this to a configmap, we need to
 		// pass the information to the pod to do it. We should be able to
-		// use stackDownloadOptions.parsedAddress and just send that to
+		// use stackRepoAccessOptions.parsedAddress and just send that to
 		// the pod's environment vars.
 
-		runOpts.updateDownloadedModules(stackDownloadOptions.hash)
-		runOpts.stack = stackDownloadOptions.ParsedAddress
+		runOpts.updateDownloadedModules(stackRepoAccessOptions.hash)
+		runOpts.stack = stackRepoAccessOptions.ParsedAddress
 
 		// I think Terraform only allows for one git token. Add the first one
 		// to the job's env vars as GIT_PASSWORD.
-		for _, m := range stackDownloadOptions.SCMAuthMethods {
+		for _, m := range stackRepoAccessOptions.SCMAuthMethods {
 			if m.Git.HTTPS != nil {
 				runOpts.tokenSecret = m.Git.HTTPS.TokenSecretRef
 				if runOpts.tokenSecret.Key == "" {
@@ -388,10 +383,14 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 			break
 		}
 
-		runOpts.mainModule = stackDownloadOptions.hash
+		runOpts.mainModule = stackRepoAccessOptions.hash
 		// reqLogger.Info(fmt.Sprintf("All moduleConfigMaps: %v", runOpts.moduleConfigMaps))
 
-		// Download the tfvar configs
+		//
+		//
+		// Download the tfvar configs (and optionally save to external repo)
+		//
+		//
 		reqLogger.Info("Reading spec.config ")
 		// TODO Validate spec.config exists
 		// TODO validate spec.config.sources exists && len > 0
@@ -400,32 +399,32 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		otherConfigFiles := make(map[string]string)
 		for _, s := range instance.Spec.Config.Sources {
 			address := s.Address
+			extras := s.Extras
 			// Loop thru all the sources in spec.config
-			configDownloadOptions, err := newDownloadOptionsFromSpec(instance, address)
+			configRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, extras)
 			if err != nil {
-				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in newDownloadOptionsFromSpec: %v", err).Error())
-				return reconcile.Result{}, fmt.Errorf("Error in newDownloadOptionsFromSpec: %v", err)
+				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err).Error())
+				return reconcile.Result{}, fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 			}
-			err = configDownloadOptions.download(job, instance.Namespace)
+			err = configRepoAccessOptions.download(job, instance.Namespace)
 			if err != nil {
 				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in download: %v", err).Error())
 				return reconcile.Result{}, fmt.Errorf("Error in download: %v", err)
 			}
-			// reqLogger.Info(fmt.Sprintf("Config was downloaded and updated DownloadOptions: %+v", configDownloadOptions))
+			// reqLogger.Info(fmt.Sprintf("Config was downloaded and updated GitRepoAccessOptions: %+v", configRepoAccessOptions))
 
-			tfvarSource, err := configDownloadOptions.tfvarFiles()
+			tfvarSource, err := configRepoAccessOptions.tfvarFiles()
 			if err != nil {
 				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in reading tfvarFiles: %v", err).Error())
 				return reconcile.Result{}, fmt.Errorf("Error in reading tfvarFiles: %v", err)
 			}
 			tfvars += tfvarSource
 
-			otherConfigFiles, err = configDownloadOptions.otherConfigFiles()
+			otherConfigFiles, err = configRepoAccessOptions.otherConfigFiles()
 			if err != nil {
 				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in getting otherConfigFiles: %v", err).Error())
 				return reconcile.Result{}, fmt.Errorf("Error in reading otherConfigFiles: %v", err)
 			}
-
 		}
 		data := make(map[string]string)
 		data["tfvars"] = tfvars
@@ -436,6 +435,10 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		// Override the backend.tf by inserting a custom backend
 		if instance.Spec.Config.CustomBackend != "" {
 			data["backend_override.tf"] = instance.Spec.Config.CustomBackend
+		}
+
+		if instance.Spec.Config.PrerunScript != "" {
+			data["prerun.sh"] = instance.Spec.Config.PrerunScript
 		}
 
 		tfvarsConfigMap := instance.Name + "-tfvars"
@@ -451,7 +454,180 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 			runOpts.updateEnvVars(env.Name, env.Value)
 		}
 
-		// reqLogger.Info(fmt.Sprintf("Ready to run terraform with run options: %+v", runOpts))
+		// Flatten all the .tfvars and TF_VAR envs into a single file and push
+		if instance.Spec.Config.ExportRepo != nil {
+			exportRepo := instance.Spec.Config.ExportRepo
+
+			address := exportRepo.Address
+			tfvarsFile := exportRepo.TFVarsFile
+			confFile := exportRepo.ConfFile
+			filesToCommit := []string{}
+
+			exportRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
+			if err != nil {
+				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error getting git repo access options: %v", err).Error())
+				return reconcile.Result{}, fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
+			}
+			err = exportRepoAccessOptions.download(job, instance.Namespace)
+			if err != nil {
+				return reconcile.Result{}, fmt.Errorf("Could not download repo %v", err)
+			}
+			// Create a file in the external repo
+			err = exportRepoAccessOptions.Client.CheckoutBranch("")
+			if err != nil {
+				return reconcile.Result{}, fmt.Errorf("Could not check out new branch %v", err)
+			}
+
+			// Format TFVars File
+			// Fist read in the tfvar file that gets created earlier. This tfvar
+			// file should have already concatenated all the tfvars found
+			// from the git repos
+			tfvarsFileContent := tfvars
+			for k, v := range runOpts.envVars {
+				if !strings.Contains(k, "TF_VAR") {
+					continue
+				}
+				k = strings.ReplaceAll(k, "TF_VAR_", "")
+				if string(v[0]) != "{" && string(v[0]) != "[" {
+					v = fmt.Sprintf("\"%s\"", v)
+				}
+				tfvarsFileContent = tfvarsFileContent + fmt.Sprintf("\n%s = %s", k, v)
+			}
+
+			// Remove Duplicates
+			// TODO replace this code with a more terraform native method of merging tfvars
+			var c bytes.Buffer
+			var currentKey string
+			var currentValue string
+			keyIndexer := make(map[string]string)
+			var openBrackets int
+			for _, line := range strings.Split(tfvarsFileContent, "\n") {
+				lineArr := strings.Split(line, "=")
+				// ignore blank lines
+				if strings.TrimSpace(lineArr[0]) == "" {
+					continue
+				}
+
+				if openBrackets > 0 {
+					currentValue += "\n" + strings.ReplaceAll(line, "\t", "  ")
+					// Check for more open brackets and close brackets
+					trimmedLine := strings.TrimSpace(line)
+					lastCharIdx := len(trimmedLine) - 1
+					lastChar := string(trimmedLine[lastCharIdx])
+					lastTwoChar := ""
+					if lastCharIdx > 0 {
+						lastTwoChar = string(trimmedLine[lastCharIdx-1:])
+					}
+
+					if lastChar == "{" || lastChar == "[" {
+						openBrackets++
+					} else if lastChar == "}" || lastChar == "]" || lastTwoChar == "}," || lastTwoChar == "]," {
+						openBrackets--
+					}
+					if openBrackets == 0 {
+						keyIndexer[currentKey] = currentValue
+					}
+					continue
+				}
+				currentKey = strings.TrimSpace(lineArr[0])
+
+				if len(lineArr) > 1 {
+					lastLineArrIdx := len(lineArr) - 1
+					trimmedLine := lineArr[lastLineArrIdx]
+					lastCharIdx := len(trimmedLine) - 1
+					lastChar := string(trimmedLine[lastCharIdx])
+					if lastChar == "{" || lastChar == "[" {
+						openBrackets++
+					}
+				} else {
+					return reconcile.Result{}, fmt.Errorf("Error in parsing tfvars string: %s", line)
+				}
+
+				currentValue = line
+				if openBrackets > 0 {
+					continue
+				}
+				keyIndexer[currentKey] = currentValue
+			}
+
+			keys := make([]string, 0, len(keyIndexer))
+			for k := range keyIndexer {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				fmt.Fprintf(&c, "%s\n\n", keyIndexer[k])
+
+			}
+
+			// Write HCL to file
+			// Create the path if not exists
+			err = os.MkdirAll(filepath.Dir(filepath.Join(exportRepoAccessOptions.Directory, tfvarsFile)), 0755)
+			if err != nil {
+				return reconcile.Result{}, fmt.Errorf("Could not create path: %v", err)
+			}
+			err = ioutil.WriteFile(filepath.Join(exportRepoAccessOptions.Directory, tfvarsFile), c.Bytes(), 0644)
+			if err != nil {
+				return reconcile.Result{}, fmt.Errorf("Could not write file %v", err)
+			}
+
+			// Write to file
+
+			filesToCommit = append(filesToCommit, tfvarsFile)
+
+			// Format Conf File
+			if confFile != "" {
+				confFileContent := ""
+				// The backend-configs for tf-operator are actually written
+				// as a complete tf resource. We need to extract only the key
+				// and values from the conf file only.
+				if instance.Spec.Config.CustomBackend != "" {
+
+					configsOnly := strings.Split(instance.Spec.Config.CustomBackend, "\n")
+					for _, line := range configsOnly {
+						// Assuming that config lines contain an equal sign
+						// All other lines are discarded
+						if strings.Contains(line, "=") {
+							if confFileContent == "" {
+								confFileContent = strings.TrimSpace(line)
+							} else {
+								confFileContent = confFileContent + "\n" + strings.TrimSpace(line)
+							}
+						}
+					}
+				}
+
+				// Write to file
+				err = os.MkdirAll(filepath.Dir(filepath.Join(exportRepoAccessOptions.Directory, confFile)), 0755)
+				if err != nil {
+					return reconcile.Result{}, fmt.Errorf("Could not create path: %v", err)
+				}
+				err = ioutil.WriteFile(filepath.Join(exportRepoAccessOptions.Directory, confFile), []byte(confFileContent), 0644)
+				if err != nil {
+					return reconcile.Result{}, fmt.Errorf("Could not write file %v", err)
+				}
+				filesToCommit = append(filesToCommit, confFile)
+			}
+
+			// Commit and push to repo
+			err = exportRepoAccessOptions.Client.Commit(filesToCommit, "terraform operator git commit")
+			if err != nil {
+				return reconcile.Result{}, fmt.Errorf("Could not commit to repo %v", err)
+			}
+			err = exportRepoAccessOptions.Client.Push("")
+			if err != nil {
+				return reconcile.Result{}, fmt.Errorf("Could not push to repo %v", err)
+			}
+
+		}
+
+		//
+		//
+		// Stack and Config are ready, create the tf resources for tf execution
+		//
+		//
+
+		reqLogger.Info("Ready to run terraform")
 		err = r.run(reqLogger, instance, runOpts)
 		if err != nil {
 			reqLogger.Error(err, "Failed to run job")
@@ -625,27 +801,27 @@ func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *
 	// 	return reconcile.Result{}, fmt.Errorf("No stack source defined")
 	// }
 	address := instance.Spec.Stack.Source.Address
-	stackDownloadOptions, err := newDownloadOptionsFromSpec(instance, address)
+	stackRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
 	if err != nil {
-		return fmt.Errorf("Error in newDownloadOptionsFromSpec: %v", err)
+		return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 	}
 
-	err = stackDownloadOptions.getParsedAddress()
+	err = stackRepoAccessOptions.getParsedAddress()
 	if err != nil {
 		return fmt.Errorf("Error in parsing address: %v", err)
 	}
 
 	// Since we're not going to download this to a configmap, we need to
 	// pass the information to the pod to do it. We should be able to
-	// use stackDownloadOptions.parsedAddress and just send that to
+	// use stackRepoAccessOptions.parsedAddress and just send that to
 	// the pod's environment vars.
 
-	runOpts.updateDownloadedModules(stackDownloadOptions.hash)
-	runOpts.stack = stackDownloadOptions.ParsedAddress
+	runOpts.updateDownloadedModules(stackRepoAccessOptions.hash)
+	runOpts.stack = stackRepoAccessOptions.ParsedAddress
 
 	// I think Terraform only allows for one git token. Add the first one
 	// to the job's env vars as GIT_PASSWORD.
-	for _, m := range stackDownloadOptions.SCMAuthMethods {
+	for _, m := range stackRepoAccessOptions.SCMAuthMethods {
 		if m.Git.HTTPS != nil {
 			runOpts.tokenSecret = m.Git.HTTPS.TokenSecretRef
 			if runOpts.tokenSecret.Key == "" {
@@ -662,30 +838,31 @@ func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *
 		break
 	}
 
-	runOpts.mainModule = stackDownloadOptions.hash
+	runOpts.mainModule = stackRepoAccessOptions.hash
 	runOpts.cloudProfile = instance.Spec.Config.CloudProfile
 	tfvars := ""
 	otherConfigFiles := make(map[string]string)
 	for _, s := range instance.Spec.Config.Sources {
 		address := s.Address
+		extras := s.Extras
 		// Loop thru all the sources in spec.config
-		configDownloadOptions, err := newDownloadOptionsFromSpec(instance, address)
+		configRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, extras)
 		if err != nil {
-			return fmt.Errorf("Error in newDownloadOptionsFromSpec: %v", err)
+			return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 		}
-		err = configDownloadOptions.download(c, instance.Namespace)
+		err = configRepoAccessOptions.download(c, instance.Namespace)
 		if err != nil {
 			return fmt.Errorf("Error in download: %v", err)
 		}
-		// reqLogger.Info(fmt.Sprintf("Config was downloaded and updated DownloadOptions: %+v", configDownloadOptions))
+		// reqLogger.Info(fmt.Sprintf("Config was downloaded and updated GitRepoAccessOptions: %+v", configRepoAccessOptions))
 
-		tfvarSource, err := configDownloadOptions.tfvarFiles()
+		tfvarSource, err := configRepoAccessOptions.tfvarFiles()
 		if err != nil {
 			return fmt.Errorf("Error in reading tfvarFiles: %v", err)
 		}
 		tfvars += tfvarSource
 
-		otherConfigFiles, err = configDownloadOptions.otherConfigFiles()
+		otherConfigFiles, err = configRepoAccessOptions.otherConfigFiles()
 		if err != nil {
 			return fmt.Errorf("Error in reading otherConfigFiles: %v", err)
 		}
@@ -815,8 +992,8 @@ func (r RunOptions) generateRoleBinding() *rbacv1.RoleBinding {
 }
 
 func (r RunOptions) generateJob() *batchv1.Job {
-	reqLogger := log.WithValues("function", "run")
-	reqLogger.Info(fmt.Sprintf("Running job with this setup: %+v", r))
+	// reqLogger := log.WithValues("function", "run")
+	// reqLogger.Info(fmt.Sprintf("Running job with this setup: %+v", r))
 
 	// TF Module
 	envs := []corev1.EnvVar{}
@@ -1110,8 +1287,8 @@ func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terr
 	return nil
 }
 
-func newDownloadOptionsFromSpec(instance *tfv1alpha1.Terraform, address string) (DownloadOptions, error) {
-	d := DownloadOptions{}
+func newGitRepoAccessOptionsFromSpec(instance *tfv1alpha1.Terraform, address string, extras []string) (GitRepoAccessOptions, error) {
+	d := GitRepoAccessOptions{}
 	var sshProxyOptions tfv1alpha1.ProxyOpts
 
 	// var tfAuthOptions []tfv1alpha1.AuthOpts
@@ -1123,10 +1300,11 @@ func newDownloadOptionsFromSpec(instance *tfv1alpha1.Terraform, address string) 
 	if err != nil {
 		return d, fmt.Errorf("Unable to make directory: %v", err)
 	}
-	defer os.RemoveAll(temp) // clean up
+	// defer os.RemoveAll(temp) // clean up
 
-	d = DownloadOptions{
+	d = GitRepoAccessOptions{
 		Address:   address,
+		Extras:    extras,
 		Directory: temp,
 	}
 	d.SCMAuthMethods = instance.Spec.SCMAuthMethods
@@ -1134,7 +1312,8 @@ func newDownloadOptionsFromSpec(instance *tfv1alpha1.Terraform, address string) 
 	if instance.Spec.SSHProxy != nil {
 		sshProxyOptions = *instance.Spec.SSHProxy
 	}
-	d.getProxyOpts(sshProxyOptions)
+	d.SSHProxy = sshProxyOptions
+
 	return d, nil
 }
 
@@ -1168,13 +1347,16 @@ func getHostKey(host string) (ssh.PublicKey, error) {
 	return hostKey, nil
 }
 
-func (d DownloadOptions) tfvarFiles() (string, error) {
+func (d GitRepoAccessOptions) tfvarFiles() (string, error) {
 	// dump contents of tfvar files into a var
 	tfvars := ""
 
 	// TODO Should path definitions walk the path?
-	if utils.ListContainsStr(d.Extras, "subdirs-as-files") {
+	if utils.ListContainsStr(d.Extras, "is-file") {
 		for _, filename := range d.subdirs {
+			if !strings.HasSuffix(filename, ".tfvars") {
+				continue
+			}
 			file := filepath.Join(d.Directory, filename)
 			content, err := ioutil.ReadFile(file)
 			if err != nil {
@@ -1227,19 +1409,19 @@ func (d DownloadOptions) tfvarFiles() (string, error) {
 }
 
 // TODO combine this with the tfvars and make it a generic  get configs method
-func (d DownloadOptions) otherConfigFiles() (map[string]string, error) {
+func (d GitRepoAccessOptions) otherConfigFiles() (map[string]string, error) {
 	// create a configmap entry per source file
 	configFiles := make(map[string]string)
 
 	// TODO Should path definitions walk the path?
-	if utils.ListContainsStr(d.Extras, "subdirs-as-files") {
+	if utils.ListContainsStr(d.Extras, "is-file") {
 		for _, filename := range d.subdirs {
 			file := filepath.Join(d.Directory, filename)
 			content, err := ioutil.ReadFile(file)
 			if err != nil {
 				return configFiles, fmt.Errorf("error reading file: %v", err)
 			}
-			configFiles[filename] = string(content)
+			configFiles[filepath.Base(filename)] = string(content)
 		}
 	} else if len(d.subdirs) > 0 {
 		for _, s := range d.subdirs {
@@ -1416,6 +1598,7 @@ func (c *k8sClient) createConfigMap(name, namespace string, binaryData map[strin
 	// TODO Make the terraform the referenced Owner of this resource
 	_, err := c.clientset.CoreV1().ConfigMaps(namespace).Create(configMapObject)
 	if err != nil {
+		// fmt.Printf("The first create error... %v\n", err.Error())
 		_, err = c.clientset.CoreV1().ConfigMaps(namespace).Update(configMapObject)
 		if err != nil {
 			return fmt.Errorf("error creating configmap: %v", err)
@@ -1598,7 +1781,7 @@ func untar(tarball, target string) error {
 	return nil
 }
 
-func (d *DownloadOptions) download(job k8sClient, namespace string) error {
+func (d *GitRepoAccessOptions) download(job k8sClient, namespace string) error {
 	// This function only supports git modules. There's no explicit check
 	// for this yet.
 	// TODO document available options for sources
@@ -1619,13 +1802,15 @@ func (d *DownloadOptions) download(job k8sClient, namespace string) error {
 		}
 
 		if strings.Contains(d.protocol, "http") {
-			proxyServer := fmt.Sprintf("%s:22", d.SSHProxy.Host)
+			proxyServer := ""
 			if strings.Contains(d.host, ":") {
 				proxyServer = d.SSHProxy.Host
+			} else {
+				fmt.Sprintf("%s:22", d.SSHProxy.Host)
 			}
 
 			hostKey := goSocks5.NewHostKey()
-			duration := time.Duration(60)
+			duration := time.Duration(60 * time.Second)
 			socks5Proxy := goSocks5.NewSocks5Proxy(hostKey, nil, duration)
 
 			err := socks5Proxy.Start(d.SSHProxy.User, proxyServer, proxyAuthMethod)
@@ -1649,123 +1834,111 @@ func (d *DownloadOptions) download(job k8sClient, namespace string) error {
 			// httpTransport.Dial = dialer.Dial
 			httpClient := &http.Client{Transport: httpTransport}
 
-			gitclient.InstallProtocol("http", githttp.NewClient(httpClient))
-			gitclient.InstallProtocol("https", githttp.NewClient(httpClient))
+			gitTransportClient.InstallProtocol("http", githttp.NewClient(httpClient))
+			gitTransportClient.InstallProtocol("https", githttp.NewClient(httpClient))
 		} else if d.protocol == "ssh" {
-			// TODO figure out how to use SOCKS5 with go-git
-			proxyServerWithUser := fmt.Sprintf("%s@%s", d.SSHProxy.User, d.SSHProxy.Host)
-			destination := ""
-			if strings.Contains(d.host, ":") {
-				destination = d.host
-			} else {
-				destination = fmt.Sprintf("%s:%s", d.host, d.port)
+			port, err := d.setupSSHProxy(job, namespace)
+			if err != nil {
+				return err
 			}
-
-			// reqLogger.Info(fmt.Sprintf("Setting up proxy: %s@%s", user, host))
-
-			// Setup the tunnel, but do not yet start it yet.
-			// // User and host of tunnel server, it will default to port 22
-			// // if not specified.
-			// proxyServerWithUser,
-
-			// // Pick ONE of the following authentication methods:
-			// // sshtunnel.PrivateKeyFile(filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa")), // 1. private key
-			// proxyAuthMethod,
-
-			// // The destination host and port of the actual server.
-			// destination,
-			tunnel := sshtunnel.NewSSHTunnel(proxyServerWithUser, proxyAuthMethod, destination)
-
-			// NewSSHTunnel will bind to a random port so that you can have
-			// multiple SSH tunnels available. The port is available through:
-			//   tunnel.Local.Port
-
-			// You can use any normal Go code to connect to the destination server
-			// through localhost. You may need to use 127.0.0.1 for some libraries.
-
-			// You can provide a logger for debugging, or remove this line to
-			// make it silent.
-			// tunnel.Log = log.New(os.Stdout, "", log.Ldate|log.Lmicroseconds)
-			// reqLogger.Info(tunnel.Log)
-
-			// Start the server in the background. You will need to wait a
-			// small amount of time for it to bind to the localhost port
-			// before you can start sending connections.
-			go tunnel.Start()
-			time.Sleep(1000 * time.Millisecond)
-
-			port := strconv.Itoa(tunnel.Local.Port)
 
 			if strings.Index(uri, "/") != 0 {
 				uri = "/" + uri
 			}
-
-			// // configure auth with go git options
+			// configure auth with go git options
 			repo = fmt.Sprintf("ssh://%s@127.0.0.1:%s%s", d.user, port, uri)
 		}
 	}
 	reqLogger.Info(fmt.Sprintf("Getting ready to download source %s", repo))
 
-	gitAuthMethod, err := d.getGitAuthMethod(job, namespace, d.protocol, reqLogger)
-	if err != nil {
-		return fmt.Errorf("Error getting gitAuthMethod: %v", err)
-	}
-
-	gitConfigs := git.CloneOptions{
-		Auth:              gitAuthMethod,
-		URL:               repo,
-		RecurseSubmodules: git.DefaultSubmoduleRecursionDepth,
-		ReferenceName:     "refs/heads/master",
-	}
-
-	reqLogger.Info("Validating git config")
-	err = gitConfigs.Validate()
-	if err != nil {
-		return fmt.Errorf("Git config not valid: %v", err)
-	}
-
-	reqLogger.Info("Git Clone (PlainClone)")
-	r, err := git.PlainClone(d.Directory, false, &gitConfigs)
-	if err != nil {
-		return fmt.Errorf("Could not checkout repo: %v", err)
-	}
-
-	w, err := r.Worktree()
-	if err != nil {
-		return fmt.Errorf("Could not get Worktree: %v", err)
-	}
-
-	err = r.Fetch(&git.FetchOptions{
-		Auth:     gitAuthMethod,
-		RefSpecs: []config.RefSpec{"refs/*:refs/*", "HEAD:refs/heads/HEAD"},
-	})
-	if err != nil {
-		return fmt.Errorf("Could not Fetch: %v", err)
-	}
-
-	if d.hash != "" {
-		commit := plumbing.NewHash(d.hash)
-		reqLogger.Info(fmt.Sprintf("Checking out hash: %v", commit))
-		err = w.Checkout(&git.CheckoutOptions{
-			Hash: commit,
-		})
+	var gitRepo gitclient.GitRepo
+	if d.protocol == "ssh" {
+		filename, err := d.getGitSSHKey(job, namespace, d.protocol, reqLogger)
 		if err != nil {
-			return fmt.Errorf("Could not checkout ref '%s': %v", commit, err)
+			return err
+		}
+		defer os.Remove(filename)
+
+		gitRepo, err = gitclient.GitSSHDownload(repo, d.Directory, filename, d.hash)
+		if err != nil {
+			return err
+		}
+	} else {
+		// TODO find out and support any other protocols
+		// Just assume http is the only other protocol for now
+		token, err := d.getGitToken(job, namespace, d.protocol, reqLogger)
+		if err != nil {
+			return err
+		}
+
+		gitRepo, err = gitclient.GitHTTPDownload(repo, d.Directory, "git", token, d.hash)
+		if err != nil {
+			return err
 		}
 	}
 
-	ref, err := r.Head()
-	if err != nil {
-		return fmt.Errorf("Could not find ref: %v", err)
-	}
-	hash := ref.Hash().String()
-
+	reqLogger.Info(fmt.Sprintf("The gitRepo is set as: %+v", gitRepo))
 	// Set the hash and return
-	d.hash = hash
+	d.Client = gitRepo
+	d.hash, err = gitRepo.HashString()
+	if err != nil {
+		return err
+	}
+	reqLogger.Info(fmt.Sprintf("And the hash: %v", d.hash))
 	return nil
 }
 
-func (d *DownloadOptions) getParsedAddress() error {
+func (d *GitRepoAccessOptions) setupSSHProxy(job k8sClient, namespace string) (string, error) {
+	var port string
+	proxyAuthMethod, err := d.getProxyAuthMethod(job, namespace)
+	if err != nil {
+		return port, fmt.Errorf("Error getting proxyAuthMethod: %v", err)
+	}
+	proxyServerWithUser := fmt.Sprintf("%s@%s", d.SSHProxy.User, d.SSHProxy.Host)
+	destination := ""
+	if strings.Contains(d.host, ":") {
+		destination = d.host
+	} else {
+		destination = fmt.Sprintf("%s:%s", d.host, d.port)
+	}
+
+	// Setup the tunnel, but do not yet start it yet.
+	// // User and host of tunnel server, it will default to port 22
+	// // if not specified.
+	// proxyServerWithUser,
+
+	// // Pick ONE of the following authentication methods:
+	// // sshtunnel.PrivateKeyFile(filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa")), // 1. private key
+	// proxyAuthMethod,
+
+	// // The destination host and port of the actual server.
+	// destination,
+	tunnel := sshtunnel.NewSSHTunnel(proxyServerWithUser, proxyAuthMethod, destination)
+
+	// NewSSHTunnel will bind to a random port so that you can have
+	// multiple SSH tunnels available. The port is available through:
+	//   tunnel.Local.Port
+
+	// You can use any normal Go code to connect to the destination server
+	// through localhost. You may need to use 127.0.0.1 for some libraries.
+
+	// You can provide a logger for debugging, or remove this line to
+	// make it silent.
+	// tunnel.Log = log.New(os.Stdout, "", log.Ldate|log.Lmicroseconds)
+	// reqLogger.Info(tunnel.Log)
+
+	// Start the server in the background. You will need to wait a
+	// small amount of time for it to bind to the localhost port
+	// before you can start sending connections.
+	go tunnel.Start()
+	time.Sleep(1000 * time.Millisecond)
+
+	port = strconv.Itoa(tunnel.Local.Port)
+
+	return port, nil
+}
+
+func (d *GitRepoAccessOptions) getParsedAddress() error {
 	sourcedir, subdirstr := getter.SourceDirSubdir(d.Address)
 	// subdir can contain a list seperated by double slashes
 	subdirs := strings.Split(subdirstr, "//")
@@ -1826,7 +1999,7 @@ func (d *DownloadOptions) getParsedAddress() error {
 	return nil
 }
 
-func (d DownloadOptions) getProxyAuthMethod(job k8sClient, namespace string) (ssh.AuthMethod, error) {
+func (d GitRepoAccessOptions) getProxyAuthMethod(job k8sClient, namespace string) (ssh.AuthMethod, error) {
 	var proxyAuthMethod ssh.AuthMethod
 
 	name := d.SSHProxy.SSHKeySecretRef.Name
@@ -1850,82 +2023,56 @@ func (d DownloadOptions) getProxyAuthMethod(job k8sClient, namespace string) (ss
 	return proxyAuthMethod, nil
 }
 
-func (d *DownloadOptions) getGitAuthMethod(job k8sClient, namespace, protocol string, reqLogger logr.Logger) (gitauth.AuthMethod, error) {
-	var auth gitauth.AuthMethod
-	reqLogger.Info(fmt.Sprintf("Fetching gitAuthMethod for host: %s", d.ParsedAddress.host))
-	if protocol == "ssh" {
-		for _, m := range d.SCMAuthMethods {
-			if m.Host == d.ParsedAddress.host && m.Git.SSH != nil {
-				reqLogger.Info("Using Git over SSH with a key")
-				name := m.Git.SSH.SSHKeySecretRef.Name
-				key := m.Git.SSH.SSHKeySecretRef.Key
-				if key == "" {
-					key = "id_rsa"
-				}
-				ns := m.Git.SSH.SSHKeySecretRef.Namespace
-				if ns == "" {
-					ns = namespace
-				}
-				sshKey, _ := job.loadPrivateKey(key, name, ns)
-				defer os.Remove(sshKey.Name())
-				defer sshKey.Close()
+func (d *GitRepoAccessOptions) getGitSSHKey(job k8sClient, namespace, protocol string, reqLogger logr.Logger) (string, error) {
+	var filename string
+	for _, m := range d.SCMAuthMethods {
+		if m.Host == d.ParsedAddress.host && m.Git.SSH != nil {
+			reqLogger.Info("Using Git over SSH with a key")
+			name := m.Git.SSH.SSHKeySecretRef.Name
+			key := m.Git.SSH.SSHKeySecretRef.Key
+			if key == "" {
+				key = "id_rsa"
+			}
+			ns := m.Git.SSH.SSHKeySecretRef.Namespace
+			if ns == "" {
+				ns = namespace
+			}
+			sshKey, err := job.loadPrivateKey(key, name, ns)
+			if err != nil {
+				return filename, err
+			}
+			defer sshKey.Close()
+			filename = sshKey.Name()
+		}
+	}
+	if filename == "" {
+		return filename, fmt.Errorf("Failed to find Git SSH Key for %v\n", d.ParsedAddress.host)
+	}
+	return filename, nil
+}
 
-				keyF, err := ioutil.ReadFile(sshKey.Name())
-				if err != nil {
-					return auth, fmt.Errorf("unable to read private key: %v", err)
-				}
-
-				// Create the Signer for this private key.
-				signer, err := ssh.ParsePrivateKey(keyF)
-				if err != nil {
-					return auth, fmt.Errorf("unable to parse private key: %v", err)
-				}
-
-				auth = &gitssh.PublicKeys{
-					User:   d.user,
-					Signer: signer,
-					HostKeyCallbackHelper: gitssh.HostKeyCallbackHelper{
-						HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-					},
-				}
-
-				if auth.Name() != "" {
-					return auth, nil
-				}
+func (d *GitRepoAccessOptions) getGitToken(job k8sClient, namespace, protocol string, reqLogger logr.Logger) (string, error) {
+	var token string
+	for _, m := range d.SCMAuthMethods {
+		if m.Host == d.ParsedAddress.host && m.Git.HTTPS != nil {
+			reqLogger.Info("Using Git over HTTPS with a token")
+			name := m.Git.HTTPS.TokenSecretRef.Name
+			key := m.Git.HTTPS.TokenSecretRef.Key
+			if key == "" {
+				key = "token"
+			}
+			ns := m.Git.HTTPS.TokenSecretRef.Namespace
+			if ns == "" {
+				ns = namespace
+			}
+			token, err := job.loadPassword(key, name, ns)
+			if err != nil {
+				return token, fmt.Errorf("unable to get token: %v", err)
 			}
 		}
 	}
-
-	if strings.Contains(protocol, "http") {
-		for _, m := range d.SCMAuthMethods {
-			if m.Host == d.ParsedAddress.host && m.Git.HTTPS != nil {
-				reqLogger.Info("Using Git over HTTPS with a token")
-				name := m.Git.HTTPS.TokenSecretRef.Name
-				key := m.Git.HTTPS.TokenSecretRef.Key
-				if key == "" {
-					key = "token"
-				}
-				ns := m.Git.HTTPS.TokenSecretRef.Namespace
-				if ns == "" {
-					ns = namespace
-				}
-
-				gitPassword, err := job.loadPassword(key, name, ns)
-				if err != nil {
-					return auth, fmt.Errorf("unable to get password: %v", err)
-				}
-				auth = &githttp.BasicAuth{
-					Username: d.user,
-					Password: gitPassword,
-				}
-
-				if auth.Name() != "" {
-					return auth, nil
-				}
-			}
-		}
+	if token == "" {
+		return token, fmt.Errorf("Failed to find Git token Key for %v\n", d.ParsedAddress.host)
 	}
-
-	return auth, fmt.Errorf("Unable to get gitauth Method")
-
+	return token, nil
 }

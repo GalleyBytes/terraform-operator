@@ -1,0 +1,48 @@
+apiVersion: tf.isaaguilar.com/v1alpha1
+kind: Terraform
+metadata:
+  name: irsa-role-and-policy-example
+spec:
+  sshProxy:
+    host: 10.151.36.97
+    user: ec2-user
+    sshKeySecretRef:
+      name: proxysshkey
+  scmAuthMethods:
+  - host: github.com
+    git:
+      ssh:
+        requireProxy: true
+        sshKeySecretRef:
+          name: gitsshkey
+  stack:
+    terraformVersion: 0.12.23
+    source:
+      address: git@github.com:isaaguilar/my-tf-modules.git//stacks/irsa-role-and-policy
+  config:
+    customBackend: |-
+      terraform {
+        backend "s3" {
+          key            = "isaaguilar/use1/irsa-role-and-policy/tf-operator-example.tfstate"
+          region         = "us-east-1"
+          bucket         = "terraform-isaaguilar"
+          dynamodb_table = "terraform-isaaguilar-lock"
+          profile        = "isaaguilar"
+        }
+      }
+    applyOnCreate: true
+    applyOnUpdate: true
+    applyOnDelete: true
+    ignoreDelete: true
+    cloudProfile: admin-cloud-credentials
+    sources:
+    - address: git@github.com:iaguilar/scratch.git//irsa-vars
+    exportRepo:
+      address: git@github.com:iaguilar/scratch.git
+      tfvarsFile: environments/isaaguilar/use1/irsa-role-and-policy/tf-operator-example.tfvars
+      confFile: environments/isaaguilar/use1/irsa-role-and-policy/tf-operator-example.conf
+
+    ## reconcile is planned for the future and does not do anything yet
+    # reconcile:
+    #   enable: false
+    #   syncPeriod: 60 # int in minutes

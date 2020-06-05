@@ -1,0 +1,18 @@
+# Note:
+# HTTPS repos for stacks are supported as long as they do not require a proxy.
+
+apiVersion: tf.isaaguilar.com/v1alpha1
+kind: Terraform
+metadata:
+  name: public-https-git-repo
+spec:
+  stack:
+    terraformVersion: 0.12.23
+    source:
+      address: https://github.com/isaaguilar/simple-aws-tf-modules.git//s3-bucket
+  config:
+    ignoreDelete: true
+    cloudProfile: aws-credentials-k8s-secret
+    env:
+    - name: TF_VAR_name
+      value: value      # fulfills the terraform module's "${var.name}"

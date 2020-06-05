@@ -1,0 +1,31 @@
+apiVersion: tf.isaaguilar.com/v1alpha1
+kind: Terraform
+metadata:
+  name: private-ssh-git-repo-via-ssh-tunnel
+spec:
+  sshProxy:
+    host: 10.0.0.200
+    user: ec2-user
+    sshKeySecretRef:
+      name: tf-operator-proxy-sshkey-k8s-secret
+
+  scmAuthMethods:
+  - host: github.com
+    git:
+      ssh:
+        requireProxy: true
+        sshKeySecretRef:
+          name: corp-git-sshkey-k8s-secret
+          key: id_rsa
+
+  stack:
+    terraformVersion: 0.12.23
+    source:
+      address: git@github.com:iaguilar/private-aws-tf-modules.git//s3-bucket
+
+  config:
+    ignoreDelete: true
+    cloudProfile: aws-credentials-k8s-secret
+    env:
+    - name: TF_VAR_name
+      value: value      # fulfills the terraform module's "${var.name}"

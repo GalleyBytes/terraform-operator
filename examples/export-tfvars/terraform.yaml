@@ -1,0 +1,19 @@
+apiVersion: tf.isaaguilar.com/v1alpha1
+kind: Terraform
+metadata:
+  name: export-tfvars
+spec:
+  stack:
+    terraformVersion: 0.12.23
+    source:
+      address: git@<tf-module-repo>.git
+  config:
+    ignoreDelete: true
+    cloudProfile: aws-credentials-k8s-secret
+    env:
+    - name: TF_VAR_name
+      value: value      # fulfills the terraform module's "${var.name}"
+    exportRepo:
+      address: git@<tfvars-repo>.git
+      tfvarsFile: path/to/tfvars/export.tfvars
+      confFile: path/to/tfvars/export.conf
