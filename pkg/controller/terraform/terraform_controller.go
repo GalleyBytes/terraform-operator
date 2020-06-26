@@ -319,9 +319,11 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 	}
 
 	if !utils.ListContainsStr(instance.GetFinalizers(), terraformFinalizer) {
-		if err := r.addFinalizer(reqLogger, instance); err != nil {
-			r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
-			return reconcile.Result{}, err
+		if !instance.Spec.Config.IgnoreDelete {
+			if err := r.addFinalizer(reqLogger, instance); err != nil {
+				r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+				return reconcile.Result{}, err
+			}
 		}
 	}
 
@@ -456,169 +458,17 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 
 		// Flatten all the .tfvars and TF_VAR envs into a single file and push
 		if instance.Spec.Config.ExportRepo != nil {
-			exportRepo := instance.Spec.Config.ExportRepo
+			e := instance.Spec.Config.ExportRepo
 
-			address := exportRepo.Address
-			tfvarsFile := exportRepo.TFVarsFile
-			confFile := exportRepo.ConfFile
-			filesToCommit := []string{}
-
+			address := e.Address
 			exportRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
 			if err != nil {
 				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error getting git repo access options: %v", err).Error())
 				return reconcile.Result{}, fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 			}
-			err = exportRepoAccessOptions.download(job, instance.Namespace)
-			if err != nil {
-				return reconcile.Result{}, fmt.Errorf("Could not download repo %v", err)
-			}
-			// Create a file in the external repo
-			err = exportRepoAccessOptions.Client.CheckoutBranch("")
-			if err != nil {
-				return reconcile.Result{}, fmt.Errorf("Could not check out new branch %v", err)
-			}
 
-			// Format TFVars File
-			// Fist read in the tfvar file that gets created earlier. This tfvar
-			// file should have already concatenated all the tfvars found
-			// from the git repos
-			tfvarsFileContent := tfvars
-			for k, v := range runOpts.envVars {
-				if !strings.Contains(k, "TF_VAR") {
-					continue
-				}
-				k = strings.ReplaceAll(k, "TF_VAR_", "")
-				if string(v[0]) != "{" && string(v[0]) != "[" {
-					v = fmt.Sprintf("\"%s\"", v)
-				}
-				tfvarsFileContent = tfvarsFileContent + fmt.Sprintf("\n%s = %s", k, v)
-			}
-
-			// Remove Duplicates
-			// TODO replace this code with a more terraform native method of merging tfvars
-			var c bytes.Buffer
-			var currentKey string
-			var currentValue string
-			keyIndexer := make(map[string]string)
-			var openBrackets int
-			for _, line := range strings.Split(tfvarsFileContent, "\n") {
-				lineArr := strings.Split(line, "=")
-				// ignore blank lines
-				if strings.TrimSpace(lineArr[0]) == "" {
-					continue
-				}
-
-				if openBrackets > 0 {
-					currentValue += "\n" + strings.ReplaceAll(line, "\t", "  ")
-					// Check for more open brackets and close brackets
-					trimmedLine := strings.TrimSpace(line)
-					lastCharIdx := len(trimmedLine) - 1
-					lastChar := string(trimmedLine[lastCharIdx])
-					lastTwoChar := ""
-					if lastCharIdx > 0 {
-						lastTwoChar = string(trimmedLine[lastCharIdx-1:])
-					}
-
-					if lastChar == "{" || lastChar == "[" {
-						openBrackets++
-					} else if lastChar == "}" || lastChar == "]" || lastTwoChar == "}," || lastTwoChar == "]," {
-						openBrackets--
-					}
-					if openBrackets == 0 {
-						keyIndexer[currentKey] = currentValue
-					}
-					continue
-				}
-				currentKey = strings.TrimSpace(lineArr[0])
-
-				if len(lineArr) > 1 {
-					lastLineArrIdx := len(lineArr) - 1
-					trimmedLine := lineArr[lastLineArrIdx]
-					lastCharIdx := len(trimmedLine) - 1
-					lastChar := string(trimmedLine[lastCharIdx])
-					if lastChar == "{" || lastChar == "[" {
-						openBrackets++
-					}
-				} else {
-					return reconcile.Result{}, fmt.Errorf("Error in parsing tfvars string: %s", line)
-				}
-
-				currentValue = line
-				if openBrackets > 0 {
-					continue
-				}
-				keyIndexer[currentKey] = currentValue
-			}
-
-			keys := make([]string, 0, len(keyIndexer))
-			for k := range keyIndexer {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				fmt.Fprintf(&c, "%s\n\n", keyIndexer[k])
-
-			}
-
-			// Write HCL to file
-			// Create the path if not exists
-			err = os.MkdirAll(filepath.Dir(filepath.Join(exportRepoAccessOptions.Directory, tfvarsFile)), 0755)
-			if err != nil {
-				return reconcile.Result{}, fmt.Errorf("Could not create path: %v", err)
-			}
-			err = ioutil.WriteFile(filepath.Join(exportRepoAccessOptions.Directory, tfvarsFile), c.Bytes(), 0644)
-			if err != nil {
-				return reconcile.Result{}, fmt.Errorf("Could not write file %v", err)
-			}
-
-			// Write to file
-
-			filesToCommit = append(filesToCommit, tfvarsFile)
-
-			// Format Conf File
-			if confFile != "" {
-				confFileContent := ""
-				// The backend-configs for tf-operator are actually written
-				// as a complete tf resource. We need to extract only the key
-				// and values from the conf file only.
-				if instance.Spec.Config.CustomBackend != "" {
-
-					configsOnly := strings.Split(instance.Spec.Config.CustomBackend, "\n")
-					for _, line := range configsOnly {
-						// Assuming that config lines contain an equal sign
-						// All other lines are discarded
-						if strings.Contains(line, "=") {
-							if confFileContent == "" {
-								confFileContent = strings.TrimSpace(line)
-							} else {
-								confFileContent = confFileContent + "\n" + strings.TrimSpace(line)
-							}
-						}
-					}
-				}
-
-				// Write to file
-				err = os.MkdirAll(filepath.Dir(filepath.Join(exportRepoAccessOptions.Directory, confFile)), 0755)
-				if err != nil {
-					return reconcile.Result{}, fmt.Errorf("Could not create path: %v", err)
-				}
-				err = ioutil.WriteFile(filepath.Join(exportRepoAccessOptions.Directory, confFile), []byte(confFileContent), 0644)
-				if err != nil {
-					return reconcile.Result{}, fmt.Errorf("Could not write file %v", err)
-				}
-				filesToCommit = append(filesToCommit, confFile)
-			}
-
-			// Commit and push to repo
-			err = exportRepoAccessOptions.Client.Commit(filesToCommit, "terraform operator git commit")
-			if err != nil {
-				return reconcile.Result{}, fmt.Errorf("Could not commit to repo %v", err)
-			}
-			err = exportRepoAccessOptions.Client.Push("")
-			if err != nil {
-				return reconcile.Result{}, fmt.Errorf("Could not push to repo %v", err)
-			}
-
+			// TODO decide what to do on errors
+			go exportRepoAccessOptions.commitTfvars(job, tfvars, e.TFVarsFile, e.ConfFile, instance.Namespace, instance.Spec.Config.CustomBackend, runOpts, reqLogger)
 		}
 
 		//
@@ -1859,7 +1709,7 @@ func (d *GitRepoAccessOptions) download(job k8sClient, namespace string) error {
 		}
 		defer os.Remove(filename)
 
-		gitRepo, err = gitclient.GitSSHDownload(repo, d.Directory, filename, d.hash)
+		gitRepo, err = gitclient.GitSSHDownload(repo, d.Directory, filename, d.hash, reqLogger)
 		if err != nil {
 			return err
 		}
@@ -1877,14 +1727,13 @@ func (d *GitRepoAccessOptions) download(job k8sClient, namespace string) error {
 		}
 	}
 
-	reqLogger.Info(fmt.Sprintf("The gitRepo is set as: %+v", gitRepo))
 	// Set the hash and return
 	d.Client = gitRepo
 	d.hash, err = gitRepo.HashString()
 	if err != nil {
 		return err
 	}
-	reqLogger.Info(fmt.Sprintf("And the hash: %v", d.hash))
+	reqLogger.Info(fmt.Sprintf("Hash: %v", d.hash))
 	return nil
 }
 
@@ -2075,4 +1924,178 @@ func (d *GitRepoAccessOptions) getGitToken(job k8sClient, namespace, protocol st
 		return token, fmt.Errorf("Failed to find Git token Key for %v\n", d.ParsedAddress.host)
 	}
 	return token, nil
+}
+
+func (d GitRepoAccessOptions) commitTfvars(job k8sClient, tfvars, tfvarsFile, confFile, namespace, customBackend string, runOpts RunOptions, reqLogger logr.Logger) {
+	filesToCommit := []string{}
+	err := d.download(job, namespace)
+	if err != nil {
+		errString := fmt.Sprintf("Could not download repo %v", err)
+		reqLogger.Info(errString)
+		return
+	}
+	// Create a file in the external repo
+	err = d.Client.CheckoutBranch("")
+	if err != nil {
+		errString := fmt.Sprintf("Could not check out new branch %v", err)
+		reqLogger.Info(errString)
+		return
+	}
+
+	// Format TFVars File
+	// Fist read in the tfvar file that gets created earlier. This tfvar
+	// file should have already concatenated all the tfvars found
+	// from the git repos
+	tfvarsFileContent := tfvars
+	for k, v := range runOpts.envVars {
+		if !strings.Contains(k, "TF_VAR") {
+			continue
+		}
+		k = strings.ReplaceAll(k, "TF_VAR_", "")
+		if string(v[0]) != "{" && string(v[0]) != "[" {
+			v = fmt.Sprintf("\"%s\"", v)
+		}
+		tfvarsFileContent = tfvarsFileContent + fmt.Sprintf("\n%s = %s", k, v)
+	}
+
+	// Remove Duplicates
+	// TODO replace this code with a more terraform native method of merging tfvars
+	var c bytes.Buffer
+	var currentKey string
+	var currentValue string
+	keyIndexer := make(map[string]string)
+	var openBrackets int
+	for _, line := range strings.Split(tfvarsFileContent, "\n") {
+		lineArr := strings.Split(line, "=")
+		// ignore blank lines
+		if strings.TrimSpace(lineArr[0]) == "" {
+			continue
+		}
+
+		if openBrackets > 0 {
+			currentValue += "\n" + strings.ReplaceAll(line, "\t", "  ")
+			// Check for more open brackets and close brackets
+			trimmedLine := strings.TrimSpace(line)
+			lastCharIdx := len(trimmedLine) - 1
+			lastChar := string(trimmedLine[lastCharIdx])
+			lastTwoChar := ""
+			if lastCharIdx > 0 {
+				lastTwoChar = string(trimmedLine[lastCharIdx-1:])
+			}
+
+			if lastChar == "{" || lastChar == "[" {
+				openBrackets++
+			} else if lastChar == "}" || lastChar == "]" || lastTwoChar == "}," || lastTwoChar == "]," {
+				openBrackets--
+			}
+			if openBrackets == 0 {
+				keyIndexer[currentKey] = currentValue
+			}
+			continue
+		}
+		currentKey = strings.TrimSpace(lineArr[0])
+
+		if len(lineArr) > 1 {
+			lastLineArrIdx := len(lineArr) - 1
+			trimmedLine := lineArr[lastLineArrIdx]
+			lastCharIdx := len(trimmedLine) - 1
+			lastChar := string(trimmedLine[lastCharIdx])
+			if lastChar == "{" || lastChar == "[" {
+				openBrackets++
+			}
+		} else {
+			errString := fmt.Sprintf("Error in parsing tfvars string: %s", line)
+			reqLogger.Info(errString)
+			return
+		}
+
+		currentValue = line
+		if openBrackets > 0 {
+			continue
+		}
+		keyIndexer[currentKey] = currentValue
+	}
+
+	keys := make([]string, 0, len(keyIndexer))
+	for k := range keyIndexer {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(&c, "%s\n\n", keyIndexer[k])
+
+	}
+
+	// Write HCL to file
+	// Create the path if not exists
+	err = os.MkdirAll(filepath.Dir(filepath.Join(d.Directory, tfvarsFile)), 0755)
+	if err != nil {
+		errString := fmt.Sprintf("Could not create path: %v", err)
+		reqLogger.Info(errString)
+		return
+	}
+	err = ioutil.WriteFile(filepath.Join(d.Directory, tfvarsFile), c.Bytes(), 0644)
+	if err != nil {
+		errString := fmt.Sprintf("Could not write file %v", err)
+		reqLogger.Info(errString)
+		return
+	}
+
+	// Write to file
+
+	filesToCommit = append(filesToCommit, tfvarsFile)
+
+	// Format Conf File
+	if confFile != "" {
+		confFileContent := ""
+		// The backend-configs for tf-operator are actually written
+		// as a complete tf resource. We need to extract only the key
+		// and values from the conf file only.
+		if customBackend != "" {
+
+			configsOnly := strings.Split(customBackend, "\n")
+			for _, line := range configsOnly {
+				// Assuming that config lines contain an equal sign
+				// All other lines are discarded
+				if strings.Contains(line, "=") {
+					if confFileContent == "" {
+						confFileContent = strings.TrimSpace(line)
+					} else {
+						confFileContent = confFileContent + "\n" + strings.TrimSpace(line)
+					}
+				}
+			}
+		}
+
+		// Write to file
+		err = os.MkdirAll(filepath.Dir(filepath.Join(d.Directory, confFile)), 0755)
+		if err != nil {
+			errString := fmt.Sprintf("Could not create path: %v", err)
+			reqLogger.Info(errString)
+			return
+		}
+		err = ioutil.WriteFile(filepath.Join(d.Directory, confFile), []byte(confFileContent), 0644)
+		if err != nil {
+			errString := fmt.Sprintf("Could not write file %v", err)
+			reqLogger.Info(errString)
+			return
+		}
+		filesToCommit = append(filesToCommit, confFile)
+	}
+
+	// Commit and push to repo
+	commitMsg := fmt.Sprintf("automatic update via terraform-operator\nupdates to:\n%s", strings.Join(filesToCommit, "\n"))
+	err = d.Client.Commit(filesToCommit, commitMsg)
+	if err != nil {
+		errString := fmt.Sprintf("Could not commit to repo %v", err)
+		reqLogger.V(1).Info(errString)
+		return
+	}
+	err = d.Client.Push("refs/heads/master")
+	if err != nil {
+		errString := fmt.Sprintf("Could not push to repo %v", err)
+		reqLogger.V(1).Info(errString)
+		return
+	}
+
 }

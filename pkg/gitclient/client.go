@@ -6,7 +6,10 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"sync"
 	"time"
+
+	"github.com/go-logr/logr"
 
 	"github.com/isaaguilar/terraform-operator/pkg/utils"
 
@@ -69,8 +72,9 @@ func (g *GitRepo) checkout(commit string) error {
 	return nil
 }
 
-func (g *GitRepo) downloadGitRepo(url, repoDir string) error {
-
+func (g *GitRepo) downloadGitRepo(c chan error, wg *sync.WaitGroup, url, repoDir string) {
+	defer wg.Done()
+	defer close(c)
 	gitConfigs := git.CloneOptions{
 		Auth:              g.auth,
 		URL:               url,
@@ -81,12 +85,14 @@ func (g *GitRepo) downloadGitRepo(url, repoDir string) error {
 
 	err := gitConfigs.Validate()
 	if err != nil {
-		return fmt.Errorf("Git config not valid: %v", err)
+		c <- fmt.Errorf("Git config not valid: %v", err)
+		return
 	}
 
 	r, err := git.PlainClone(repoDir, false, &gitConfigs)
 	if err != nil {
-		return fmt.Errorf("Could not checkout repo: %v", err)
+		c <- fmt.Errorf("Could not checkout repo: %v", err)
+		return
 	}
 
 	// Checkout the git-refs used for checkouts
@@ -95,17 +101,19 @@ func (g *GitRepo) downloadGitRepo(url, repoDir string) error {
 		RefSpecs: []config.RefSpec{"refs/*:refs/*", "HEAD:refs/heads/HEAD"},
 	})
 	if err != nil {
-		return fmt.Errorf("Could not Fetch: %v", err)
+		c <- fmt.Errorf("Could not Fetch: %v", err)
+		return
 	}
 	g.repo = r
 
 	ref, err := r.Head()
 	if err != nil {
-		return fmt.Errorf("Error reading head: %v", err)
+		c <- fmt.Errorf("Error reading head: %v", err)
+		return
 	}
 	g.ref = ref
 
-	return nil
+	return
 }
 
 func passwordAuthMethod(user, password string) gitauth.AuthMethod {
@@ -157,10 +165,19 @@ func GitHTTPDownload(url, repoDir, user, password, ref string) (GitRepo, error) 
 	auth := passwordAuthMethod(user, password)
 	gitRepo.auth = auth
 
-	err := gitRepo.downloadGitRepo(url, repoDir)
-	if err != nil {
-		return gitRepo, fmt.Errorf("Could not download repo: %v", err)
+	c := make(chan error)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go gitRepo.downloadGitRepo(c, &wg, url, repoDir)
+	select {
+	case err := <-c:
+		if err != nil {
+			return gitRepo, fmt.Errorf("Could not download repo: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		return gitRepo, fmt.Errorf("timeout occured fetching %s", url)
 	}
+	wg.Wait()
 
 	if ref != "" {
 		gitRepo.checkout(ref)
@@ -168,21 +185,33 @@ func GitHTTPDownload(url, repoDir, user, password, ref string) (GitRepo, error) 
 	return gitRepo, nil
 }
 
-func GitSSHDownload(url, repoDir, sshKeyFilename, ref string) (GitRepo, error) {
+func GitSSHDownload(url, repoDir, sshKeyFilename, ref string, reqLogger logr.Logger) (GitRepo, error) {
+	reqLogger.Info(fmt.Sprintf("Downloading '%s'", url))
 	gitRepo := GitRepo{}
 	auth, err := sshAuthMethod(sshKeyFilename)
 	if err != nil {
 		return GitRepo{}, err
 	}
+	reqLogger.Info(fmt.Sprintf("Auth file '%s' configured for '%s'", sshKeyFilename, url))
 	gitRepo.auth = auth
 
-	err = gitRepo.downloadGitRepo(url, repoDir)
-	if err != nil {
-		return gitRepo, fmt.Errorf("Could not download repo: %v", err)
+	c := make(chan error)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go gitRepo.downloadGitRepo(c, &wg, url, repoDir)
+	select {
+	case err := <-c:
+		if err != nil {
+			return gitRepo, fmt.Errorf("Could not download repo: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		return gitRepo, fmt.Errorf("timeout occured fetching %s", url)
 	}
+	wg.Wait()
 
 	if ref != "" {
 		gitRepo.checkout(ref)
+		reqLogger.Info(fmt.Sprintf("Checked out '%s' for '%s'", ref, url))
 	}
 	return gitRepo, nil
 }
@@ -237,6 +266,34 @@ func (g *GitRepo) Commit(filenames []string, message string) error {
 		return fmt.Errorf("Could not get Worktree: %v", err)
 	}
 
+	status, err := w.Status()
+	if err != nil {
+		return err
+	}
+
+	if status.IsClean() {
+		return fmt.Errorf("no changes to commit")
+	}
+
+	filesInStatus := []string{}
+	for file := range status {
+		// fmt.Println("file in status", file)
+		filesInStatus = append(filesInStatus, fmt.Sprintf("%s", file))
+	}
+
+	isFileInStatus := false
+	for _, fileToCommit := range filenames {
+		// fmt.Println("file to commit", fileToCommit)
+		if utils.ListContainsStr(filesInStatus, fileToCommit) {
+			isFileInStatus = true
+			break
+		}
+	}
+
+	if !isFileInStatus {
+		return fmt.Errorf("no changes to commit")
+	}
+
 	for _, f := range filenames {
 		fmt.Printf("Adding file %v\n", f)
 		_, err := w.Add(f)
@@ -261,6 +318,7 @@ func (g *GitRepo) Commit(filenames []string, message string) error {
 		return fmt.Errorf("Error reading head: %v", err)
 	}
 	g.ref = ref
+
 	return nil
 }
 
