@@ -37,11 +37,13 @@ docker-build-job:
 	docker build -t ${DOCKER_REPO}/tfops:0.11.14 -f docker/terraform/terraform-0.11.14.Dockerfile docker/terraform/
 	docker build -t ${DOCKER_REPO}/tfops:0.12.21 -f docker/terraform/terraform-0.12.21.Dockerfile docker/terraform/
 	docker build -t ${DOCKER_REPO}/tfops:0.12.23 -f docker/terraform/terraform-0.12.23.Dockerfile docker/terraform/
+	docker build -t ${DOCKER_REPO}/tfops:0.12.26 -f docker/terraform/terraform-0.12.26.Dockerfile docker/terraform/
 
 docker-push-job:
 	docker push ${DOCKER_REPO}/tfops:0.11.14
 	docker push ${DOCKER_REPO}/tfops:0.12.21
 	docker push ${DOCKER_REPO}/tfops:0.12.23
+	docker push ${DOCKER_REPO}/tfops:0.12.26
 
 plugins-build:
 	env GOOS=linux  GOARCH=amd64 go build -i -v -o bin/${PLUGIN_SET_AWS_SESSION_NAME}-linux  -ldflags="-X main.version=v${PLUGIN_SET_AWS_SESSION_VER}" plugins/${PLUGIN_SET_AWS_SESSION}/main.go

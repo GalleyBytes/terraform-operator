@@ -116,7 +116,7 @@ REPO_COUNT=`find /tfops -type f  -not -path /tfops -name repo.tar|wc -l`
 if [ "$STACK_REPO" != "" ];then
     set -x
     MAIN_MODULE_TMP=`mktemp -d`
-    git clone $STACK_REPO $MAIN_MODULE_TMP/stack
+    git clone $STACK_REPO $MAIN_MODULE_TMP/stack || exit $?
     cd $MAIN_MODULE_TMP/stack
     git checkout $STACK_REPO_HASH
     if [ "$STACK_REPO_SUBDIR" != "" ];then
@@ -171,7 +171,7 @@ cat $TMP | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g" > $CLEAN
 # Status Helpers:
 awk '/^Error:/{y=1}y' $CLEAN > ERROR
 
-read -d '' -r -a arr <<< `grep "^Plan:" $CLEAN|tr -dc '0-9,'|tr ',' ' '`
+read -d '' -r -a arr <<< `grep "^Plan:" $CLEAN|tr -dc '0-9,'|tr ',' ' '` #`
 echo -n ${arr[0]} > PLAN
 echo -n ${arr[1]} > CHANGE
 echo -n ${arr[2]} > DESTROY
@@ -185,3 +185,10 @@ kubectl create cm ${INSTANCE_NAME}-status \
 
 
 save_plan
+
+# Run the postrun script
+if stat postrun.sh >/dev/null 2>/dev/null; then
+    # postrun.sh needs exec privileges 
+    chmod +x postrun.sh
+    ./postrun.sh
+fi

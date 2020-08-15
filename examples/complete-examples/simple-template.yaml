@@ -34,7 +34,7 @@ spec:
     applyOnUpdate: true
     applyOnDelete: true
     ignoreDelete: true
-    cloudProfile: arn:aws:iam::111222333444:role/irsa-stratus-eks-dev-terraform-operator
+    cloudProfile: aws-session-credentials
     sources:
     - address: git@github.com:iaguilar/scratch.git//create-file/path/to/template/files/foo.tpl.txt
       extras:
@@ -49,3 +49,6 @@ spec:
     prerunScript: |-
       #!/usr/bin/env bash
       echo 'I want to replace the template....muahahaha! ${REPLACE_ME}... :)' > ${TF_VAR_template_file}
+    postrunScript: |-
+      #!/usr/bin/env bash
+      echo "Terraform is done!" 

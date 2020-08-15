@@ -135,6 +135,16 @@ type TerraformConfig struct {
 	// "prerun.sh". This means the user can also pass in a prerun.sh file via
 	// config "Sources".
 	PrerunScript string `json:"prerunScript,omitempty"`
+
+	// PostrunScript lets the user define a script that will run after
+	// terraform commands are executed on the terraform-execution pod. The pod
+	// will have already set up cloudProfile (eg cloud credentials) so the
+	// script can make use of it.
+	//
+	// Setting this field will create a key in the tfvars configmap called
+	// "postrun.sh". This means the user can alternatively pass in a
+	// posterun.sh file via config "Sources".
+	PostrunScript string `json:"postrunScript,omitempty"`
 }
 
 // ExportRepo is used to allow the tfvars passed into the job to also be

@@ -47,7 +47,8 @@ require (
 	github.com/Azure/go-autorest v13.3.3+incompatible // indirect
 	github.com/Azure/go-autorest/autorest/adal v0.8.2 // indirect
 	github.com/cloudfoundry/go-socks5 v0.0.0-20180221174514-54f73bdb8a8e // indirect
-	github.com/elliotchance/sshtunnel v1.0.0
+	github.com/cloudfoundry/socks5-proxy v0.2.0 // indirect
+	github.com/elliotchance/sshtunnel v1.1.1
 	github.com/go-logr/logr v0.1.0
 	github.com/go-openapi/spec v0.19.6
 	github.com/hashicorp/go-getter v1.4.1
@@ -56,7 +57,7 @@ require (
 	github.com/operator-framework/operator-sdk v0.0.0-00010101000000-000000000000
 	github.com/spf13/pflag v1.0.5
 	github.com/whilp/git-urls v0.0.0-20191001220047-6db9661140c0
-	golang.org/x/crypto v0.0.0-20200429183012-4b2356b1ed79
+	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9
 	golang.org/x/net v0.0.0-20200202094626-16171245cfb2
 	gopkg.in/src-d/go-git.v4 v4.13.1
 	k8s.io/api v0.0.0

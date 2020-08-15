@@ -105,6 +105,15 @@ spec:
                   description: IgnoreDelete will bypass the finalization process and
                     remove the tf resource without running any delete jobs.
                   type: boolean
+                postrunScript:
+                  description: "PostrunScript lets the user define a script that will
+                    run after terraform commands are executed on the terraform-execution
+                    pod. The pod will have already set up cloudProfile (eg cloud credentials)
+                    so the script can make use of it. \n Setting this field will create
+                    a key in the tfvars configmap called \"postrun.sh\". This means
+                    the user can alternatively pass in a posterun.sh file via config
+                    \"Sources\"."
+                  type: string
                 prerunScript:
                   description: "PrerunScript lets the user define a script that will
                     run before terraform commands are executed on the terraform-execution

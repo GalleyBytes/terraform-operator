@@ -37,6 +37,16 @@ func (g *GitRepo) HashString() (string, error) {
 
 }
 
+func (g GitRepo) BranchName() (string, error) {
+	if g.ref == nil {
+		return "", fmt.Errorf("The GitRepo.ref has not been set")
+	}
+	if !g.ref.Name().IsBranch() {
+		return "", fmt.Errorf("HEAD is not pointing to a branch")
+	}
+	return g.ref.Name().String(), nil
+}
+
 func (g *GitRepo) checkout(commit string) error {
 	w, err := g.repo.Worktree()
 	if err != nil {

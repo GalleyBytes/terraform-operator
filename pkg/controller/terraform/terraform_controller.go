@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -71,6 +72,7 @@ type GitRepoAccessOptions struct {
 	Extras         []string
 	SCMAuthMethods []tfv1alpha1.SCMAuthMethod
 	SSHProxy       tfv1alpha1.ProxyOpts
+	tunnel         *sshtunnel.SSHTunnel
 	ParsedAddress
 }
 
@@ -137,7 +139,7 @@ func (r *RunOptions) updateEnvVars(k, v string) {
 
 const terraformFinalizer = "finalizer.tf.isaaguilar.com"
 
-var log = logf.Log.WithName("controller_terraform")
+var _logf = logf.Log.WithName("controller_terraform")
 
 /**
 * USER ACTION REQUIRED: This is a scaffold file intended for the user to modify with their own Controller
@@ -228,7 +230,7 @@ type ReconcileTerraform struct {
 // The Controller will requeue the Request to be processed again if the returned error is non-nil or
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
 func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Result, error) {
-	reqLogger := log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
+	reqLogger := _logf.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
 	reqLogger.Info("Reconciling Terraform")
 
 	// I set up a client here based on the only way I knew how to set up a client before
@@ -347,6 +349,7 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		// }
 		address := instance.Spec.Stack.Source.Address
 		stackRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
+
 		if err != nil {
 			r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err).Error())
 			return reconcile.Result{}, fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
@@ -386,6 +389,7 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		}
 
 		runOpts.mainModule = stackRepoAccessOptions.hash
+
 		// reqLogger.Info(fmt.Sprintf("All moduleConfigMaps: %v", runOpts.moduleConfigMaps))
 
 		//
@@ -404,6 +408,7 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 			extras := s.Extras
 			// Loop thru all the sources in spec.config
 			configRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, extras)
+
 			if err != nil {
 				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err).Error())
 				return reconcile.Result{}, fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
@@ -413,6 +418,9 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in download: %v", err).Error())
 				return reconcile.Result{}, fmt.Errorf("Error in download: %v", err)
 			}
+			defer reqLogger.V(1).Info("configRepoAccessOptions Closed tunnel")
+			defer configRepoAccessOptions.TunnelClose()
+			defer reqLogger.V(1).Info("configRepoAccessOptions Closing tunnel")
 			// reqLogger.Info(fmt.Sprintf("Config was downloaded and updated GitRepoAccessOptions: %+v", configRepoAccessOptions))
 
 			tfvarSource, err := configRepoAccessOptions.tfvarFiles()
@@ -443,6 +451,10 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 			data["prerun.sh"] = instance.Spec.Config.PrerunScript
 		}
 
+		if instance.Spec.Config.PostrunScript != "" {
+			data["postrun.sh"] = instance.Spec.Config.PostrunScript
+		}
+
 		tfvarsConfigMap := instance.Name + "-tfvars"
 		err = job.createConfigMap(tfvarsConfigMap, instance.Namespace, make(map[string][]byte), data)
 		if err != nil {
@@ -466,8 +478,8 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error getting git repo access options: %v", err).Error())
 				return reconcile.Result{}, fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 			}
-
 			// TODO decide what to do on errors
+			// Closing the tunnel from within this function
 			go exportRepoAccessOptions.commitTfvars(job, tfvars, e.TFVarsFile, e.ConfFile, instance.Namespace, instance.Spec.Config.CustomBackend, runOpts, reqLogger)
 		}
 
@@ -557,6 +569,12 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 	// TODO manually triggers apply/destroy
 
 	return reconcile.Result{}, nil
+}
+
+func (d GitRepoAccessOptions) TunnelClose() {
+	if d.tunnel != nil {
+		d.tunnel.Close()
+	}
 }
 
 func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, c k8sClient) (map[string][]byte, error) {
@@ -1538,7 +1556,7 @@ func unique(s []string) []string {
 }
 
 func tarit(filename, source, target string) error {
-	reqLogger := log.WithValues("function", "tarit", "filename", filename)
+	reqLogger := _logf.WithValues("function", "tarit", "filename", filename)
 
 	target = filepath.Join(target, fmt.Sprintf("%s.tar", filename))
 	tarfile, err := os.Create(target)
@@ -1635,7 +1653,7 @@ func (d *GitRepoAccessOptions) download(job k8sClient, namespace string) error {
 	// This function only supports git modules. There's no explicit check
 	// for this yet.
 	// TODO document available options for sources
-	reqLogger := log.WithValues("Download", d.Address, "Namespace", namespace, "Function", "download")
+	reqLogger := _logf.WithValues("Download", d.Address, "Namespace", namespace, "Function", "download")
 	reqLogger.Info("Starting download function")
 	err := d.getParsedAddress()
 	if err != nil {
@@ -1687,10 +1705,15 @@ func (d *GitRepoAccessOptions) download(job k8sClient, namespace string) error {
 			gitTransportClient.InstallProtocol("http", githttp.NewClient(httpClient))
 			gitTransportClient.InstallProtocol("https", githttp.NewClient(httpClient))
 		} else if d.protocol == "ssh" {
-			port, err := d.setupSSHProxy(job, namespace)
+			port, tunnel, err := d.setupSSHProxy(job, namespace)
 			if err != nil {
 				return err
 			}
+
+			if os.Getenv("DEBUG_SSHTUNNEL") != "" {
+				tunnel.Log = log.New(os.Stdout, "", log.Ldate|log.Lmicroseconds)
+			}
+			d.tunnel = tunnel
 
 			if strings.Index(uri, "/") != 0 {
 				uri = "/" + uri
@@ -1708,7 +1731,6 @@ func (d *GitRepoAccessOptions) download(job k8sClient, namespace string) error {
 			return err
 		}
 		defer os.Remove(filename)
-
 		gitRepo, err = gitclient.GitSSHDownload(repo, d.Directory, filename, d.hash, reqLogger)
 		if err != nil {
 			return err
@@ -1737,11 +1759,12 @@ func (d *GitRepoAccessOptions) download(job k8sClient, namespace string) error {
 	return nil
 }
 
-func (d *GitRepoAccessOptions) setupSSHProxy(job k8sClient, namespace string) (string, error) {
+func (d *GitRepoAccessOptions) setupSSHProxy(job k8sClient, namespace string) (string, *sshtunnel.SSHTunnel, error) {
 	var port string
+	var tunnel *sshtunnel.SSHTunnel
 	proxyAuthMethod, err := d.getProxyAuthMethod(job, namespace)
 	if err != nil {
-		return port, fmt.Errorf("Error getting proxyAuthMethod: %v", err)
+		return port, tunnel, fmt.Errorf("Error getting proxyAuthMethod: %v", err)
 	}
 	proxyServerWithUser := fmt.Sprintf("%s@%s", d.SSHProxy.User, d.SSHProxy.Host)
 	destination := ""
@@ -1762,7 +1785,7 @@ func (d *GitRepoAccessOptions) setupSSHProxy(job k8sClient, namespace string) (s
 
 	// // The destination host and port of the actual server.
 	// destination,
-	tunnel := sshtunnel.NewSSHTunnel(proxyServerWithUser, proxyAuthMethod, destination)
+	tunnel = sshtunnel.NewSSHTunnel(proxyServerWithUser, proxyAuthMethod, destination, "0")
 
 	// NewSSHTunnel will bind to a random port so that you can have
 	// multiple SSH tunnels available. The port is available through:
@@ -1781,10 +1804,9 @@ func (d *GitRepoAccessOptions) setupSSHProxy(job k8sClient, namespace string) (s
 	// before you can start sending connections.
 	go tunnel.Start()
 	time.Sleep(1000 * time.Millisecond)
-
 	port = strconv.Itoa(tunnel.Local.Port)
 
-	return port, nil
+	return port, tunnel, nil
 }
 
 func (d *GitRepoAccessOptions) getParsedAddress() error {
@@ -1934,6 +1956,9 @@ func (d GitRepoAccessOptions) commitTfvars(job k8sClient, tfvars, tfvarsFile, co
 		reqLogger.Info(errString)
 		return
 	}
+	defer reqLogger.V(1).Info("exportRepoAccessOptions Closed connections")
+	defer d.TunnelClose()
+	defer reqLogger.V(1).Info("exportRepoAccessOptions Closing connections")
 	// Create a file in the external repo
 	err = d.Client.CheckoutBranch("")
 	if err != nil {
