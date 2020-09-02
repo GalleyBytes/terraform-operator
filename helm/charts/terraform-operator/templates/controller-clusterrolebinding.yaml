@@ -1,0 +1,17 @@
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: terraform-operator
+  labels:
+    app: {{ .Chart.Name }}
+    chart: {{ template "_chart.label" . }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+subjects:
+- kind: ServiceAccount
+  name: terraform-operator
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: terraform-operator
+  apiGroup: rbac.authorization.k8s.io
