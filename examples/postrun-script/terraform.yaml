@@ -9,7 +9,9 @@ spec:
       address: <tf-module-git-repo>
   config:
     ignoreDelete: true
-    cloudProfile: aws-credentials-k8s-secret
+    credentials:
+    - secretNameRef:
+       name: aws-session-credentials    
 
     # ----- Run a postrun script after terraform runs: -------
 

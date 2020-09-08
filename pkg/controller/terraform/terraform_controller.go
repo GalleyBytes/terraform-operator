@@ -17,13 +17,13 @@ import (
 	"strings"
 	"time"
 
-	tfv1alpha1 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1"
-	"github.com/isaaguilar/terraform-operator/pkg/utils"
-	"github.com/isaaguilar/terraform-operator/pkg/gitclient"
 	"github.com/elliotchance/sshtunnel"
 	"github.com/go-logr/logr"
 	getter "github.com/hashicorp/go-getter"
 	goSocks5 "github.com/isaaguilar/socks5-proxy"
+	tfv1alpha1 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1"
+	"github.com/isaaguilar/terraform-operator/pkg/gitclient"
+	"github.com/isaaguilar/terraform-operator/pkg/utils"
 	giturl "github.com/whilp/git-urls"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/net/proxy"
@@ -83,7 +83,8 @@ type RunOptions struct {
 	name             string
 	tfvarsConfigMap  string
 	envVars          map[string]string
-	cloudProfile     string
+	cloudCredentials string
+	credentials      []tfv1alpha1.Credentials
 	stack            ParsedAddress
 	token            string
 	tokenSecret      *tfv1alpha1.TokenSecretRef
@@ -267,6 +268,9 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		return reconcile.Result{}, err
 	}
 
+	// test the credential crd
+	reqLogger.Info(fmt.Sprintf("And the credentials to use are... %+v", instance.Spec.Config.Credentails))
+
 	// Check if the job is marked to be deleted, which is
 	// indicated by the deletion timestamp being set.
 	isMarkedToBeDeleted := instance.GetDeletionTimestamp() != nil
@@ -400,7 +404,8 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		reqLogger.Info("Reading spec.config ")
 		// TODO Validate spec.config exists
 		// TODO validate spec.config.sources exists && len > 0
-		runOpts.cloudProfile = instance.Spec.Config.CloudProfile
+		runOpts.cloudCredentials = instance.Spec.Config.CloudCredentials
+		runOpts.credentials = instance.Spec.Config.Credentails
 		tfvars := ""
 		otherConfigFiles := make(map[string]string)
 		for _, s := range instance.Spec.Config.Sources {
@@ -707,7 +712,8 @@ func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *
 	}
 
 	runOpts.mainModule = stackRepoAccessOptions.hash
-	runOpts.cloudProfile = instance.Spec.Config.CloudProfile
+	runOpts.cloudCredentials = instance.Spec.Config.CloudCredentials
+	runOpts.credentials = instance.Spec.Config.Credentails
 	tfvars := ""
 	otherConfigFiles := make(map[string]string)
 	for _, s := range instance.Spec.Config.Sources {
@@ -787,9 +793,17 @@ func (r *ReconcileTerraform) addFinalizer(reqLogger logr.Logger, instance *tfv1a
 func (r RunOptions) generateServiceAccount() *corev1.ServiceAccount {
 	annotations := make(map[string]string)
 
-	if strings.Contains(r.cloudProfile, "irsa") {
-		annotations["eks.amazonaws.com/role-arn"] = r.cloudProfile
+	// if strings.Contains(r.cloudCredentials, "irsa") {
+	// 	annotations["eks.amazonaws.com/role-arn"] = r.cloudCredentials
+	// }
+	for _, c := range r.credentials {
+		if c.AWSCredentials.IRSA != "" {
+			annotations["eks.amazonaws.com/role-arn"] = c.AWSCredentials.IRSA
+		}
 	}
+	// if r.credentials.AWSCredentials.IRSA != "" {
+	// 	annotations["eks.amazonaws.com/role-arn"] = r.credentials.AWSCredentials.IRSA
+	// }
 
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1026,20 +1040,28 @@ func (r RunOptions) generateJob() *batchv1.Job {
 
 	annotations := make(map[string]string)
 	envFrom := []corev1.EnvFromSource{}
-	if strings.Contains(r.cloudProfile, "kiam") {
-		annotations["iam.amazonaws.com/role"] = r.cloudProfile
-	} else if strings.Contains(r.cloudProfile, "irsa") {
-		// Annotations added to service-account
-	} else {
-		envFrom = append(envFrom, []corev1.EnvFromSource{
-			{
-				SecretRef: &corev1.SecretEnvSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: r.cloudProfile,
+
+	// if strings.Contains(r.cloudCredentials, "kiam") {
+	// 	annotations["iam.amazonaws.com/role"] = r.cloudCredentials
+	for _, c := range r.credentials {
+		if c.AWSCredentials.KIAM != "" {
+			annotations["iam.amazonaws.com/role"] = c.AWSCredentials.KIAM
+		}
+	}
+
+	for _, c := range r.credentials {
+		if (tfv1alpha1.SecretNameRef{}) != c.SecretNameRef {
+			envFrom = append(envFrom, []corev1.EnvFromSource{
+				{
+					SecretRef: &corev1.SecretEnvSource{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: c.SecretNameRef.Name,
+						},
 					},
 				},
-			},
-		}...)
+			}...)
+		}
+
 	}
 
 	// Schedule a job that will execute the terraform plan

@@ -12,7 +12,8 @@ The controller is responsible for fetching tfvars or other files, and then creat
 ## Docs
 
 - [terraform-state](docs/terraform-state.md)
-- [credentials](docs/credentials.md) (eg cloud credentials and ssh keys)
+- [credentials](docs/provider-credentials.md) (eg cloud credentials)
+- [other-credentials](dos/other-credentials.md) (eg ssh key)
 
 ## Install the Operator and CRDs
 
@@ -34,13 +35,7 @@ Check out the [examples](examples) directory to see the different options tf-ope
 Apply your first terraform resource by running a _hello_world_ example:
 
 ```bash
-$ printf 'apiVersion: v1
-kind: Secret
-metadata:
-  name: blank
-type: Opaque
----
-apiVersion: tf.isaaguilar.com/v1alpha1
+$ printf 'apiVersion: tf.isaaguilar.com/v1alpha1
 kind: Terraform
 metadata:
   name: tf-operator-test
@@ -59,14 +54,19 @@ spec:
     applyOnCreate: true
     applyOnUpdate: true
     ignoreDelete: true
-    cloudProfile: blank # For now this must exist
 '|kubectl apply -f-
 ```
 
 Check the kubectl pod logs:
 
 ```
-$ k logs -f job/tf-operator-test
+$ kubectl logs -f job/tf-operator-test
+```
+
+Delete the resource:
+
+```bash
+$ kubectl delete terraform tf-operator-test
 ```
 
 > More examples coming soon!

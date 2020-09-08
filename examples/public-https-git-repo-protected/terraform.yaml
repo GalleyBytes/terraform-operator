@@ -20,7 +20,9 @@ spec:
       address: https://github.com/isaaguilar/private-aws-tf-modules.git//s3-bucket
   config:
     ignoreDelete: true
-    cloudProfile: aws-credentials-k8s-secret
+    credentials:
+    - secretNameRef:
+       name: aws-session-credentials    
     env:
     - name: TF_VAR_name
       value: value      # fulfills the terraform module's "${var.name}"

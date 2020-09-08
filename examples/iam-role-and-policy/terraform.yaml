@@ -38,6 +38,8 @@ spec:
     reconcile:
       enable: false
       syncPeriod: 60 # int in minutes
-    cloudProfile: admin-cloud-credentials
+    credentials:
+    - secretNameRef:
+       name: aws-session-credentials    
     sources:
     - address: git@git.example.com:cloudops/tfvars.git//irsa-example

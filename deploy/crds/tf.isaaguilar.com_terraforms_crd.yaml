@@ -55,14 +55,74 @@ spec:
                     will resort to on demand apply. Defaults to false.
                   type: boolean
                 cloudProfile:
-                  description: CloudProfile defines the selector to cloud access keys
-                    or roles to attach to the terraform job executor. If it begines
+                  description: CloudCredentials defines the selector to cloud access
+                    keys or roles to attach to the terraform job executor. If it begines
                     with "kiam-", the controller will assume this is a role and add
                     the kiam annotation. Other clouds may have different role based
                     mechanisms so other prefixes would need to be hard coded in the
                     controller's if statements later. The default behaviour is to
-                    load the CloudProfile from a secret as environment vars.
+                    load the CloudCredentials from a secret as environment vars.
                   type: string
+                credentials:
+                  description: Credentials is an array of credentials generally used
+                    for Terraform providers
+                  items:
+                    description: Credentials are used for adding credentials for terraform
+                      providers. For example, in AWS, the AWS Terraform Provider uses
+                      the default credential chain of the AWS SDK, one of which are
+                      environment variables (eg AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)
+                    properties:
+                      aws:
+                        description: AWSCredentials contains the different methods
+                          to load AWS credentials for the Terraform AWS Provider.
+                          If using AWS_ACCESS_KEY_ID and/or environment variables
+                          for credentials, use fromEnvs.
+                        properties:
+                          irsa:
+                            description: "IRSA requires the irsa role-arn as the string
+                              input. This will create a serice account named tf-<resource-name>.
+                              In order for the pod to be able to use this role, the
+                              \"Trusted Entity\" of the IAM role must allow this serice
+                              account name and namespace. \n Using a TrustEntity policy
+                              that includes \"StringEquals\" setting it as the serivce
+                              account name is the most secure way to use IRSA. \n
+                              However, for a reusable policy consider \"StringLike\"
+                              with a few wildcards to make the irsa role usable by
+                              pods created by terraform-operator. The example below
+                              is pretty liberal, but will work for any pod created
+                              by the terraform-operator. \n {   \"Version\": \"2012-10-17\",
+                              \  \"Statement\": [     {       \"Effect\": \"Allow\",
+                              \      \"Principal\": {         \"Federated\": \"${OIDC_ARN}\"
+                              \      },       \"Action\": \"sts:AssumeRoleWithWebIdentity\",
+                              \      \"Condition\": {         \"StringLike\": {           \"${OIDC_URL}:sub\":
+                              \"system:serviceaccount:*:tf-*\"         }       }     }
+                              \  ] }"
+                            type: string
+                          kiam:
+                            description: KIAM requires the kiam role-name as the string
+                              input. This will add the correct annotation to the terraform
+                              execution pod
+                            type: string
+                        type: object
+                      secretNameRef:
+                        description: FromEnvs will load environment variables into
+                          the terraform execution pod from kubernetes secrets
+                        properties:
+                          key:
+                            description: Key of the secret
+                            type: string
+                          name:
+                            description: Name of the secret
+                            type: string
+                          namespace:
+                            description: Namespace of the secret; Defaults to namespace
+                              of the tf resource
+                            type: string
+                        required:
+                        - name
+                        type: object
+                    type: object
+                  type: array
                 customBackend:
                   description: CustomBackend will allow the user to configure the
                     backend of their choice. If this is omitted, the default consul

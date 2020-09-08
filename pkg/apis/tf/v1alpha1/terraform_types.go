@@ -88,14 +88,18 @@ type TerraformConfig struct {
 	Sources []*SrcOpts `json:"sources,omitempty"`
 	Env     []EnvVar   `json:"env,omitempty"`
 
-	// CloudProfile defines the selector to cloud access keys or roles to
+	// CloudCredentials defines the selector to cloud access keys or roles to
 	// attach to the terraform job executor. If it begines with "kiam-", the
 	// controller will assume this is a role and add the kiam annotation.
 	// Other clouds may have different role based mechanisms so other prefixes
 	// would need to be hard coded in the controller's if statements later.
-	// The default behaviour is to load the CloudProfile from a secret
+	// The default behaviour is to load the CloudCredentials from a secret
 	// as environment vars.
-	CloudProfile string `json:"cloudProfile,omitempty"`
+	CloudCredentials string `json:"cloudProfile,omitempty"`
+
+	// Credentials is an array of credentials generally used for Terraform
+	// providers
+	Credentails []Credentials `json:"credentials,omitempty"`
 
 	// ApplyOnCreate is used to apply any planned changes when the resource is
 	// first created. Omitting this or setting it to false will resort to
@@ -231,6 +235,72 @@ type TokenSecretRef struct {
 	// Namespace of the secret; Default is the namespace of the terraform resource
 	Namespace string `json:"namespace,omitempty"`
 	// Key in the secret ref. Default to `token`
+	Key string `json:"key,omitempty"`
+}
+
+// Credentials are used for adding credentials for terraform providers.
+// For example, in AWS, the AWS Terraform Provider uses the default credential chain
+// of the AWS SDK, one of which are environment variables (eg AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)
+type Credentials struct {
+	// FromEnvs will load environment variables into the terraform execution pod
+	// from kubernetes secrets
+	SecretNameRef SecretNameRef `json:"secretNameRef,omitempty"`
+	// AWSCredentials contains the different methods to load AWS credentials
+	// for the Terraform AWS Provider. If using AWS_ACCESS_KEY_ID and/or environment
+	// variables for credentials, use fromEnvs.
+	AWSCredentials AWSCredentials `json:"aws,omitempty"`
+
+	// TODO Add other commonly used cloud providers to this list
+}
+
+// AWSCredentials provides a few different k8s-specific methods of adding
+// crednetials to pods. This includes KIAM and IRSA.
+//
+// To use environment variables, use a secretNameRef instead.
+type AWSCredentials struct {
+	// IRSA requires the irsa role-arn as the string input. This will create a
+	// serice account named tf-<resource-name>. In order for the pod to be able to
+	// use this role, the "Trusted Entity" of the IAM role must allow this
+	// serice account name and namespace.
+	//
+	// Using a TrustEntity policy that includes "StringEquals" setting it as the serivce account name
+	// is the most secure way to use IRSA.
+	//
+	// However, for a reusable policy consider "StringLike" with a few wildcards to make
+	// the irsa role usable by pods created by terraform-operator. The example below is
+	// pretty liberal, but will work for any pod created by the terraform-operator.
+	//
+	// {
+	//   "Version": "2012-10-17",
+	//   "Statement": [
+	//     {
+	//       "Effect": "Allow",
+	//       "Principal": {
+	//         "Federated": "${OIDC_ARN}"
+	//       },
+	//       "Action": "sts:AssumeRoleWithWebIdentity",
+	//       "Condition": {
+	//         "StringLike": {
+	//           "${OIDC_URL}:sub": "system:serviceaccount:*:tf-*"
+	//         }
+	//       }
+	//     }
+	//   ]
+	// }
+	IRSA string `json:"irsa,omitempty"`
+
+	// KIAM requires the kiam role-name as the string input. This will add the
+	// correct annotation to the terraform execution pod
+	KIAM string `json:"kiam,omitempty"`
+}
+
+// SecetNameRef is the name of the kubernetes secret to use
+type SecretNameRef struct {
+	// Name of the secret
+	Name string `json:"name"`
+	// Namespace of the secret; Defaults to namespace of the tf resource
+	Namespace string `json:"namespace,omitempty"`
+	// Key of the secret
 	Key string `json:"key,omitempty"`
 }
 

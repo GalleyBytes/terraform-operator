@@ -34,7 +34,9 @@ spec:
     applyOnUpdate: true
     applyOnDelete: true
     ignoreDelete: true
-    cloudProfile: aws-session-credentials
+    credentials:
+    - secretNameRef:
+       name: aws-session-credentials    
     sources:
     - address: git@github.com:iaguilar/scratch.git//create-file/path/to/template/files/foo.tpl.txt
       extras:

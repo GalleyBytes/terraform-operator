@@ -21,11 +21,12 @@ k8s-gen:
 	operator-sdk generate crds
 
 openapi-gen:
-	./bin/openapi-gen --logtostderr=true -o "" -i ./pkg/apis/tf/v1alpha1 -O zz_generated.openapi -p ./pkg/apis/tf/v1alpha1 -h ./hack/boilerplate.go.txt -r "-"
-	# If you're missing the openapi bin, download it using the following script:
+	# If you're missing the openapi bin (eg '[openapi-gen] Error 127'), download it using the following script:
 	# wget -O ./bin/kube-openapi.zip https://github.com/kubernetes/kube-openapi/archive/master.zip
 	# unzip ./bin/kubeopen-api.zip  ./bin
 	# go build -o ./bin/openapi-gen ./bin/kube-openapi-master/cmd/openapi-gen/openapi-gen.go
+	./bin/openapi-gen --logtostderr=true -o "" -i ./pkg/apis/tf/v1alpha1 -O zz_generated.openapi -p ./pkg/apis/tf/v1alpha1 -h ./hack/boilerplate.go.txt -r "-"
+	
 	
 docker-build:
 	operator-sdk build ${DOCKER_REPO}/${IMAGE_NAME}:${VERSION}
