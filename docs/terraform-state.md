@@ -56,5 +56,5 @@ spec:
       }
 ```
 
-In this example, the tfstate will be pushed to s3. To handle this properly, the user will also need to provide AWS credentials to the terraform-execution pod. See the [credentials.md](credentials.md) for details.
+In this example, the tfstate will be pushed to s3. To handle this properly, the user will also need to provide AWS credentials to the terraform-execution pod. See the [credentials.md](provider-credentials.md) for details.
 

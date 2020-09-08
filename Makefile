@@ -9,11 +9,6 @@ VERSION := v0.0.0
 endif
 OS := $(shell uname -s | tr A-Z a-z)
 
-PLUGIN_SET_AWS_SESSION = aws-session
-PLUGIN_SET_AWS_SESSION_VER = 0.1.0
-PLUGIN_SET_AWS_SESSION_NAME = kubectl-${PLUGIN_SET_AWS_SESSION}
-PLUGIN_SET_AWS_SESSION_NAME_VER = ${PLUGIN_SET_AWS_SESSION_NAME}-v${PLUGIN_SET_AWS_SESSION_VER}
-
 all: build
 
 k8s-gen:
@@ -23,7 +18,7 @@ k8s-gen:
 openapi-gen:
 	# If you're missing the openapi bin (eg '[openapi-gen] Error 127'), download it using the following script:
 	# wget -O ./bin/kube-openapi.zip https://github.com/kubernetes/kube-openapi/archive/master.zip
-	# unzip ./bin/kubeopen-api.zip  ./bin
+	# unzip ./bin/kube-openapi.zip  ./bin
 	# go build -o ./bin/openapi-gen ./bin/kube-openapi-master/cmd/openapi-gen/openapi-gen.go
 	./bin/openapi-gen --logtostderr=true -o "" -i ./pkg/apis/tf/v1alpha1 -O zz_generated.openapi -p ./pkg/apis/tf/v1alpha1 -h ./hack/boilerplate.go.txt -r "-"
 	
@@ -45,16 +40,6 @@ docker-push-job:
 	docker push ${DOCKER_REPO}/tfops:0.12.21
 	docker push ${DOCKER_REPO}/tfops:0.12.23
 	docker push ${DOCKER_REPO}/tfops:0.12.26
-
-plugins-build:
-	env GOOS=linux  GOARCH=amd64 go build -i -v -o bin/${PLUGIN_SET_AWS_SESSION_NAME}-linux  -ldflags="-X main.version=v${PLUGIN_SET_AWS_SESSION_VER}" plugins/${PLUGIN_SET_AWS_SESSION}/main.go
-	env GOOS=darwin GOARCH=amd64 go build -i -v -o bin/${PLUGIN_SET_AWS_SESSION_NAME}-darwin -ldflags="-X main.version=v${PLUGIN_SET_AWS_SESSION_VER}" plugins/${PLUGIN_SET_AWS_SESSION}/main.go
-	cd bin && mv ${PLUGIN_SET_AWS_SESSION_NAME}-linux  ${PLUGIN_SET_AWS_SESSION_NAME} && tar czf ${PLUGIN_SET_AWS_SESSION_NAME_VER}-linux.tgz  ${PLUGIN_SET_AWS_SESSION_NAME}
-	cd bin && mv ${PLUGIN_SET_AWS_SESSION_NAME}-darwin ${PLUGIN_SET_AWS_SESSION_NAME} && tar czf ${PLUGIN_SET_AWS_SESSION_NAME_VER}-darwin.tgz ${PLUGIN_SET_AWS_SESSION_NAME}
-
-plugins-push:
-	curl -H "X-JFrog-Art-Api:${ARTIFACTORY_TOKEN}" -T bin/${PLUGIN_SET_AWS_SESSION_NAME_VER}-linux.tgz  "https://artifactory.isaaguilar.com/artifactory/bins/${PLUGIN_SET_AWS_SESSION_NAME}/${PLUGIN_SET_AWS_SESSION_NAME_VER}-linux.tgz"
-	curl -H "X-JFrog-Art-Api:${ARTIFACTORY_TOKEN}" -T bin/${PLUGIN_SET_AWS_SESSION_NAME_VER}-darwin.tgz "https://artifactory.isaaguilar.com/artifactory/bins/${PLUGIN_SET_AWS_SESSION_NAME}/${PLUGIN_SET_AWS_SESSION_NAME_VER}-darwin.tgz"
 
 deploy:
 	kubectl delete pod --selector name=${DEPLOYMENT} --namespace ${NAMESPACE} && sleep 4
