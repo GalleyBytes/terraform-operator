@@ -17,7 +17,7 @@ This project is not:
 
 ## Docs
 
-- [Installing Terraform-operator](#install-the-operator-and-crds)
+- [Installing Terraform-operator](#install-the-controller-and-crds)
 - [Hello Terraform Operator](#hello-terraform-operator)
 - [Terraform-state](docs/terraform-state.md)
 - [Terraform-provider credentials](docs/provider-credentials.md) (ie Cloud Credentials)
@@ -32,13 +32,29 @@ Below is a diagram of the basic idea of the project
 
 The controller is responsible for fetching tfvars or other files, and then creates a Kubernetes Job to perform the actual terraform execution. By default, the Terraform-operator will save state in a Consul on the same cluster. Even though Consul is the default, other state backends can be configured.
 
-## Install the Operator and CRDs
+## Install the Controller and CRDs
 
-To get started, install the files in `deploy`
+#### Install using Helm
 
+```console
+$ helm repo add isaaguilar https://isaaguilar.github.io/helm-charts
+$ helm install isaaguilar/terraform-operator --namespace tf-system
 ```
-kubectl apply -f deploy/crds/tf.isaaguilar.com_terraforms_crd.yaml
-kubectl apply -f deploy --namespace tf-system
+
+> See [terraform-operator's helm chart](https://github.com/isaaguilar/helm-charts/tree/master/charts/terraform-operator) for options
+
+#### Install using kubectl
+
+First install the CRDs
+
+```console
+$ kubectl apply -f deploy/crds/tf.isaaguilar.com_terraforms_crd.yaml
+```
+
+Then install the controller
+
+```console
+$ kubectl apply -f deploy --namespace tf-system
 ```
 
 Once the operator is installed, terraform resources are ready to be deployed.
