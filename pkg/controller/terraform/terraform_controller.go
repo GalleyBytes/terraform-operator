@@ -268,9 +268,6 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		return reconcile.Result{}, err
 	}
 
-	// test the credential crd
-	reqLogger.Info(fmt.Sprintf("And the credentials to use are... %+v", instance.Spec.Config.Credentails))
-
 	// Check if the job is marked to be deleted, which is
 	// indicated by the deletion timestamp being set.
 	isMarkedToBeDeleted := instance.GetDeletionTimestamp() != nil
@@ -330,6 +327,18 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 				r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 				return reconcile.Result{}, err
 			}
+		}
+	}
+
+	// Remove the finalizer when ignoreDelete exists. This is purley letting
+	// the user see that there are no finalizers when get/describe the resource
+	if instance.Spec.Config.IgnoreDelete {
+		reqLogger.V(1).Info("remove the finalizer")
+		instance.SetFinalizers(utils.ListRemoveStr(instance.GetFinalizers(), terraformFinalizer))
+		err := r.client.Update(context.TODO(), instance)
+		if err != nil {
+			r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+			return reconcile.Result{}, err
 		}
 	}
 
@@ -442,6 +451,7 @@ func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, c
 		if ns == "" {
 			ns = instance.Namespace
 		}
+
 		key, err := c.loadPassword(k, instance.Spec.SSHProxy.SSHKeySecretRef.Name, ns)
 		if err != nil {
 			return dataAsByte, err
@@ -497,6 +507,7 @@ func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, c
 }
 
 func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, c k8sClient, isFinalize bool) error {
+	r.recorder.Event(instance, "Normal", "InitializeJobCreate", fmt.Sprintf("Setting up a Job"))
 	// TODO(user): Add the cleanup steps that the operator
 	// needs to do before the CR can be deleted. Examples
 	// of finalizers include performing backups and deleting
@@ -623,11 +634,34 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	}
 
 	tfvarsConfigMap := instance.Name + "-tfvars"
-	err = c.createConfigMap(tfvarsConfigMap, instance.Namespace, make(map[string][]byte), data)
-	if err != nil {
-		r.recorder.Event(instance, "Warning", "ConfigMapCreateError", fmt.Errorf("Could not create configmap %v", err).Error())
-		return fmt.Errorf("Could not create configmap %v", err)
+
+	// make this a function for reuse
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      tfvarsConfigMap,
+			Namespace: instance.Namespace,
+		},
+		Data: data,
 	}
+	controllerutil.SetControllerReference(instance, cm, r.scheme)
+	err = r.client.Create(context.TODO(), cm)
+	if err != nil && errors.IsNotFound(err) {
+		r.recorder.Event(instance, "Warning", "ConfigMapCreateError", fmt.Errorf("Could not create configmap %v", err).Error())
+		return err
+	} else if err != nil {
+		reqLogger.V(1).Info(fmt.Sprintf("ConfigMap %s will be updated", cm.Name))
+		updateErr := r.client.Update(context.TODO(), cm)
+		if updateErr != nil {
+			r.recorder.Event(instance, "Warning", "ConfigMapUpdateError", fmt.Errorf("Could not update configmap %v", err).Error())
+			return updateErr
+		}
+	}
+
+	// err = c.createConfigMap(tfvarsConfigMap, instance.Namespace, make(map[string][]byte), data)
+	// if err != nil {
+	// 	r.recorder.Event(instance, "Warning", "ConfigMapCreateError", fmt.Errorf("Could not create configmap %v", err).Error())
+	// 	return fmt.Errorf("Could not create configmap %v", err)
+	// }
 	runOpts.tfvarsConfigMap = tfvarsConfigMap
 
 	// TODO Validate spec.config.env
@@ -656,12 +690,14 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 
 	// RUN
 	reqLogger.V(1).Info("Ready to run terraform")
-	err = r.run(reqLogger, instance, runOpts)
+	jobName, err := r.run(reqLogger, instance, runOpts)
 	if err != nil {
 		reqLogger.Error(err, "Failed to run job")
 		r.recorder.Event(instance, "Warning", "StartJobError", err.Error())
 		return err
 	}
+
+	r.recorder.Event(instance, "Normal", "SuccessfulCreate", fmt.Sprintf("Created Job: %s", jobName))
 
 	if isFinalize {
 		reqLogger.V(0).Info(fmt.Sprintf("Successfully finalized terraform on: %+v", instance))
@@ -995,7 +1031,7 @@ func (r RunOptions) generateJob() *batchv1.Job {
 	return job
 }
 
-func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, runOpts RunOptions) error {
+func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, runOpts RunOptions) (jobName string, err error) {
 	runOpts.sshConfig = instance.Name + "-ssh-config"
 
 	secret := generateSecretObject(runOpts.sshConfig, instance.Namespace, runOpts.sshConfigData)
@@ -1012,35 +1048,35 @@ func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terr
 	controllerutil.SetControllerReference(instance, configMap, r.scheme)
 	controllerutil.SetControllerReference(instance, job, r.scheme)
 
-	err := r.client.Create(context.TODO(), serviceAccount)
+	err = r.client.Create(context.TODO(), serviceAccount)
 	if err != nil && errors.IsNotFound(err) {
-		return err
+		return "", err
 	} else if err != nil {
 		reqLogger.Info(err.Error())
 	}
 
 	err = r.client.Create(context.TODO(), role)
 	if err != nil && errors.IsNotFound(err) {
-		return err
+		return "", err
 	} else if err != nil {
 		reqLogger.Info(err.Error())
 	}
 
 	err = r.client.Create(context.TODO(), roleBinding)
 	if err != nil && errors.IsNotFound(err) {
-		return err
+		return "", err
 	} else if err != nil {
 		reqLogger.Info(err.Error())
 	}
 
 	err = r.client.Create(context.TODO(), configMap)
 	if err != nil && errors.IsNotFound(err) {
-		return err
+		return "", err
 	} else if err != nil {
 		reqLogger.Info(fmt.Sprintf("ConfigMap %s already exists", configMap.Name))
 		updateErr := r.client.Update(context.TODO(), configMap)
 		if updateErr != nil && errors.IsNotFound(updateErr) {
-			return updateErr
+			return "", updateErr
 		} else if updateErr != nil {
 			reqLogger.Info(err.Error())
 		}
@@ -1048,12 +1084,12 @@ func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terr
 
 	err = r.client.Create(context.TODO(), secret)
 	if err != nil && errors.IsNotFound(err) {
-		return err
+		return "", err
 	} else if err != nil {
 		reqLogger.Info(fmt.Sprintf("Secret %s already exists", secret.Name))
 		updateErr := r.client.Update(context.TODO(), secret)
 		if updateErr != nil && errors.IsNotFound(updateErr) {
-			return updateErr
+			return "", updateErr
 		} else if updateErr != nil {
 			reqLogger.Info(err.Error())
 		}
@@ -1061,12 +1097,12 @@ func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terr
 
 	err = r.client.Create(context.TODO(), job)
 	if err != nil && errors.IsNotFound(err) {
-		return err
+		return "", err
 	} else if err != nil {
 		reqLogger.Info(err.Error())
 	}
 
-	return nil
+	return job.Name, nil
 }
 
 func newGitRepoAccessOptionsFromSpec(instance *tfv1alpha1.Terraform, address string, extras []string) (GitRepoAccessOptions, error) {
@@ -1249,15 +1285,6 @@ func (d GitRepoAccessOptions) otherConfigFiles() (map[string]string, error) {
 	return configFiles, nil
 }
 
-func inlineSource(job k8sClient, inline *tfv1alpha1.Inline, namespace, name string) (string, error) {
-	name = name + "-runcmd"
-	err := job.createConfigMap(name, namespace, make(map[string][]byte), inline.ConfigMapFiles)
-	if err != nil {
-		return "", fmt.Errorf("Could not create configmap %v", err)
-	}
-	return name, nil
-}
-
 // downloadFromSource will downlaod the files locally. It will also download
 // tf modules locally if the user opts to. TF module downloading
 // is probably going to be used in the event that go-getter cannot fetch the
@@ -1358,6 +1385,8 @@ func tarBinaryData(fullpath, filename string) (map[string][]byte, error) {
 
 func (c *k8sClient) readConfigMap(name, namespace string) (*corev1.ConfigMap, error) {
 
+	// TODO replace this client with the runtime-controller client
+
 	configMap, err := c.clientset.CoreV1().ConfigMaps(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
 		return &corev1.ConfigMap{}, fmt.Errorf("error reading configmap: %v", err)
@@ -1366,29 +1395,29 @@ func (c *k8sClient) readConfigMap(name, namespace string) (*corev1.ConfigMap, er
 	return configMap, nil
 }
 
-func (c *k8sClient) createConfigMap(name, namespace string, binaryData map[string][]byte, data map[string]string) error {
+// func (c *k8sClient) createConfigMap(name, namespace string, binaryData map[string][]byte, data map[string]string) error {
 
-	configMapObject := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
-		Data:       data,
-		BinaryData: binaryData,
-	}
+// 	configMapObject := &corev1.ConfigMap{
+// 		ObjectMeta: metav1.ObjectMeta{
+// 			Name:      name,
+// 			Namespace: namespace,
+// 		},
+// 		Data:       data,
+// 		BinaryData: binaryData,
+// 	}
 
-	// TODO Make the terraform the referenced Owner of this resource
-	_, err := c.clientset.CoreV1().ConfigMaps(namespace).Create(configMapObject)
-	if err != nil {
-		// fmt.Printf("The first create error... %v\n", err.Error())
-		_, err = c.clientset.CoreV1().ConfigMaps(namespace).Update(configMapObject)
-		if err != nil {
-			return fmt.Errorf("error creating configmap: %v", err)
-		}
-	}
+// 	// TODO Make the terraform the referenced Owner of this resource
+// 	_, err := c.clientset.CoreV1().ConfigMaps(namespace).Create(configMapObject)
+// 	if err != nil {
+// 		// fmt.Printf("The first create error... %v\n", err.Error())
+// 		_, err = c.clientset.CoreV1().ConfigMaps(namespace).Update(configMapObject)
+// 		if err != nil {
+// 			return fmt.Errorf("error creating configmap: %v", err)
+// 		}
+// 	}
 
-	return nil
-}
+// 	return nil
+// }
 
 func generateSecretObject(name, namespace string, data map[string][]byte) *corev1.Secret {
 	secretType := corev1.SecretType("opaque")
@@ -1404,6 +1433,9 @@ func generateSecretObject(name, namespace string, data map[string][]byte) *corev
 }
 
 func (c *k8sClient) loadPassword(key, name, namespace string) (string, error) {
+
+	// TODO replace this client with the runtime-controller client
+
 	secret, err := c.clientset.CoreV1().Secrets(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("Could not get secret: %v", err)
@@ -1424,6 +1456,9 @@ func (c *k8sClient) loadPassword(key, name, namespace string) (string, error) {
 }
 
 func (c *k8sClient) loadPrivateKey(key, name, namespace string) (*os.File, error) {
+
+	// TODO replace this client with the runtime-controller client
+
 	secret, err := c.clientset.CoreV1().Secrets(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("Could not get id_rsa secret: %v", err)
