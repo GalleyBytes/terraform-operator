@@ -86,11 +86,14 @@ func (g *GitRepo) downloadGitRepo(c chan error, wg *sync.WaitGroup, url, repoDir
 	defer wg.Done()
 	defer close(c)
 	gitConfigs := git.CloneOptions{
-		Auth:              g.auth,
 		URL:               url,
 		RecurseSubmodules: git.DefaultSubmoduleRecursionDepth,
 		ReferenceName:     "refs/heads/master",
 		Progress:          os.Stdout,
+	}
+
+	if g.auth != nil {
+		gitConfigs.Auth = g.auth
 	}
 
 	err := gitConfigs.Validate()
@@ -172,8 +175,10 @@ func sshAuthMethod(sshKeyFilename string) (gitauth.AuthMethod, error) {
 
 func GitHTTPDownload(url, repoDir, user, password, ref string) (GitRepo, error) {
 	gitRepo := GitRepo{}
-	auth := passwordAuthMethod(user, password)
-	gitRepo.auth = auth
+	if password != "" {
+		auth := passwordAuthMethod(user, password)
+		gitRepo.auth = auth
+	}
 
 	c := make(chan error)
 	var wg sync.WaitGroup

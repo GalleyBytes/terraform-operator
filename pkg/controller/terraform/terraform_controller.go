@@ -287,7 +287,7 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 				destroyFound := &batchv1.Job{}
 				err = r.client.Get(context.TODO(), d, destroyFound)
 				if err != nil && errors.IsNotFound(err) {
-					if err := r.finalizeTerraform(reqLogger, instance, job); err != nil {
+					if err := r.setupAndRun(reqLogger, instance, job, true); err != nil {
 						r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 						return reconcile.Result{}, err
 					}
@@ -338,170 +338,10 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 	err = r.client.Get(context.TODO(), request.NamespacedName, found)
 
 	if err != nil && errors.IsNotFound(err) {
-
-		runOpts := newRunOptions(instance, false)
-		runOpts.updateEnvVars("DEPLOYMENT", instance.Name)
-		// runOpts.namespace = instance.Namespace
-
-		// Stack Download
-		reqLogger.Info("Reading spec.stack config")
-		if (tfv1alpha1.TerraformStack{}) == *instance.Spec.Stack {
-			r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
-			return reconcile.Result{}, fmt.Errorf("No stack source defined")
-		} // else if (tfv1alpha1.SrcOpts{}) == *instance.Spec.Stack.Source {
-		// 	return reconcile.Result{}, fmt.Errorf("No stack source defined")
-		// }
-		address := instance.Spec.Stack.Source.Address
-		stackRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
-
+		err := r.setupAndRun(reqLogger, instance, job, false)
 		if err != nil {
-			r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err).Error())
-			return reconcile.Result{}, fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
-		}
-
-		err = stackRepoAccessOptions.getParsedAddress()
-		if err != nil {
-			r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in parsing address: %v", err).Error())
-			return reconcile.Result{}, fmt.Errorf("Error in parsing address: %v", err)
-		}
-
-		// Since we're not going to download this to a configmap, we need to
-		// pass the information to the pod to do it. We should be able to
-		// use stackRepoAccessOptions.parsedAddress and just send that to
-		// the pod's environment vars.
-
-		runOpts.updateDownloadedModules(stackRepoAccessOptions.hash)
-		runOpts.stack = stackRepoAccessOptions.ParsedAddress
-
-		// I think Terraform only allows for one git token. Add the first one
-		// to the job's env vars as GIT_PASSWORD.
-		for _, m := range stackRepoAccessOptions.SCMAuthMethods {
-			if m.Git.HTTPS != nil {
-				runOpts.tokenSecret = m.Git.HTTPS.TokenSecretRef
-				if runOpts.tokenSecret.Key == "" {
-					runOpts.tokenSecret.Key = "token"
-				}
-			}
-			if m.Git.SSH != nil {
-				sshConfigData, err := formatJobSSHConfig(reqLogger, instance, job)
-				if err != nil {
-					return reconcile.Result{}, fmt.Errorf("Error setting up sshconfig: %v", err)
-				}
-				runOpts.sshConfigData = sshConfigData
-			}
-			break
-		}
-
-		runOpts.mainModule = stackRepoAccessOptions.hash
-
-		// reqLogger.Info(fmt.Sprintf("All moduleConfigMaps: %v", runOpts.moduleConfigMaps))
-
-		//
-		//
-		// Download the tfvar configs (and optionally save to external repo)
-		//
-		//
-		reqLogger.Info("Reading spec.config ")
-		// TODO Validate spec.config exists
-		// TODO validate spec.config.sources exists && len > 0
-		runOpts.cloudCredentials = instance.Spec.Config.CloudCredentials
-		runOpts.credentials = instance.Spec.Config.Credentails
-		tfvars := ""
-		otherConfigFiles := make(map[string]string)
-		for _, s := range instance.Spec.Config.Sources {
-			address := s.Address
-			extras := s.Extras
-			// Loop thru all the sources in spec.config
-			configRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, extras)
-
-			if err != nil {
-				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err).Error())
-				return reconcile.Result{}, fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
-			}
-			err = configRepoAccessOptions.download(job, instance.Namespace)
-			if err != nil {
-				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in download: %v", err).Error())
-				return reconcile.Result{}, fmt.Errorf("Error in download: %v", err)
-			}
-			defer reqLogger.V(1).Info("configRepoAccessOptions Closed tunnel")
-			defer configRepoAccessOptions.TunnelClose()
-			defer reqLogger.V(1).Info("configRepoAccessOptions Closing tunnel")
-			// reqLogger.Info(fmt.Sprintf("Config was downloaded and updated GitRepoAccessOptions: %+v", configRepoAccessOptions))
-
-			tfvarSource, err := configRepoAccessOptions.tfvarFiles()
-			if err != nil {
-				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in reading tfvarFiles: %v", err).Error())
-				return reconcile.Result{}, fmt.Errorf("Error in reading tfvarFiles: %v", err)
-			}
-			tfvars += tfvarSource
-
-			otherConfigFiles, err = configRepoAccessOptions.otherConfigFiles()
-			if err != nil {
-				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in getting otherConfigFiles: %v", err).Error())
-				return reconcile.Result{}, fmt.Errorf("Error in reading otherConfigFiles: %v", err)
-			}
-		}
-		data := make(map[string]string)
-		data["tfvars"] = tfvars
-		for k, v := range otherConfigFiles {
-			data[k] = v
-		}
-
-		// Override the backend.tf by inserting a custom backend
-		if instance.Spec.Config.CustomBackend != "" {
-			data["backend_override.tf"] = instance.Spec.Config.CustomBackend
-		}
-
-		if instance.Spec.Config.PrerunScript != "" {
-			data["prerun.sh"] = instance.Spec.Config.PrerunScript
-		}
-
-		if instance.Spec.Config.PostrunScript != "" {
-			data["postrun.sh"] = instance.Spec.Config.PostrunScript
-		}
-
-		tfvarsConfigMap := instance.Name + "-tfvars"
-		err = job.createConfigMap(tfvarsConfigMap, instance.Namespace, make(map[string][]byte), data)
-		if err != nil {
-			r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Could not create configmap %v", err).Error())
-			return reconcile.Result{}, fmt.Errorf("Could not create configmap %v", err)
-		}
-		runOpts.tfvarsConfigMap = tfvarsConfigMap
-
-		// TODO Validate spec.config.env
-		for _, env := range instance.Spec.Config.Env {
-			runOpts.updateEnvVars(env.Name, env.Value)
-		}
-
-		// Flatten all the .tfvars and TF_VAR envs into a single file and push
-		if instance.Spec.Config.ExportRepo != nil {
-			e := instance.Spec.Config.ExportRepo
-
-			address := e.Address
-			exportRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
-			if err != nil {
-				r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error getting git repo access options: %v", err).Error())
-				return reconcile.Result{}, fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
-			}
-			// TODO decide what to do on errors
-			// Closing the tunnel from within this function
-			go exportRepoAccessOptions.commitTfvars(job, tfvars, e.TFVarsFile, e.ConfFile, instance.Namespace, instance.Spec.Config.CustomBackend, runOpts, reqLogger)
-		}
-
-		//
-		//
-		// Stack and Config are ready, create the tf resources for tf execution
-		//
-		//
-
-		reqLogger.Info("Ready to run terraform")
-		err = r.run(reqLogger, instance, runOpts)
-		if err != nil {
-			reqLogger.Error(err, "Failed to run job")
-			r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 			return reconcile.Result{}, err
 		}
-
 		// Job created successfully - return and requeue
 		return reconcile.Result{Requeue: true}, nil
 	} else if err != nil {
@@ -656,31 +496,37 @@ func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, c
 	return dataAsByte, nil
 }
 
-func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, c k8sClient) error {
+func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, c k8sClient, isFinalize bool) error {
 	// TODO(user): Add the cleanup steps that the operator
 	// needs to do before the CR can be deleted. Examples
 	// of finalizers include performing backups and deleting
 	// resources that are not owned by this CR, like a PVC.
 
-	runOpts := newRunOptions(instance, true)
+	runOpts := newRunOptions(instance, isFinalize)
 	runOpts.updateEnvVars("DEPLOYMENT", instance.Name)
 	// runOpts.namespace = instance.Namespace
 
 	// Stack Download
 	reqLogger.Info("Reading spec.stack config")
 	if (tfv1alpha1.TerraformStack{}) == *instance.Spec.Stack {
+		// This should never get reached since it violates the crd's
+		// `spec.stack` requirement. Just in case, log an error.
+		r.recorder.Event(instance, "Warning", "ConfigError", "No stack source defined")
 		return fmt.Errorf("No stack source defined")
 	} // else if (tfv1alpha1.SrcOpts{}) == *instance.Spec.Stack.Source {
 	// 	return reconcile.Result{}, fmt.Errorf("No stack source defined")
 	// }
 	address := instance.Spec.Stack.Source.Address
 	stackRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
+
 	if err != nil {
+		r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err).Error())
 		return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 	}
 
 	err = stackRepoAccessOptions.getParsedAddress()
 	if err != nil {
+		r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in parsing address: %v", err).Error())
 		return fmt.Errorf("Error in parsing address: %v", err)
 	}
 
@@ -704,6 +550,7 @@ func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *
 		if m.Git.SSH != nil {
 			sshConfigData, err := formatJobSSHConfig(reqLogger, instance, c)
 			if err != nil {
+				r.recorder.Event(instance, "Warning", "SSHConfigError", fmt.Errorf("%v", err).Error())
 				return fmt.Errorf("Error setting up sshconfig: %v", err)
 			}
 			runOpts.sshConfigData = sshConfigData
@@ -712,6 +559,14 @@ func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *
 	}
 
 	runOpts.mainModule = stackRepoAccessOptions.hash
+	//
+	//
+	// Download the tfvar configs (and optionally save to external repo)
+	//
+	//
+	reqLogger.Info("Reading spec.config ")
+	// TODO Validate spec.config exists
+	// TODO validate spec.config.sources exists && len > 0
 	runOpts.cloudCredentials = instance.Spec.Config.CloudCredentials
 	runOpts.credentials = instance.Spec.Config.Credentails
 	tfvars := ""
@@ -722,25 +577,30 @@ func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *
 		// Loop thru all the sources in spec.config
 		configRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, extras)
 		if err != nil {
+			r.recorder.Event(instance, "Warning", "ConfigError", fmt.Errorf("Error in Spec: %v", err).Error())
 			return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 		}
 		err = configRepoAccessOptions.download(c, instance.Namespace)
 		if err != nil {
+			r.recorder.Event(instance, "Warning", "DownloadError", fmt.Errorf("Error in download: %v", err).Error())
 			return fmt.Errorf("Error in download: %v", err)
 		}
-		// reqLogger.Info(fmt.Sprintf("Config was downloaded and updated GitRepoAccessOptions: %+v", configRepoAccessOptions))
+		defer configRepoAccessOptions.TunnelClose()
+
+		reqLogger.V(1).Info(fmt.Sprintf("Config was downloaded and updated GitRepoAccessOptions: %+v", configRepoAccessOptions))
 
 		tfvarSource, err := configRepoAccessOptions.tfvarFiles()
 		if err != nil {
+			r.recorder.Event(instance, "Warning", "ReadFileError", fmt.Errorf("Error reading tfvar files: %v", err).Error())
 			return fmt.Errorf("Error in reading tfvarFiles: %v", err)
 		}
 		tfvars += tfvarSource
 
 		otherConfigFiles, err = configRepoAccessOptions.otherConfigFiles()
 		if err != nil {
+			r.recorder.Event(instance, "Warning", "ReadFileError", fmt.Errorf("Error reading files: %v", err).Error())
 			return fmt.Errorf("Error in reading otherConfigFiles: %v", err)
 		}
-
 	}
 	data := make(map[string]string)
 	data["tfvars"] = tfvars
@@ -753,9 +613,19 @@ func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *
 		data["backend_override.tf"] = instance.Spec.Config.CustomBackend
 	}
 
+	if instance.Spec.Config.PrerunScript != "" {
+		data["prerun.sh"] = instance.Spec.Config.PrerunScript
+	}
+
+	// Do we need to run postrunscript's for finalizers?
+	if instance.Spec.Config.PostrunScript != "" && !isFinalize {
+		data["postrun.sh"] = instance.Spec.Config.PostrunScript
+	}
+
 	tfvarsConfigMap := instance.Name + "-tfvars"
 	err = c.createConfigMap(tfvarsConfigMap, instance.Namespace, make(map[string][]byte), data)
 	if err != nil {
+		r.recorder.Event(instance, "Warning", "ConfigMapCreateError", fmt.Errorf("Could not create configmap %v", err).Error())
 		return fmt.Errorf("Could not create configmap %v", err)
 	}
 	runOpts.tfvarsConfigMap = tfvarsConfigMap
@@ -764,16 +634,39 @@ func (r *ReconcileTerraform) finalizeTerraform(reqLogger logr.Logger, instance *
 	for _, env := range instance.Spec.Config.Env {
 		runOpts.updateEnvVars(env.Name, env.Value)
 	}
-	runOpts.envVars["DESTROY"] = "true"
+
+	// Flatten all the .tfvars and TF_VAR envs into a single file and push
+	if instance.Spec.Config.ExportRepo != nil && !isFinalize {
+		e := instance.Spec.Config.ExportRepo
+
+		address := e.Address
+		exportRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
+		if err != nil {
+			r.recorder.Event(instance, "Warning", "ConfigError", fmt.Errorf("Error getting git repo access options: %v", err).Error())
+			return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
+		}
+		// TODO decide what to do on errors
+		// Closing the tunnel from within this function
+		go exportRepoAccessOptions.commitTfvars(c, tfvars, e.TFVarsFile, e.ConfFile, instance.Namespace, instance.Spec.Config.CustomBackend, runOpts, reqLogger)
+	}
+
+	if isFinalize {
+		runOpts.envVars["DESTROY"] = "true"
+	}
 
 	// RUN
+	reqLogger.V(1).Info("Ready to run terraform")
 	err = r.run(reqLogger, instance, runOpts)
 	if err != nil {
 		reqLogger.Error(err, "Failed to run job")
+		r.recorder.Event(instance, "Warning", "StartJobError", err.Error())
 		return err
 	}
 
-	reqLogger.V(0).Info(fmt.Sprintf("Successfully finalized terraform on: %+v", instance))
+	if isFinalize {
+		reqLogger.V(0).Info(fmt.Sprintf("Successfully finalized terraform on: %+v", instance))
+	}
+
 	return nil
 }
 
@@ -1061,7 +954,6 @@ func (r RunOptions) generateJob() *batchv1.Job {
 				},
 			}...)
 		}
-
 	}
 
 	// Schedule a job that will execute the terraform plan
@@ -1750,24 +1642,25 @@ func (d *GitRepoAccessOptions) download(job k8sClient, namespace string) error {
 	if d.protocol == "ssh" {
 		filename, err := d.getGitSSHKey(job, namespace, d.protocol, reqLogger)
 		if err != nil {
-			return err
+			return fmt.Errorf("Download failed for '%s': %v", repo, err)
 		}
 		defer os.Remove(filename)
 		gitRepo, err = gitclient.GitSSHDownload(repo, d.Directory, filename, d.hash, reqLogger)
 		if err != nil {
-			return err
+			return fmt.Errorf("Download failed for '%s': %v", repo, err)
 		}
 	} else {
 		// TODO find out and support any other protocols
 		// Just assume http is the only other protocol for now
 		token, err := d.getGitToken(job, namespace, d.protocol, reqLogger)
 		if err != nil {
-			return err
+			// Maybe we don't need to exit if no creds are used here
+			reqLogger.Info(fmt.Sprintf("%v", err))
 		}
 
 		gitRepo, err = gitclient.GitHTTPDownload(repo, d.Directory, "git", token, d.hash)
 		if err != nil {
-			return err
+			return fmt.Errorf("Download failed for '%s': %v", repo, err)
 		}
 	}
 
@@ -1946,6 +1839,7 @@ func (d *GitRepoAccessOptions) getGitSSHKey(job k8sClient, namespace, protocol s
 
 func (d *GitRepoAccessOptions) getGitToken(job k8sClient, namespace, protocol string, reqLogger logr.Logger) (string, error) {
 	var token string
+	var err error
 	for _, m := range d.SCMAuthMethods {
 		if m.Host == d.ParsedAddress.host && m.Git.HTTPS != nil {
 			reqLogger.Info("Using Git over HTTPS with a token")
@@ -1958,7 +1852,7 @@ func (d *GitRepoAccessOptions) getGitToken(job k8sClient, namespace, protocol st
 			if ns == "" {
 				ns = namespace
 			}
-			token, err := job.loadPassword(key, name, ns)
+			token, err = job.loadPassword(key, name, ns)
 			if err != nil {
 				return token, fmt.Errorf("unable to get token: %v", err)
 			}

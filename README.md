@@ -1,4 +1,6 @@
+<p align="center">
 <img src="https://s3.amazonaws.com/classic.isaaguilar.com/terraform-operator-logo.gif" alt="Terraform Operator" width="50%"></img>
+</p>
 
 > A Kubernetes CRD and Controller to handle Terraform operations by generating k8s jobs catered to perform Terraform workflows
 
