@@ -36,8 +36,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -48,10 +46,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
-
-type k8sClient struct {
-	clientset kubernetes.Interface
-}
 
 type ParsedAddress struct {
 	sourcedir string
@@ -83,7 +77,6 @@ type RunOptions struct {
 	name             string
 	tfvarsConfigMap  string
 	envVars          map[string]string
-	cloudCredentials string
 	credentials      []tfv1alpha1.Credentials
 	stack            ParsedAddress
 	token            string
@@ -234,25 +227,9 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 	reqLogger := _logf.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
 	reqLogger.Info("Reconciling Terraform")
 
-	// I set up a client here based on the only way I knew how to set up a client before
-	//TODO: try and recycle the runtime-controller client
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		panic(err.Error())
-	}
-	// creates the clientset
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		panic(err.Error())
-	}
-
-	job := k8sClient{
-		clientset: clientset,
-	}
-
 	// Fetch the Terraform instance
 	instance := &tfv1alpha1.Terraform{}
-	err = r.client.Get(context.TODO(), request.NamespacedName, instance)
+	err := r.client.Get(context.TODO(), request.NamespacedName, instance)
 	// reqLogger.Info(fmt.Sprintf("Here is the object's status before starting %+v", instance.Status))
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -284,7 +261,7 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 				destroyFound := &batchv1.Job{}
 				err = r.client.Get(context.TODO(), d, destroyFound)
 				if err != nil && errors.IsNotFound(err) {
-					if err := r.setupAndRun(reqLogger, instance, job, true); err != nil {
+					if err := r.setupAndRun(reqLogger, instance, true); err != nil {
 						r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 						return reconcile.Result{}, err
 					}
@@ -332,8 +309,8 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 
 	// Remove the finalizer when ignoreDelete exists. This is purley letting
 	// the user see that there are no finalizers when get/describe the resource
-	if instance.Spec.Config.IgnoreDelete {
-		reqLogger.V(1).Info("remove the finalizer")
+	if instance.Spec.Config.IgnoreDelete && instance.ObjectMeta.Finalizers != nil {
+		reqLogger.V(1).Info("Removing the finalizer since ignoreDelete is true")
 		instance.SetFinalizers(utils.ListRemoveStr(instance.GetFinalizers(), terraformFinalizer))
 		err := r.client.Update(context.TODO(), instance)
 		if err != nil {
@@ -347,7 +324,7 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 	err = r.client.Get(context.TODO(), request.NamespacedName, found)
 
 	if err != nil && errors.IsNotFound(err) {
-		err := r.setupAndRun(reqLogger, instance, job, false)
+		err := r.setupAndRun(reqLogger, instance, false)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
@@ -375,14 +352,37 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		// Check if job has already been stopped before and "generations" match.
 		// The second predicate will be true when terraform spec is updated
 		// after an already successful deployment.
-		client := job.clientset
+
 		if instance.Status.Phase == "stopped" && instance.Status.LastGeneration != instance.ObjectMeta.Generation {
 			// Delete the current job and restart
-			err = client.BatchV1().Jobs(instance.Namespace).Delete(instance.Name, &metav1.DeleteOptions{})
+			reqLogger.V(1).Info("Preparing to restart job by first deleting old job")
+			job := &batchv1.Job{}
+			jobName := types.NamespacedName{Namespace: instance.Namespace, Name: instance.Name}
+			err = r.client.Get(context.TODO(), jobName, job)
 			if err != nil {
 				return reconcile.Result{}, err
 			}
-			return reconcile.Result{Requeue: true}, nil
+			reqLogger.V(1).Info(fmt.Sprintf("Deleting the job: %+v", job.ObjectMeta))
+			err = r.client.Delete(context.TODO(), job)
+			// err = client.BatchV1().Jobs(instance.Namespace).Delete(instance.Name, &metav1.DeleteOptions{})
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+
+			var timer int64 = 30 //seconds
+			startDeleteTimer := time.Now().Unix()
+			for {
+				if (time.Now().Unix() - startDeleteTimer) > timer {
+					return reconcile.Result{}, fmt.Errorf("Job could not delete in %d seconds", timer)
+				}
+
+				found := &batchv1.Job{}
+				err = r.client.Get(context.TODO(), jobName, found)
+				if err != nil && errors.IsNotFound(err) {
+					reqLogger.V(1).Info("Old job deleted")
+					return reconcile.Result{Requeue: true}, nil
+				}
+			}
 		}
 		now := time.Now()
 		requeue := false
@@ -391,14 +391,19 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 		r.client.Status().Update(context.TODO(), instance)
 
 		// The terraform is still being executed, wait until 0 active
-		cm, err := job.readConfigMap(instance.Name+"-status", instance.Namespace)
+		cm, err := readConfigMap(r.client, instance.Name+"-status", instance.Namespace)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
-		reqLogger.Info(fmt.Sprintf("Setting status of terraform plan as %v", cm.Data))
+		reqLogger.V(1).Info(fmt.Sprintf("Setting status of terraform plan as %v", cm.Data))
 
 		// Find the successful pod
-		collection, err := client.CoreV1().Pods(instance.Namespace).List(metav1.ListOptions{LabelSelector: fmt.Sprintf("job-name=%s", instance.Name)})
+		collection := &corev1.PodList{}
+		inNamespace := client.InNamespace(instance.Namespace)
+		labelSelector := make(map[string]string)
+		labelSelector["job-name"] = instance.Name
+		matchingLabels := client.MatchingLabels(labelSelector)
+		err = r.client.List(context.TODO(), collection, inNamespace, matchingLabels)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
@@ -410,7 +415,7 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 			// keep the pod around for 6 houra
 			diff := now.Sub(pod.Status.StartTime.Time)
 			if diff.Minutes() > 360 {
-				client.CoreV1().Pods(instance.Namespace).Delete(pod.Name, &metav1.DeleteOptions{})
+				_ = r.client.Delete(context.TODO(), &pod)
 			}
 		}
 
@@ -431,7 +436,7 @@ func (d GitRepoAccessOptions) TunnelClose() {
 	}
 }
 
-func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, c k8sClient) (map[string][]byte, error) {
+func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, k8sclient client.Client) (map[string][]byte, error) {
 	data := make(map[string]string)
 	dataAsByte := make(map[string][]byte)
 	if instance.Spec.SSHProxy != nil {
@@ -452,7 +457,7 @@ func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, c
 			ns = instance.Namespace
 		}
 
-		key, err := c.loadPassword(k, instance.Spec.SSHProxy.SSHKeySecretRef.Name, ns)
+		key, err := loadPassword(k8sclient, k, instance.Spec.SSHProxy.SSHKeySecretRef.Name, ns)
 		if err != nil {
 			return dataAsByte, err
 		}
@@ -491,7 +496,7 @@ func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, c
 			if ns == "" {
 				ns = instance.Namespace
 			}
-			key, err := c.loadPassword(k, m.Git.SSH.SSHKeySecretRef.Name, ns)
+			key, err := loadPassword(k8sclient, k, m.Git.SSH.SSHKeySecretRef.Name, ns)
 			if err != nil {
 				return dataAsByte, err
 			}
@@ -506,7 +511,7 @@ func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, c
 	return dataAsByte, nil
 }
 
-func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, c k8sClient, isFinalize bool) error {
+func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, isFinalize bool) error {
 	r.recorder.Event(instance, "Normal", "InitializeJobCreate", fmt.Sprintf("Setting up a Job"))
 	// TODO(user): Add the cleanup steps that the operator
 	// needs to do before the CR can be deleted. Examples
@@ -559,7 +564,7 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 			}
 		}
 		if m.Git.SSH != nil {
-			sshConfigData, err := formatJobSSHConfig(reqLogger, instance, c)
+			sshConfigData, err := formatJobSSHConfig(reqLogger, instance, r.client)
 			if err != nil {
 				r.recorder.Event(instance, "Warning", "SSHConfigError", fmt.Errorf("%v", err).Error())
 				return fmt.Errorf("Error setting up sshconfig: %v", err)
@@ -578,7 +583,6 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	reqLogger.Info("Reading spec.config ")
 	// TODO Validate spec.config exists
 	// TODO validate spec.config.sources exists && len > 0
-	runOpts.cloudCredentials = instance.Spec.Config.CloudCredentials
 	runOpts.credentials = instance.Spec.Config.Credentails
 	tfvars := ""
 	otherConfigFiles := make(map[string]string)
@@ -591,7 +595,7 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 			r.recorder.Event(instance, "Warning", "ConfigError", fmt.Errorf("Error in Spec: %v", err).Error())
 			return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 		}
-		err = configRepoAccessOptions.download(c, instance.Namespace)
+		err = configRepoAccessOptions.download(r.client, instance.Namespace)
 		if err != nil {
 			r.recorder.Event(instance, "Warning", "DownloadError", fmt.Errorf("Error in download: %v", err).Error())
 			return fmt.Errorf("Error in download: %v", err)
@@ -681,7 +685,7 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 		}
 		// TODO decide what to do on errors
 		// Closing the tunnel from within this function
-		go exportRepoAccessOptions.commitTfvars(c, tfvars, e.TFVarsFile, e.ConfFile, instance.Namespace, instance.Spec.Config.CustomBackend, runOpts, reqLogger)
+		go exportRepoAccessOptions.commitTfvars(r.client, tfvars, e.TFVarsFile, e.ConfFile, instance.Namespace, instance.Spec.Config.CustomBackend, runOpts, reqLogger)
 	}
 
 	if isFinalize {
@@ -722,17 +726,11 @@ func (r *ReconcileTerraform) addFinalizer(reqLogger logr.Logger, instance *tfv1a
 func (r RunOptions) generateServiceAccount() *corev1.ServiceAccount {
 	annotations := make(map[string]string)
 
-	// if strings.Contains(r.cloudCredentials, "irsa") {
-	// 	annotations["eks.amazonaws.com/role-arn"] = r.cloudCredentials
-	// }
 	for _, c := range r.credentials {
 		if c.AWSCredentials.IRSA != "" {
 			annotations["eks.amazonaws.com/role-arn"] = c.AWSCredentials.IRSA
 		}
 	}
-	// if r.credentials.AWSCredentials.IRSA != "" {
-	// 	annotations["eks.amazonaws.com/role-arn"] = r.credentials.AWSCredentials.IRSA
-	// }
 
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
@@ -970,8 +968,6 @@ func (r RunOptions) generateJob() *batchv1.Job {
 	annotations := make(map[string]string)
 	envFrom := []corev1.EnvFromSource{}
 
-	// if strings.Contains(r.cloudCredentials, "kiam") {
-	// 	annotations["iam.amazonaws.com/role"] = r.cloudCredentials
 	for _, c := range r.credentials {
 		if c.AWSCredentials.KIAM != "" {
 			annotations["iam.amazonaws.com/role"] = c.AWSCredentials.KIAM
@@ -1383,11 +1379,11 @@ func tarBinaryData(fullpath, filename string) (map[string][]byte, error) {
 	return binaryData, nil
 }
 
-func (c *k8sClient) readConfigMap(name, namespace string) (*corev1.ConfigMap, error) {
-
-	// TODO replace this client with the runtime-controller client
-
-	configMap, err := c.clientset.CoreV1().ConfigMaps(namespace).Get(name, metav1.GetOptions{})
+func readConfigMap(k8sclient client.Client, name, namespace string) (*corev1.ConfigMap, error) {
+	configMap := &corev1.ConfigMap{}
+	namespacedName := types.NamespacedName{Namespace: namespace, Name: name}
+	err := k8sclient.Get(context.TODO(), namespacedName, configMap)
+	// configMap, err := c.clientset.CoreV1().ConfigMaps(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
 		return &corev1.ConfigMap{}, fmt.Errorf("error reading configmap: %v", err)
 	}
@@ -1432,11 +1428,12 @@ func generateSecretObject(name, namespace string, data map[string][]byte) *corev
 	return secretObject
 }
 
-func (c *k8sClient) loadPassword(key, name, namespace string) (string, error) {
+func loadPassword(k8sclient client.Client, key, name, namespace string) (string, error) {
 
-	// TODO replace this client with the runtime-controller client
-
-	secret, err := c.clientset.CoreV1().Secrets(namespace).Get(name, metav1.GetOptions{})
+	secret := &corev1.Secret{}
+	namespacedName := types.NamespacedName{Namespace: namespace, Name: name}
+	err := k8sclient.Get(context.TODO(), namespacedName, secret)
+	// secret, err := c.clientset.CoreV1().Secrets(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("Could not get secret: %v", err)
 	}
@@ -1453,13 +1450,14 @@ func (c *k8sClient) loadPassword(key, name, namespace string) (string, error) {
 	}
 
 	return string(password), nil
+
 }
 
-func (c *k8sClient) loadPrivateKey(key, name, namespace string) (*os.File, error) {
+func loadPrivateKey(k8sclient client.Client, key, name, namespace string) (*os.File, error) {
 
-	// TODO replace this client with the runtime-controller client
-
-	secret, err := c.clientset.CoreV1().Secrets(namespace).Get(name, metav1.GetOptions{})
+	secret := &corev1.Secret{}
+	namespacedName := types.NamespacedName{Namespace: namespace, Name: name}
+	err := k8sclient.Get(context.TODO(), namespacedName, secret)
 	if err != nil {
 		return nil, fmt.Errorf("Could not get id_rsa secret: %v", err)
 	}
@@ -1598,7 +1596,7 @@ func untar(tarball, target string) error {
 	return nil
 }
 
-func (d *GitRepoAccessOptions) download(job k8sClient, namespace string) error {
+func (d *GitRepoAccessOptions) download(k8sclient client.Client, namespace string) error {
 	// This function only supports git modules. There's no explicit check
 	// for this yet.
 	// TODO document available options for sources
@@ -1613,7 +1611,7 @@ func (d *GitRepoAccessOptions) download(job k8sClient, namespace string) error {
 
 	if (tfv1alpha1.ProxyOpts{}) != d.SSHProxy {
 		reqLogger.Info("Setting up a proxy")
-		proxyAuthMethod, err := d.getProxyAuthMethod(job, namespace)
+		proxyAuthMethod, err := d.getProxyAuthMethod(k8sclient, namespace)
 		if err != nil {
 			return fmt.Errorf("Error getting proxyAuthMethod: %v", err)
 		}
@@ -1654,7 +1652,7 @@ func (d *GitRepoAccessOptions) download(job k8sClient, namespace string) error {
 			gitTransportClient.InstallProtocol("http", githttp.NewClient(httpClient))
 			gitTransportClient.InstallProtocol("https", githttp.NewClient(httpClient))
 		} else if d.protocol == "ssh" {
-			port, tunnel, err := d.setupSSHProxy(job, namespace)
+			port, tunnel, err := d.setupSSHProxy(k8sclient, namespace)
 			if err != nil {
 				return err
 			}
@@ -1675,7 +1673,7 @@ func (d *GitRepoAccessOptions) download(job k8sClient, namespace string) error {
 
 	var gitRepo gitclient.GitRepo
 	if d.protocol == "ssh" {
-		filename, err := d.getGitSSHKey(job, namespace, d.protocol, reqLogger)
+		filename, err := d.getGitSSHKey(k8sclient, namespace, d.protocol, reqLogger)
 		if err != nil {
 			return fmt.Errorf("Download failed for '%s': %v", repo, err)
 		}
@@ -1687,7 +1685,7 @@ func (d *GitRepoAccessOptions) download(job k8sClient, namespace string) error {
 	} else {
 		// TODO find out and support any other protocols
 		// Just assume http is the only other protocol for now
-		token, err := d.getGitToken(job, namespace, d.protocol, reqLogger)
+		token, err := d.getGitToken(k8sclient, namespace, d.protocol, reqLogger)
 		if err != nil {
 			// Maybe we don't need to exit if no creds are used here
 			reqLogger.Info(fmt.Sprintf("%v", err))
@@ -1709,10 +1707,10 @@ func (d *GitRepoAccessOptions) download(job k8sClient, namespace string) error {
 	return nil
 }
 
-func (d *GitRepoAccessOptions) setupSSHProxy(job k8sClient, namespace string) (string, *sshtunnel.SSHTunnel, error) {
+func (d *GitRepoAccessOptions) setupSSHProxy(k8sclient client.Client, namespace string) (string, *sshtunnel.SSHTunnel, error) {
 	var port string
 	var tunnel *sshtunnel.SSHTunnel
-	proxyAuthMethod, err := d.getProxyAuthMethod(job, namespace)
+	proxyAuthMethod, err := d.getProxyAuthMethod(k8sclient, namespace)
 	if err != nil {
 		return port, tunnel, fmt.Errorf("Error getting proxyAuthMethod: %v", err)
 	}
@@ -1820,7 +1818,7 @@ func (d *GitRepoAccessOptions) getParsedAddress() error {
 	return nil
 }
 
-func (d GitRepoAccessOptions) getProxyAuthMethod(job k8sClient, namespace string) (ssh.AuthMethod, error) {
+func (d GitRepoAccessOptions) getProxyAuthMethod(k8sclient client.Client, namespace string) (ssh.AuthMethod, error) {
 	var proxyAuthMethod ssh.AuthMethod
 
 	name := d.SSHProxy.SSHKeySecretRef.Name
@@ -1833,7 +1831,7 @@ func (d GitRepoAccessOptions) getProxyAuthMethod(job k8sClient, namespace string
 		ns = namespace
 	}
 
-	sshKey, err := job.loadPrivateKey(key, name, ns)
+	sshKey, err := loadPrivateKey(k8sclient, key, name, ns)
 	if err != nil {
 		return proxyAuthMethod, fmt.Errorf("unable to get privkey: %v", err)
 	}
@@ -1844,7 +1842,7 @@ func (d GitRepoAccessOptions) getProxyAuthMethod(job k8sClient, namespace string
 	return proxyAuthMethod, nil
 }
 
-func (d *GitRepoAccessOptions) getGitSSHKey(job k8sClient, namespace, protocol string, reqLogger logr.Logger) (string, error) {
+func (d *GitRepoAccessOptions) getGitSSHKey(k8sclient client.Client, namespace, protocol string, reqLogger logr.Logger) (string, error) {
 	var filename string
 	for _, m := range d.SCMAuthMethods {
 		if m.Host == d.ParsedAddress.host && m.Git.SSH != nil {
@@ -1858,7 +1856,7 @@ func (d *GitRepoAccessOptions) getGitSSHKey(job k8sClient, namespace, protocol s
 			if ns == "" {
 				ns = namespace
 			}
-			sshKey, err := job.loadPrivateKey(key, name, ns)
+			sshKey, err := loadPrivateKey(k8sclient, key, name, ns)
 			if err != nil {
 				return filename, err
 			}
@@ -1872,7 +1870,7 @@ func (d *GitRepoAccessOptions) getGitSSHKey(job k8sClient, namespace, protocol s
 	return filename, nil
 }
 
-func (d *GitRepoAccessOptions) getGitToken(job k8sClient, namespace, protocol string, reqLogger logr.Logger) (string, error) {
+func (d *GitRepoAccessOptions) getGitToken(k8sclient client.Client, namespace, protocol string, reqLogger logr.Logger) (string, error) {
 	var token string
 	var err error
 	for _, m := range d.SCMAuthMethods {
@@ -1887,7 +1885,7 @@ func (d *GitRepoAccessOptions) getGitToken(job k8sClient, namespace, protocol st
 			if ns == "" {
 				ns = namespace
 			}
-			token, err = job.loadPassword(key, name, ns)
+			token, err = loadPassword(k8sclient, key, name, ns)
 			if err != nil {
 				return token, fmt.Errorf("unable to get token: %v", err)
 			}
@@ -1899,9 +1897,9 @@ func (d *GitRepoAccessOptions) getGitToken(job k8sClient, namespace, protocol st
 	return token, nil
 }
 
-func (d GitRepoAccessOptions) commitTfvars(job k8sClient, tfvars, tfvarsFile, confFile, namespace, customBackend string, runOpts RunOptions, reqLogger logr.Logger) {
+func (d GitRepoAccessOptions) commitTfvars(k8sclient client.Client, tfvars, tfvarsFile, confFile, namespace, customBackend string, runOpts RunOptions, reqLogger logr.Logger) {
 	filesToCommit := []string{}
-	err := d.download(job, namespace)
+	err := d.download(k8sclient, namespace)
 	if err != nil {
 		errString := fmt.Sprintf("Could not download repo %v", err)
 		reqLogger.Info(errString)

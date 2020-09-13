@@ -88,15 +88,6 @@ type TerraformConfig struct {
 	Sources []*SrcOpts `json:"sources,omitempty"`
 	Env     []EnvVar   `json:"env,omitempty"`
 
-	// CloudCredentials defines the selector to cloud access keys or roles to
-	// attach to the terraform job executor. If it begines with "kiam-", the
-	// controller will assume this is a role and add the kiam annotation.
-	// Other clouds may have different role based mechanisms so other prefixes
-	// would need to be hard coded in the controller's if statements later.
-	// The default behaviour is to load the CloudCredentials from a secret
-	// as environment vars.
-	CloudCredentials string `json:"cloudProfile,omitempty"`
-
 	// Credentials is an array of credentials generally used for Terraform
 	// providers
 	Credentails []Credentials `json:"credentials,omitempty"`

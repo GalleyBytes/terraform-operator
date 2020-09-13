@@ -54,15 +54,6 @@ spec:
                     when the resource is updated. Omitting this or setting it to false
                     will resort to on demand apply. Defaults to false.
                   type: boolean
-                cloudProfile:
-                  description: CloudCredentials defines the selector to cloud access
-                    keys or roles to attach to the terraform job executor. If it begines
-                    with "kiam-", the controller will assume this is a role and add
-                    the kiam annotation. Other clouds may have different role based
-                    mechanisms so other prefixes would need to be hard coded in the
-                    controller's if statements later. The default behaviour is to
-                    load the CloudCredentials from a secret as environment vars.
-                  type: string
                 credentials:
                   description: Credentials is an array of credentials generally used
                     for Terraform providers
