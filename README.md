@@ -21,9 +21,16 @@ This project is not:
 
 - [Installing Terraform-operator](#install-the-controller-and-crds)
 - [Hello Terraform Operator](#hello-terraform-operator)
-- [Terraform-state](docs/terraform-state.md)
+- [Terraform-state](docs/terraform-state.md) (Pushing State to consul, S3, etc.)
 - [Terraform-provider credentials](docs/provider-credentials.md) (ie Cloud Credentials)
-- [Other credentials](dos/other-credentials.md) (eg Git creds, proxies, etc.)
+- [Operator Actions](docs/operator-actions.md) (Configuring when to run `terraform apply`)
+- [Exporting TFvars](docs/extra-features.md#exporting-tfvars-to-git) (Saving your tfvars for reference elsewhere)
+- [Pre/Post Run Scripts](docs/extra-features.md#the-pre-run-script) (Scripts that run before and after Terraform commands)
+
+**Advanced Topics**
+
+- [Git Authentication](docs/advanced/authentication-for-git.md) (Using SSH Keys and or Tokens with Git)
+- [Using an SSH Proxy](docs/advanced/proxy.md) (Getting to Private and Enterprise Git Servers)
 
 
 ## Architecture

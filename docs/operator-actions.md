@@ -15,4 +15,25 @@ These options are configurable directly under `spec.config` in Terraform Kuberne
 `applyOnDelete` - Automatically apply a `terraform -destroy` when the Kubernetes resource is deleted. _Terraform-operator will not run a destroy command when `ignoreDelete` is set to `true`._
     
 `ignoreDelete` - Do not execute a destroy when the Kubernetes resource gets deleted.
-    
+
+
+## When apply is false
+
+When any of the `applyOn` vars are set as `false`, the user must manually update a Kubernetes ConfigMap.
+
+### 1. Getting the ConfigMap Name
+
+The configMap name is the "`Terraform Kuberentes Resource Name`" + "`-action`". When in doubt, the logs of the pod running Terraform will print the ConfigMap name to update. 
+
+### 2. Updating the ConfigMap
+
+ Update the value of `data.action` with one of following two options:
+
+ - "`apply`" - Will continue the script with `terraform apply` and any [postRun scripts](extra-features.md#the-post-run-script).
+ - "`abort`" - Will exit the terraform-execution pod
+
+
+
+
+
+
