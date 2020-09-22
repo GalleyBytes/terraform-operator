@@ -486,6 +486,7 @@ func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, k
 					"\tHostname %s\n"+
 					"\tIdentityFile ~/.ssh/%s\n",
 					m.Host,
+					m.Host,
 					m.Host)
 			}
 			k := m.Git.SSH.SSHKeySecretRef.Key
