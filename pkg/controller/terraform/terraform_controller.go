@@ -430,10 +430,15 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 	return reconcile.Result{}, nil
 }
 
-func (d GitRepoAccessOptions) TunnelClose() {
+func (d GitRepoAccessOptions) TunnelClose(reqLogger logr.Logger) {
+	reqLogger.V(1).Info("Closing tunnel")
 	if d.tunnel != nil {
 		d.tunnel.Close()
+		reqLogger.V(1).Info("Closed tunnel")
+		return
 	}
+	reqLogger.V(1).Info("TunnelClose called but could not find tunnel to close")
+	return
 }
 
 func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, k8sclient client.Client) (map[string][]byte, error) {
@@ -596,12 +601,35 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 			r.recorder.Event(instance, "Warning", "ConfigError", fmt.Errorf("Error in Spec: %v", err).Error())
 			return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 		}
+
+		err = configRepoAccessOptions.getParsedAddress()
+		if err != nil {
+			return err
+		}
+		reqLogger.V(1).Info("Setting up download options for config repo access")
+
+		if (tfv1alpha1.ProxyOpts{}) != configRepoAccessOptions.SSHProxy {
+			if strings.Contains(configRepoAccessOptions.protocol, "http") {
+				err := configRepoAccessOptions.startHTTPSProxy(r.client, instance.Namespace, reqLogger)
+				if err != nil {
+					reqLogger.Error(err, "failed to start ssh proxy")
+					return err
+				}
+			} else if configRepoAccessOptions.protocol == "ssh" {
+				err := configRepoAccessOptions.startSSHProxy(r.client, instance.Namespace, reqLogger)
+				if err != nil {
+					reqLogger.Error(err, "failed to start ssh proxy")
+					return err
+				}
+				defer configRepoAccessOptions.TunnelClose(reqLogger.WithValues("Spec", "config.source"))
+			}
+		}
+
 		err = configRepoAccessOptions.download(r.client, instance.Namespace)
 		if err != nil {
 			r.recorder.Event(instance, "Warning", "DownloadError", fmt.Errorf("Error in download: %v", err).Error())
 			return fmt.Errorf("Error in download: %v", err)
 		}
-		defer configRepoAccessOptions.TunnelClose()
 
 		reqLogger.V(1).Info(fmt.Sprintf("Config was downloaded and updated GitRepoAccessOptions: %+v", configRepoAccessOptions))
 
@@ -684,6 +712,11 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 			r.recorder.Event(instance, "Warning", "ConfigError", fmt.Errorf("Error getting git repo access options: %v", err).Error())
 			return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 		}
+		err = exportRepoAccessOptions.getParsedAddress()
+		if err != nil {
+			return fmt.Errorf("Error parsing export repo address %s", err)
+		}
+
 		// TODO decide what to do on errors
 		// Closing the tunnel from within this function
 		go exportRepoAccessOptions.commitTfvars(r.client, tfvars, e.TFVarsFile, e.ConfFile, instance.Namespace, instance.Spec.Config.CustomBackend, runOpts, reqLogger)
@@ -1602,86 +1635,18 @@ func (d *GitRepoAccessOptions) download(k8sclient client.Client, namespace strin
 	// for this yet.
 	// TODO document available options for sources
 	reqLogger := _logf.WithValues("Download", d.Address, "Namespace", namespace, "Function", "download")
-	reqLogger.Info("Starting download function")
-	err := d.getParsedAddress()
-	if err != nil {
-		return fmt.Errorf("Error parsing address: %v", err)
-	}
-	repo := d.repo
-	uri := d.uri
-
-	if (tfv1alpha1.ProxyOpts{}) != d.SSHProxy {
-		reqLogger.Info("Setting up a proxy")
-		proxyAuthMethod, err := d.getProxyAuthMethod(k8sclient, namespace)
-		if err != nil {
-			return fmt.Errorf("Error getting proxyAuthMethod: %v", err)
-		}
-
-		if strings.Contains(d.protocol, "http") {
-			proxyServer := ""
-			if strings.Contains(d.host, ":") {
-				proxyServer = d.SSHProxy.Host
-			} else {
-				fmt.Sprintf("%s:22", d.SSHProxy.Host)
-			}
-
-			hostKey := goSocks5.NewHostKey()
-			duration := time.Duration(60 * time.Second)
-			socks5Proxy := goSocks5.NewSocks5Proxy(hostKey, nil, duration)
-
-			err := socks5Proxy.Start(d.SSHProxy.User, proxyServer, proxyAuthMethod)
-			if err != nil {
-				return fmt.Errorf("unable to start socks5: %v", err)
-			}
-			time.Sleep(100 * time.Millisecond)
-
-			socks5Addr, err := socks5Proxy.Addr()
-			if err != nil {
-				return fmt.Errorf("unable to get socks5Addr: %v", err)
-			}
-
-			dialer, err := proxy.SOCKS5("tcp", socks5Addr, nil, proxy.Direct)
-			if err != nil {
-				return fmt.Errorf("unable to get dialer: %v", err)
-			}
-
-			httpTransport := &http.Transport{Dial: dialer.Dial}
-			// set our socks5 as the dialer
-			// httpTransport.Dial = dialer.Dial
-			httpClient := &http.Client{Transport: httpTransport}
-
-			gitTransportClient.InstallProtocol("http", githttp.NewClient(httpClient))
-			gitTransportClient.InstallProtocol("https", githttp.NewClient(httpClient))
-		} else if d.protocol == "ssh" {
-			port, tunnel, err := d.setupSSHProxy(k8sclient, namespace)
-			if err != nil {
-				return err
-			}
-
-			if os.Getenv("DEBUG_SSHTUNNEL") != "" {
-				tunnel.Log = log.New(os.Stdout, "", log.Ldate|log.Lmicroseconds)
-			}
-			d.tunnel = tunnel
-
-			if strings.Index(uri, "/") != 0 {
-				uri = "/" + uri
-			}
-			// configure auth with go git options
-			repo = fmt.Sprintf("ssh://%s@127.0.0.1:%s%s", d.user, port, uri)
-		}
-	}
-	reqLogger.Info(fmt.Sprintf("Getting ready to download source %s", repo))
+	reqLogger.V(1).Info(fmt.Sprintf("Getting ready to download source %s", d.repo))
 
 	var gitRepo gitclient.GitRepo
 	if d.protocol == "ssh" {
 		filename, err := d.getGitSSHKey(k8sclient, namespace, d.protocol, reqLogger)
 		if err != nil {
-			return fmt.Errorf("Download failed for '%s': %v", repo, err)
+			return fmt.Errorf("Download failed for '%s': %v", d.repo, err)
 		}
 		defer os.Remove(filename)
-		gitRepo, err = gitclient.GitSSHDownload(repo, d.Directory, filename, d.hash, reqLogger)
+		gitRepo, err = gitclient.GitSSHDownload(d.repo, d.Directory, filename, d.hash, reqLogger)
 		if err != nil {
-			return fmt.Errorf("Download failed for '%s': %v", repo, err)
+			return fmt.Errorf("Download failed for '%s': %v", d.repo, err)
 		}
 	} else {
 		// TODO find out and support any other protocols
@@ -1692,13 +1657,14 @@ func (d *GitRepoAccessOptions) download(k8sclient client.Client, namespace strin
 			reqLogger.Info(fmt.Sprintf("%v", err))
 		}
 
-		gitRepo, err = gitclient.GitHTTPDownload(repo, d.Directory, "git", token, d.hash)
+		gitRepo, err = gitclient.GitHTTPDownload(d.repo, d.Directory, "git", token, d.hash)
 		if err != nil {
-			return fmt.Errorf("Download failed for '%s': %v", repo, err)
+			return fmt.Errorf("Download failed for '%s': %v", d.repo, err)
 		}
 	}
 
 	// Set the hash and return
+	var err error
 	d.Client = gitRepo
 	d.hash, err = gitRepo.HashString()
 	if err != nil {
@@ -1706,6 +1672,74 @@ func (d *GitRepoAccessOptions) download(k8sclient client.Client, namespace strin
 	}
 	reqLogger.Info(fmt.Sprintf("Hash: %v", d.hash))
 	return nil
+}
+
+func (d *GitRepoAccessOptions) startHTTPSProxy(k8sclient client.Client, namespace string, reqLogger logr.Logger) error {
+	proxyAuthMethod, err := d.getProxyAuthMethod(k8sclient, namespace)
+	if err != nil {
+		return fmt.Errorf("Error getting proxyAuthMethod: %v", err)
+	}
+
+	reqLogger.V(1).Info("Setting up http proxy")
+	proxyServer := ""
+	if strings.Contains(d.host, ":") {
+		proxyServer = d.SSHProxy.Host
+	} else {
+		fmt.Sprintf("%s:22", d.SSHProxy.Host)
+	}
+
+	hostKey := goSocks5.NewHostKey()
+	duration := time.Duration(60 * time.Second)
+	socks5Proxy := goSocks5.NewSocks5Proxy(hostKey, nil, duration)
+
+	err = socks5Proxy.Start(d.SSHProxy.User, proxyServer, proxyAuthMethod)
+	if err != nil {
+		return fmt.Errorf("unable to start socks5: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	socks5Addr, err := socks5Proxy.Addr()
+	if err != nil {
+		return fmt.Errorf("unable to get socks5Addr: %v", err)
+	}
+
+	dialer, err := proxy.SOCKS5("tcp", socks5Addr, nil, proxy.Direct)
+	if err != nil {
+		return fmt.Errorf("unable to get dialer: %v", err)
+	}
+
+	httpTransport := &http.Transport{Dial: dialer.Dial}
+	// set our socks5 as the dialer
+	// httpTransport.Dial = dialer.Dial
+	httpClient := &http.Client{Transport: httpTransport}
+
+	gitTransportClient.InstallProtocol("http", githttp.NewClient(httpClient))
+	gitTransportClient.InstallProtocol("https", githttp.NewClient(httpClient))
+	return nil
+}
+
+func (d *GitRepoAccessOptions) startSSHProxy(k8sclient client.Client, namespace string, reqLogger logr.Logger) error {
+	uri := d.uri
+
+	reqLogger.V(1).Info(fmt.Sprintf("Setting up ssh proxy for %s with job: %+v", namespace, d))
+	port, tunnel, err := d.setupSSHProxy(k8sclient, namespace)
+	if err != nil {
+		return err
+	}
+
+	if os.Getenv("DEBUG_SSHTUNNEL") != "" {
+		tunnel.Log = log.New(os.Stdout, "", log.Ldate|log.Lmicroseconds)
+	}
+	d.tunnel = tunnel
+
+	if strings.Index(uri, "/") != 0 {
+		uri = "/" + uri
+	}
+	reqLogger.V(1).Info("SSH proxy is ready for usage")
+	// configure auth with go git options
+	d.repo = fmt.Sprintf("ssh://%s@127.0.0.1:%s%s", d.user, port, uri)
+	return nil
+
 }
 
 func (d *GitRepoAccessOptions) setupSSHProxy(k8sclient client.Client, namespace string) (string, *sshtunnel.SSHTunnel, error) {
@@ -1900,15 +1934,31 @@ func (d *GitRepoAccessOptions) getGitToken(k8sclient client.Client, namespace, p
 
 func (d GitRepoAccessOptions) commitTfvars(k8sclient client.Client, tfvars, tfvarsFile, confFile, namespace, customBackend string, runOpts RunOptions, reqLogger logr.Logger) {
 	filesToCommit := []string{}
+
+	reqLogger.V(1).Info("Setting up download options for export")
+	if (tfv1alpha1.ProxyOpts{}) != d.SSHProxy {
+		if strings.Contains(d.protocol, "http") {
+			err := d.startHTTPSProxy(k8sclient, namespace, reqLogger)
+			if err != nil {
+				reqLogger.Error(err, "failed to start ssh proxy")
+				return
+			}
+		} else if d.protocol == "ssh" {
+			err := d.startSSHProxy(k8sclient, namespace, reqLogger)
+			if err != nil {
+				reqLogger.Error(err, "failed to start ssh proxy")
+				return
+			}
+			defer d.TunnelClose(reqLogger.WithValues("Spec", "exportRepo"))
+		}
+	}
 	err := d.download(k8sclient, namespace)
 	if err != nil {
 		errString := fmt.Sprintf("Could not download repo %v", err)
 		reqLogger.Info(errString)
 		return
 	}
-	defer reqLogger.V(1).Info("exportRepoAccessOptions Closed connections")
-	defer d.TunnelClose()
-	defer reqLogger.V(1).Info("exportRepoAccessOptions Closing connections")
+
 	// Create a file in the external repo
 	err = d.Client.CheckoutBranch("")
 	if err != nil {
