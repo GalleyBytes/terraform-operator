@@ -5,7 +5,7 @@ metadata:
   labels:
     type: irsa
 spec:
-  sshProxy:
+  sshTunnel:
     host: 10.0.0.200
     user: admin
     sshKeySecretRef:
@@ -17,29 +17,29 @@ spec:
         requireProxy: true
         sshKeySecretRef:
           name: gitsshkey
-  stack:
-    terraformVersion: 0.12.23
-    source:
-      address: git@github.com:isaaguilar/my-tf-modules.git//stacks/irsa-role-and-policy
-  config:
-    customBackend: |-
-      terraform {
-        backend "s3" {
-          key            = "tf-operator-example.tfstate"
-          region         = "us-east-1"
-          bucket         = "backend-terraform-isaaguilar"
-          dynamodb_table = "backend-terraform-isaaguilar-lock"
-          profile        = "default"
-        }
+  
+  terraformVersion: 0.12.23
+  terraformModule:
+    address: git@github.com:isaaguilar/my-tf-modules.git//stacks/irsa-role-and-policy
+
+  customBackend: |-
+    terraform {
+      backend "s3" {
+        key            = "tf-operator-example.tfstate"
+        region         = "us-east-1"
+        bucket         = "backend-terraform-isaaguilar"
+        dynamodb_table = "backend-terraform-isaaguilar-lock"
+        profile        = "default"
       }
-    applyOnCreate: false
-    applyOnUpdate: false
-    applyOnDelete: true
-    reconcile:
-      enable: false
-      syncPeriod: 60 # int in minutes
-    credentials:
-    - secretNameRef:
-       name: aws-session-credentials    
-    sources:
-    - address: git@git.example.com:cloudops/tfvars.git//irsa-example
+    }
+  applyOnCreate: false
+  applyOnUpdate: false
+  applyOnDelete: true
+  reconcile:
+    enable: false
+    syncPeriod: 60 # int in minutes
+  credentials:
+  - secretNameRef:
+      name: aws-session-credentials    
+  sources:
+  - address: git@git.example.com:cloudops/tfvars.git//irsa-example

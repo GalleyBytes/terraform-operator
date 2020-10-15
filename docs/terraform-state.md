@@ -32,28 +32,27 @@ Hashicorp console must be installed with `--namespace tf-system` because it is h
 Consul can easily be configured for HA simply by setting higher `server.replicas` and `server.bootstrapExpect` values.
 
 
-## Overriding the Consul override
+## Custom Terraform Backend
 
-Often times, there is a need to use a different backend. Using the "custom backend" tf-operator configuration, users can define their own backend. This is done by simply adding the backend hcl in `spec.config.customBackend`. 
+Often times, there is a need to use a different backend. Using the "custom backend" tf-operator configuration, users can define their own backend. This is done by simply adding the backend hcl in `spec.customBackend`. 
 
 Example: 
 
-```
+```yaml
 apiVersion: tf.isaaguilar.com/v1alpha1
 kind: Terraform
 spec:
 # (...)
-  config:
-    customBackend: |-
-      terraform {
-        backend "s3" {
-          key            = "isaaguilar/use1/irsa-role-and-policy/tf-operator-example.tfstate"
-          region         = "us-east-1"
-          bucket         = "terraform-isaaguilar"
-          dynamodb_table = "terraform-isaaguilar-lock"
-          profile        = "isaaguilar"
-        }
+  customBackend: |-
+    terraform {
+      backend "s3" {
+        key            = "isaaguilar/use1/irsa-role-and-policy/tf-operator-example.tfstate"
+        region         = "us-east-1"
+        bucket         = "terraform-isaaguilar"
+        dynamodb_table = "terraform-isaaguilar-lock"
+        profile        = "isaaguilar"
       }
+    }
 ```
 
 In this example, the tfstate will be pushed to s3. To handle this properly, the user will also need to provide AWS credentials to the terraform-execution pod. See the [credentials.md](provider-credentials.md) for details.

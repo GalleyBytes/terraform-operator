@@ -4,7 +4,7 @@ Terraform-operator has several options it can handle when it comes to running `t
 
 ## Options
 
-These options are configurable directly under `spec.config` in Terraform Kubernetes manifest.
+These options are configurable directly under `spec` in the Terraform Kubernetes manifest.
 
 `applyOnCreate` -  Automatically apply Terraform the first time the Kubernetes resource is created. A "first time run" is when the Kubernetes manifest for the Terraform resource has a `metadata.generation` equal to 1.
     

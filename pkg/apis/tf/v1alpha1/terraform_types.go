@@ -27,64 +27,21 @@ type TerraformSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
 	// Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html
-	Stack  *TerraformStack  `json:"stack"`
-	Config *TerraformConfig `json:"config"`
 
-	// TODO refactor to SSHTunnel
-	SSHProxy *ProxyOpts `json:"sshProxy,omitempty"`
-
-	// SCMAuthMethods define multiple SCMs that require tokens/keys
-	SCMAuthMethods []SCMAuthMethod `json:"scmAuthMethods,omitempty"`
-}
-
-// SCMAuthMethod definition of SCMs that require tokens/keys
-type SCMAuthMethod struct {
-	Host string `json:"host"`
-	// SCM define the SCM for a host which is defined at a higher-level
-	Git *GitSCM `json:"git,omitempty"`
-}
-
-// GitSCM define the auth methods of git
-type GitSCM struct {
-	SSH   *GitSSH   `json:"ssh,omitempty"`
-	HTTPS *GitHTTPS `json:"https,omitempty"`
-}
-
-// GitSSH configurs the setup for git over ssh with optional proxy
-type GitSSH struct {
-	RequireProxy    bool             `json:"requireProxy,omitempty"`
-	SSHKeySecretRef *SSHKeySecretRef `json:"sshKeySecretRef"`
-}
-
-// GitHTTPS configures the setup for git over https using tokens. Proxy is not
-// supported in the terraform job pod at this moment
-// TODO HTTPS Proxy support
-type GitHTTPS struct {
-	RequireProxy   bool            `json:"requireProxy,omitempty"`
-	TokenSecretRef *TokenSecretRef `json:"tokenSecretRef"`
-}
-
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-
-// TerraformList contains a list of Terraform
-type TerraformList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []Terraform `json:"items"`
-}
-
-// TerraformStack points to the stack root
-type TerraformStack struct {
-	ConfigMap string   `json:"configMap,omitempty"`
-	Source    *SrcOpts `json:"source,omitempty"`
-
-	// TerraformVersion helps the operator decide which terraform image to
-	// run the terraform in. Defaults to v0.11.14
+	// TerraformVersion helps the operator decide which image tag to pull for
+	// the terraform runner. Defaults to "0.11.14"
 	TerraformVersion string `json:"terraformVersion,omitempty"`
-}
 
-// TerraformConfig points to the tfvars to deploy against the stack
-type TerraformConfig struct {
+	// TerraformRunner gives the user the ability to inject their own container
+	// image to execute terraform. This is very helpful for users who need to
+	// have a certain toolset installed on their images, or who can't pull
+	// public images, such as the default image "isaaguilar/tfops".
+	TerraformRunner string `json:"terraformRunner,omitempty"`
+
+	// TerraformModule is the terraform module scm address. Currently supports
+	// git protocol over SSH or HTTPS
+	TerraformModule *SrcOpts `json:"terraformModule"`
+
 	Sources []*SrcOpts `json:"sources,omitempty"`
 	Env     []EnvVar   `json:"env,omitempty"`
 
@@ -140,6 +97,50 @@ type TerraformConfig struct {
 	// "postrun.sh". This means the user can alternatively pass in a
 	// posterun.sh file via config "Sources".
 	PostrunScript string `json:"postrunScript,omitempty"`
+
+	// SSHTunnel can be defined for pulling from scm sources that cannot be
+	// accessed by the network the operator/runner runs in. An example is
+	// Enterprise Github servers running on a private network.
+	SSHTunnel *ProxyOpts `json:"sshTunnel,omitempty"`
+
+	// SCMAuthMethods define multiple SCMs that require tokens/keys
+	SCMAuthMethods []SCMAuthMethod `json:"scmAuthMethods,omitempty"`
+}
+
+// SCMAuthMethod definition of SCMs that require tokens/keys
+type SCMAuthMethod struct {
+	Host string `json:"host"`
+	// SCM define the SCM for a host which is defined at a higher-level
+	Git *GitSCM `json:"git,omitempty"`
+}
+
+// GitSCM define the auth methods of git
+type GitSCM struct {
+	SSH   *GitSSH   `json:"ssh,omitempty"`
+	HTTPS *GitHTTPS `json:"https,omitempty"`
+}
+
+// GitSSH configurs the setup for git over ssh with optional proxy
+type GitSSH struct {
+	RequireProxy    bool             `json:"requireProxy,omitempty"`
+	SSHKeySecretRef *SSHKeySecretRef `json:"sshKeySecretRef"`
+}
+
+// GitHTTPS configures the setup for git over https using tokens. Proxy is not
+// supported in the terraform job pod at this moment
+// TODO HTTPS Proxy support
+type GitHTTPS struct {
+	RequireProxy   bool            `json:"requireProxy,omitempty"`
+	TokenSecretRef *TokenSecretRef `json:"tokenSecretRef"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// TerraformList contains a list of Terraform
+type TerraformList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Terraform `json:"items"`
 }
 
 // ExportRepo is used to allow the tfvars passed into the job to also be
@@ -202,7 +203,7 @@ type SrcOpts struct {
 	Extras []string `json:"extras,omitempty"`
 }
 
-// SSHProxy configures ssh tunnel/socks5 for downloading ssh/https resources
+// ProxyOpts configures ssh tunnel/socks5 for downloading ssh/https resources
 type ProxyOpts struct {
 	Host            string          `json:"host,omitempty"`
 	User            string          `json:"user,omitempty"`
@@ -219,7 +220,7 @@ type SSHKeySecretRef struct {
 	Key string `json:"key,omitempty"`
 }
 
-// TokenSecetRef defines the token or password that can be used to log into a system (eg git)
+// TokenSecretRef defines the token or password that can be used to log into a system (eg git)
 type TokenSecretRef struct {
 	// Name the secret name that has the token or password
 	Name string `json:"name"`
@@ -233,8 +234,8 @@ type TokenSecretRef struct {
 // For example, in AWS, the AWS Terraform Provider uses the default credential chain
 // of the AWS SDK, one of which are environment variables (eg AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)
 type Credentials struct {
-	// FromEnvs will load environment variables into the terraform execution pod
-	// from kubernetes secrets
+	// SecretNameRef will load environment variables into the terraform runner
+	// from a kubernetes secret
 	SecretNameRef SecretNameRef `json:"secretNameRef,omitempty"`
 	// AWSCredentials contains the different methods to load AWS credentials
 	// for the Terraform AWS Provider. If using AWS_ACCESS_KEY_ID and/or environment
@@ -285,7 +286,7 @@ type AWSCredentials struct {
 	KIAM string `json:"kiam,omitempty"`
 }
 
-// SecetNameRef is the name of the kubernetes secret to use
+// SecretNameRef is the name of the kubernetes secret to use
 type SecretNameRef struct {
 	// Name of the secret
 	Name string `json:"name"`

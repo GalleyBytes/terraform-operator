@@ -3,30 +3,30 @@ kind: Terraform
 metadata:
   name: operator-actions
 spec:
-  stack:
-    terraformVersion: 0.12.23
-    source:
-      address: <tf-module-git-repo>
-  config:
-    ignoreDelete: true
-    credentials:
-    - secretNameRef:
-       name: aws-session-credentials    
-    env:
-    - name: TF_VAR_name
-      value: value      # fulfills the terraform module's "${var.name}"
+  
+  terraformVersion: 0.12.23
+  terraformModule:
+    address: <tf-module-git-repo>
 
-    # ----- Actions: -------
+  ignoreDelete: true
+  credentials:
+  - secretNameRef:
+      name: aws-session-credentials    
+  env:
+  - name: TF_VAR_name
+    value: value      # fulfills the terraform module's "${var.name}"
 
-    # Automatically apply terraform the first time the terraform resource is created
-    applyOnCreate: true
+  # ----- Actions: -------
 
-    # Automatically apply terraform when the terraform resource is updated
-    applyOnUpdate: true
+  # Automatically apply terraform the first time the terraform resource is created
+  applyOnCreate: true
 
-    # Automatically apply terraform destroy when they terraform resource is deleted.
-    # Terraform-operator will not run a destroy command when ignoreDelete is set to true.
-    applyOnDelete: true
+  # Automatically apply terraform when the terraform resource is updated
+  applyOnUpdate: true
 
-    # Do not execture a terraform destroy when the terraform resource gets deleted
-    ignoreDelete: true
+  # Automatically apply terraform destroy when they terraform resource is deleted.
+  # Terraform-operator will not run a destroy command when ignoreDelete is set to true.
+  applyOnDelete: true
+
+  # Do not execture a terraform destroy when the terraform resource gets deleted
+  ignoreDelete: true

@@ -86,20 +86,128 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 				Description: "TerraformSpec defines the desired state of Terraform",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
-					"stack": {
+					"terraformVersion": {
 						SchemaProps: spec.SchemaProps{
-							Description: "INSERT ADDITIONAL SPEC FIELDS - desired state of cluster Important: Run \"operator-sdk generate k8s\" to regenerate code after modifying this file Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html",
-							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformStack"),
+							Description: "TerraformVersion helps the operator decide which image tag to pull for the terraform runner. Defaults to \"0.11.14\"",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
-					"config": {
+					"terraformRunner": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformConfig"),
+							Description: "TerraformRunner gives the user the ability to inject their own container image to execute terraform. This is very helpful for users who need to have a certain toolset installed on their images, or who can't pull public images, such as the default image \"isaaguilar/tfops\".",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
-					"sshProxy": {
+					"terraformModule": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts"),
+							Description: "TerraformModule is the terraform module scm address. Currently supports git protocol over SSH or HTTPS",
+							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SrcOpts"),
+						},
+					},
+					"sources": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SrcOpts"),
+									},
+								},
+							},
+						},
+					},
+					"env": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.EnvVar"),
+									},
+								},
+							},
+						},
+					},
+					"credentials": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Credentials is an array of credentials generally used for Terraform providers",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Credentials"),
+									},
+								},
+							},
+						},
+					},
+					"applyOnCreate": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ApplyOnCreate is used to apply any planned changes when the resource is first created. Omitting this or setting it to false will resort to on demand apply. Defaults to false.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+					"applyOnUpdate": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ApplyOnUpdate is used to apply any planned changes when the resource is updated. Omitting this or setting it to false will resort to on demand apply. Defaults to false.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+					"applyOnDelete": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ApplyOnDelete is used to apply the destroy plan when the terraform resource is being deleted. Omitting this or setting it to false will require \"on-demand\" apply. Defaults to false.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+					"ignoreDelete": {
+						SchemaProps: spec.SchemaProps{
+							Description: "IgnoreDelete will bypass the finalization process and remove the tf resource without running any delete jobs.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+					"reconcile": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Reconcile are the settings used for auto-reconciliation",
+							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ReconcileTerraformDeployment"),
+						},
+					},
+					"customBackend": {
+						SchemaProps: spec.SchemaProps{
+							Description: "CustomBackend will allow the user to configure the backend of their choice. If this is omitted, the default consul template will be used.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"exportRepo": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ExportRepo allows the user to define",
+							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ExportRepo"),
+						},
+					},
+					"prerunScript": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PrerunScript lets the user define a script that will run before terraform commands are executed on the terraform-execution pod. The pod will have already set up cloudProfile (eg cloud credentials) so the script can make use of it.\n\nSetting this field will create a key in the tfvars configmap called \"prerun.sh\". This means the user can also pass in a prerun.sh file via config \"Sources\".",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"postrunScript": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PostrunScript lets the user define a script that will run after terraform commands are executed on the terraform-execution pod. The pod will have already set up cloudProfile (eg cloud credentials) so the script can make use of it.\n\nSetting this field will create a key in the tfvars configmap called \"postrun.sh\". This means the user can alternatively pass in a posterun.sh file via config \"Sources\".",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"sshTunnel": {
+						SchemaProps: spec.SchemaProps{
+							Description: "SSHTunnel can be defined for pulling from scm sources that cannot be accessed by the network the operator/runner runs in. An example is Enterprise Github servers running on a private network.",
+							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts"),
 						},
 					},
 					"scmAuthMethods": {
@@ -116,11 +224,11 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 						},
 					},
 				},
-				Required: []string{"stack", "config"},
+				Required: []string{"terraformModule"},
 			},
 		},
 		Dependencies: []string{
-			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformConfig", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformStack"},
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Credentials", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.EnvVar", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ExportRepo", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ReconcileTerraformDeployment", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SrcOpts"},
 	}
 }
 

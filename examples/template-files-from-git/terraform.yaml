@@ -3,36 +3,36 @@ kind: Terraform
 metadata:
   name: template-files-from-git
 spec:
-  stack:
-    terraformVersion: 0.12.23
-    source:
-      address: <tf-module-git-repo>
-  config:
-    ignoreDelete: true
-    credentials:
-    - secretNameRef:
-       name: aws-session-credentials    
+  
+  terraformVersion: 0.12.23
+  terraformModule:
+    address: <tf-module-git-repo>
 
-    # ----- Template files from git example below: -------
+  ignoreDelete: true
+  credentials:
+  - secretNameRef:
+      name: aws-session-credentials    
 
-    sources:
-    - address: <tf-module-git-repo>.git//tf-templates
-      # This will pull in the template files contained within this directory and
-      # inject it into the terraform execution pod which can be referenced from
-      # the root of the terrafrom plan command.
+  # ----- Template files from git example below: -------
 
-    - address: <resources-git-repo>.git//tf-templates/some/special/file.tpl.json
-      extras:
-      - is-file
-      # The `is-file` extras tells terraform-operator that the file in this
-      # resource is a file, not a directory which is the default. Notice that
-      # even though the file is embedded inside a path, when it gets injected
-      # into the terraform execution pod, it is placed at the root of the
-      # terraform plan command.
+  sources:
+  - address: <tf-module-git-repo>.git//tf-templates
+    # This will pull in the template files contained within this directory and
+    # inject it into the terraform execution pod which can be referenced from
+    # the root of the terrafrom plan command.
 
-    # Example of using a template that has been pulled into the terraform execution pod:
-    env:
-    - name: TF_VAR_my_template
-      value: "./my.tpl.json"         # fulfills the terraform module's "${var.my_template}"
-    - name: TF_VAR_my_other_template
-      value: "./file.tpl.json"       # fulfills the terraform module's "${var.my_other_template}"
+  - address: <resources-git-repo>.git//tf-templates/some/special/file.tpl.json
+    extras:
+    - is-file
+    # The `is-file` extras tells terraform-operator that the file in this
+    # resource is a file, not a directory which is the default. Notice that
+    # even though the file is embedded inside a path, when it gets injected
+    # into the terraform execution pod, it is placed at the root of the
+    # terraform plan command.
+
+  # Example of using a template that has been pulled into the terraform execution pod:
+  env:
+  - name: TF_VAR_my_template
+    value: "./my.tpl.json"         # fulfills the terraform module's "${var.my_template}"
+  - name: TF_VAR_my_other_template
+    value: "./file.tpl.json"       # fulfills the terraform module's "${var.my_other_template}"

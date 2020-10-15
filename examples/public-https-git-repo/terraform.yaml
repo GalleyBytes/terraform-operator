@@ -6,15 +6,15 @@ kind: Terraform
 metadata:
   name: public-https-git-repo
 spec:
-  stack:
-    terraformVersion: 0.12.23
-    source:
-      address: https://github.com/isaaguilar/simple-aws-tf-modules.git//s3-bucket
-  config:
-    ignoreDelete: true
-    credentials:
-    - secretNameRef:
-       name: aws-session-credentials    
-    env:
-    - name: TF_VAR_name
-      value: value      # fulfills the terraform module's "${var.name}"
+  
+  terraformVersion: 0.12.23
+  terraformModule:
+    address: https://github.com/isaaguilar/simple-aws-tf-modules.git//s3-bucket
+
+  ignoreDelete: true
+  credentials:
+  - secretNameRef:
+      name: aws-session-credentials    
+  env:
+  - name: TF_VAR_name
+    value: value      # fulfills the terraform module's "${var.name}"

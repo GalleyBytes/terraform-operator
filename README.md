@@ -77,25 +77,25 @@ Check out the [examples](examples) directory to see the different options tf-ope
 Apply your first Terraform resource by running this _hello_world_ example:
 
 ```bash
-$ printf 'apiVersion: tf.isaaguilar.com/v1alpha1
+printf 'apiVersion: tf.isaaguilar.com/v1alpha1
 kind: Terraform
 metadata:
   name: tf-operator-test
 spec:
-  stack:
-    terraformVersion: 0.12.23
-    source:
-      address: https://github.com/cloudposse/terraform-aws-test-module.git
-  config:
-    customBackend: |-
-      terraform {
-        backend "local" {
-          path = "relative/path/to/terraform.tfstate"
-        }
+  
+  terraformVersion: 0.12.23
+  terraformModule:
+    address: https://github.com/cloudposse/terraform-aws-test-module.git
+  
+  customBackend: |-
+    terraform {
+      backend "local" {
+        path = "relative/path/to/terraform.tfstate"
       }
-    applyOnCreate: true
-    applyOnUpdate: true
-    ignoreDelete: true
+    }
+  applyOnCreate: true
+  applyOnUpdate: true
+  ignoreDelete: true
 '|kubectl apply -f-
 ```
 

@@ -16,10 +16,9 @@ apiVersion: tf.isaaguilar.com/v1alpha1
 kind: Terraform
 # (...)
 spec:
-  config:
-    credentials: 
-    - secretNameRef:
-        name: aws-session-credentials
+  credentials: 
+  - secretNameRef:
+      name: aws-session-credentials
 ```
 
 
@@ -34,10 +33,9 @@ apiVersion: tf.isaaguilar.com/v1alpha1
 kind: Terraform
 # (...)
 spec:
-  config:
-    credentials: 
-    - aws:
-        kiam: my-kiam-rolename
+  credentials: 
+  - aws:
+      kiam: my-kiam-rolename
 ``` 
 
 ## AWS Credentials via IRSA (IAM Roles for Service Accounts)
@@ -77,8 +75,7 @@ apiVersion: tf.isaaguilar.com/v1alpha1
 kind: Terraform
 # (...)
 spec:
-  config:
-    credentials: 
-    - aws:
-        irsa: arn:aws:iam::111222333444:role/my-irsa-role
+  credentials: 
+  - aws:
+      irsa: arn:aws:iam::111222333444:role/my-irsa-role
 ```

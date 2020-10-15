@@ -3,37 +3,37 @@ kind: Terraform
 metadata:
   name: tfvar-file-from-git
 spec:
-  stack:
-    terraformVersion: 0.12.23
-    source:
-      address: <tf-module-git-repo>
-  config:
-    ignoreDelete: true
-    credentials:
-    - secretNameRef:
-       name: aws-session-credentials    
+  
+  terraformVersion: 0.12.23
+  terraformModule:
+    address: <tf-module-git-repo>
 
-    # ----- TFVars from git example below: -------
+  ignoreDelete: true
+  credentials:
+  - secretNameRef:
+      name: aws-session-credentials    
 
-    sources:
-    - address: <tfvars-git-repo>.git//region/stack/name
-      # This will pull in the tfvar files contained within this directory and
-      # inject it into the terraform execution pod. Caution: this will consume
-      # all tfvars with a .tfvars extension in this directory.
+  # ----- TFVars from git example below: -------
 
-    - address: <tfvars-git-repo>.git//region/stack/name/specific-file.tfvars
-      extras:
-      - is-file
-      # The `is-file` extras tells terraform-operator that the file in this
-      # resource is a file, not a directory which is the default. Becuase the
-      # filename's extension is `.tfvars`, tf-operator understands that these
-      # are tfvars and they will be applied at runtime in the terraform
-      # execution pod.
+  sources:
+  - address: <tfvars-git-repo>.git//region/stack/name
+    # This will pull in the tfvar files contained within this directory and
+    # inject it into the terraform execution pod. Caution: this will consume
+    # all tfvars with a .tfvars extension in this directory.
 
-    # The tf-operator treats environment variables as overrides to tfvars from
-    # files. This is inconsistent with terraform's normal treatment of tfvars.
-    # This behaviour is subject to change as this design hasn't been finalized.
-    env:
-    - name: TF_VAR_foo
-      value: bar        # fulfills the terraform module's "${var.foo}" and
-                        # overrides "foo" if defined in tfvars file above
+  - address: <tfvars-git-repo>.git//region/stack/name/specific-file.tfvars
+    extras:
+    - is-file
+    # The `is-file` extras tells terraform-operator that the file in this
+    # resource is a file, not a directory which is the default. Becuase the
+    # filename's extension is `.tfvars`, tf-operator understands that these
+    # are tfvars and they will be applied at runtime in the terraform
+    # execution pod.
+
+  # The tf-operator treats environment variables as overrides to tfvars from
+  # files. This is inconsistent with terraform's normal treatment of tfvars.
+  # This behaviour is subject to change as this design hasn't been finalized.
+  env:
+  - name: TF_VAR_foo
+    value: bar        # fulfills the terraform module's "${var.foo}" and
+                      # overrides "foo" if defined in tfvars file above

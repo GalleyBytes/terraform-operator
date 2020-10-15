@@ -11,15 +11,15 @@ spec:
         sshKeySecretRef:
           name: git-sshkey-k8s-secret
           key: id_rsa
-  stack:
-    terraformVersion: 0.12.23
-    source:
-      address: git@github.com:isaaguilar/private-aws-tf-modules.git//s3-bucket
-  config:
-    ignoreDelete: true
-    credentials:
-    - secretNameRef:
-       name: aws-session-credentials    
-    env:
-    - name: TF_VAR_name
-      value: value      # fulfills the terraform module's "${var.name}"
+  
+  terraformVersion: 0.12.23
+  terraformModule:
+    address: git@github.com:isaaguilar/private-aws-tf-modules.git//s3-bucket
+
+  ignoreDelete: true
+  credentials:
+  - secretNameRef:
+      name: aws-session-credentials    
+  env:
+  - name: TF_VAR_name
+    value: value      # fulfills the terraform module's "${var.name}"

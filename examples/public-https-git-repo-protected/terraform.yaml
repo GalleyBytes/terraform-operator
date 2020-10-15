@@ -14,15 +14,15 @@ spec:
         tokenSecretRef:
           name: git-token-k8s-secret
           key: token
-  stack:
-    terraformVersion: 0.12.23
-    source:
-      address: https://github.com/isaaguilar/private-aws-tf-modules.git//s3-bucket
-  config:
-    ignoreDelete: true
-    credentials:
-    - secretNameRef:
-       name: aws-session-credentials    
-    env:
-    - name: TF_VAR_name
-      value: value      # fulfills the terraform module's "${var.name}"
+  
+  terraformVersion: 0.12.23
+  terraformModule:
+    address: https://github.com/isaaguilar/private-aws-tf-modules.git//s3-bucket
+
+  ignoreDelete: true
+  credentials:
+  - secretNameRef:
+      name: aws-session-credentials    
+  env:
+  - name: TF_VAR_name
+    value: value      # fulfills the terraform module's "${var.name}"

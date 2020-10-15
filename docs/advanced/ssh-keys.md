@@ -33,7 +33,7 @@ Currently the Terraform Kubernetes resource can only use SSH Keys for Git and Pr
 # terraform.yaml
 (...)
 spec:
-  sshProxy:
+  sshTunnel:
     host: 172.18.0.1
     user: root
     sshKeySecretRef:

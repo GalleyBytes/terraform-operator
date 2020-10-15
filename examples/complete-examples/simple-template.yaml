@@ -3,7 +3,7 @@ kind: Terraform
 metadata:
   name: simple-template-example
 spec:
-  sshProxy:
+  sshTunnel:
     host: 10.151.36.97
     user: ec2-user
     sshKeySecretRef:
@@ -15,42 +15,42 @@ spec:
         requireProxy: true
         sshKeySecretRef:
           name: gitsshkey
-  stack:
-    terraformVersion: 0.12.23
-    source:
-      address: git@github.com:iaguilar/scratch.git//create-file
-  config:
-    customBackend: |-
-      terraform {
-        backend "s3" {
-          key            = "tf-operator-examples/simple-template.tfstate"
-          region         = "us-east-1"
-          bucket         = "terraform-isaaguilar"
-          dynamodb_table = "terraform-isaaguilar-lock"
-          profile        = "isaaguilar"
-        }
+  
+  terraformVersion: 0.12.23
+  terraformModule:
+    address: git@github.com:iaguilar/scratch.git//create-file
+  
+  customBackend: |-
+    terraform {
+      backend "s3" {
+        key            = "tf-operator-examples/simple-template.tfstate"
+        region         = "us-east-1"
+        bucket         = "terraform-isaaguilar"
+        dynamodb_table = "terraform-isaaguilar-lock"
+        profile        = "isaaguilar"
       }
-    applyOnCreate: true
-    applyOnUpdate: true
-    applyOnDelete: true
-    ignoreDelete: true
-    credentials:
-    - secretNameRef:
-       name: aws-session-credentials    
-    sources:
-    - address: git@github.com:iaguilar/scratch.git//create-file/path/to/template/files/foo.tpl.txt
-      extras:
-      - is-file
-    env:
-    - name: TF_VAR_template_file
-      value: ./foo.tpl.txt
-    exportRepo:
-      address: git@github.com:iaguilar/scratch.git
-      tfvarsFile: tf-operator-examples/simple-template.tfvars
-      confFile: tf-operator-examples/simple-template.conf
-    prerunScript: |-
-      #!/usr/bin/env bash
-      echo 'I want to replace the template....muahahaha! ${REPLACE_ME}... :)' > ${TF_VAR_template_file}
-    postrunScript: |-
-      #!/usr/bin/env bash
-      echo "Terraform is done!" 
+    }
+  applyOnCreate: true
+  applyOnUpdate: true
+  applyOnDelete: true
+  ignoreDelete: true
+  credentials:
+  - secretNameRef:
+      name: aws-session-credentials    
+  sources:
+  - address: git@github.com:iaguilar/scratch.git//create-file/path/to/template/files/foo.tpl.txt
+    extras:
+    - is-file
+  env:
+  - name: TF_VAR_template_file
+    value: ./foo.tpl.txt
+  exportRepo:
+    address: git@github.com:iaguilar/scratch.git
+    tfvarsFile: tf-operator-examples/simple-template.tfvars
+    confFile: tf-operator-examples/simple-template.conf
+  prerunScript: |-
+    #!/usr/bin/env bash
+    echo 'I want to replace the template....muahahaha! ${REPLACE_ME}... :)' > ${TF_VAR_template_file}
+  postrunScript: |-
+    #!/usr/bin/env bash
+    echo "Terraform is done!" 

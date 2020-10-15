@@ -35,182 +35,152 @@ spec:
         spec:
           description: TerraformSpec defines the desired state of Terraform
           properties:
-            config:
-              description: TerraformConfig points to the tfvars to deploy against
-                the stack
-              properties:
-                applyOnCreate:
-                  description: ApplyOnCreate is used to apply any planned changes
-                    when the resource is first created. Omitting this or setting it
-                    to false will resort to on demand apply. Defaults to false.
-                  type: boolean
-                applyOnDelete:
-                  description: ApplyOnDelete is used to apply the destroy plan when
-                    the terraform resource is being deleted. Omitting this or setting
-                    it to false will require "on-demand" apply. Defaults to false.
-                  type: boolean
-                applyOnUpdate:
-                  description: ApplyOnUpdate is used to apply any planned changes
-                    when the resource is updated. Omitting this or setting it to false
-                    will resort to on demand apply. Defaults to false.
-                  type: boolean
-                credentials:
-                  description: Credentials is an array of credentials generally used
-                    for Terraform providers
-                  items:
-                    description: Credentials are used for adding credentials for terraform
-                      providers. For example, in AWS, the AWS Terraform Provider uses
-                      the default credential chain of the AWS SDK, one of which are
-                      environment variables (eg AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)
+            applyOnCreate:
+              description: ApplyOnCreate is used to apply any planned changes when
+                the resource is first created. Omitting this or setting it to false
+                will resort to on demand apply. Defaults to false.
+              type: boolean
+            applyOnDelete:
+              description: ApplyOnDelete is used to apply the destroy plan when the
+                terraform resource is being deleted. Omitting this or setting it to
+                false will require "on-demand" apply. Defaults to false.
+              type: boolean
+            applyOnUpdate:
+              description: ApplyOnUpdate is used to apply any planned changes when
+                the resource is updated. Omitting this or setting it to false will
+                resort to on demand apply. Defaults to false.
+              type: boolean
+            credentials:
+              description: Credentials is an array of credentials generally used for
+                Terraform providers
+              items:
+                description: Credentials are used for adding credentials for terraform
+                  providers. For example, in AWS, the AWS Terraform Provider uses
+                  the default credential chain of the AWS SDK, one of which are environment
+                  variables (eg AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)
+                properties:
+                  aws:
+                    description: AWSCredentials contains the different methods to
+                      load AWS credentials for the Terraform AWS Provider. If using
+                      AWS_ACCESS_KEY_ID and/or environment variables for credentials,
+                      use fromEnvs.
                     properties:
-                      aws:
-                        description: AWSCredentials contains the different methods
-                          to load AWS credentials for the Terraform AWS Provider.
-                          If using AWS_ACCESS_KEY_ID and/or environment variables
-                          for credentials, use fromEnvs.
-                        properties:
-                          irsa:
-                            description: "IRSA requires the irsa role-arn as the string
-                              input. This will create a serice account named tf-<resource-name>.
-                              In order for the pod to be able to use this role, the
-                              \"Trusted Entity\" of the IAM role must allow this serice
-                              account name and namespace. \n Using a TrustEntity policy
-                              that includes \"StringEquals\" setting it as the serivce
-                              account name is the most secure way to use IRSA. \n
-                              However, for a reusable policy consider \"StringLike\"
-                              with a few wildcards to make the irsa role usable by
-                              pods created by terraform-operator. The example below
-                              is pretty liberal, but will work for any pod created
-                              by the terraform-operator. \n {   \"Version\": \"2012-10-17\",
-                              \  \"Statement\": [     {       \"Effect\": \"Allow\",
-                              \      \"Principal\": {         \"Federated\": \"${OIDC_ARN}\"
-                              \      },       \"Action\": \"sts:AssumeRoleWithWebIdentity\",
-                              \      \"Condition\": {         \"StringLike\": {           \"${OIDC_URL}:sub\":
-                              \"system:serviceaccount:*:tf-*\"         }       }     }
-                              \  ] }"
-                            type: string
-                          kiam:
-                            description: KIAM requires the kiam role-name as the string
-                              input. This will add the correct annotation to the terraform
-                              execution pod
-                            type: string
-                        type: object
-                      secretNameRef:
-                        description: FromEnvs will load environment variables into
-                          the terraform execution pod from kubernetes secrets
-                        properties:
-                          key:
-                            description: Key of the secret
-                            type: string
-                          name:
-                            description: Name of the secret
-                            type: string
-                          namespace:
-                            description: Namespace of the secret; Defaults to namespace
-                              of the tf resource
-                            type: string
-                        required:
-                        - name
-                        type: object
-                    type: object
-                  type: array
-                customBackend:
-                  description: CustomBackend will allow the user to configure the
-                    backend of their choice. If this is omitted, the default consul
-                    template will be used.
-                  type: string
-                env:
-                  items:
-                    description: EnvVar defines key/value pairs of env vars that get
-                      picked up by terraform
-                    properties:
-                      name:
+                      irsa:
+                        description: "IRSA requires the irsa role-arn as the string
+                          input. This will create a serice account named tf-<resource-name>.
+                          In order for the pod to be able to use this role, the \"Trusted
+                          Entity\" of the IAM role must allow this serice account
+                          name and namespace. \n Using a TrustEntity policy that includes
+                          \"StringEquals\" setting it as the serivce account name
+                          is the most secure way to use IRSA. \n However, for a reusable
+                          policy consider \"StringLike\" with a few wildcards to make
+                          the irsa role usable by pods created by terraform-operator.
+                          The example below is pretty liberal, but will work for any
+                          pod created by the terraform-operator. \n {   \"Version\":
+                          \"2012-10-17\",   \"Statement\": [     {       \"Effect\":
+                          \"Allow\",       \"Principal\": {         \"Federated\":
+                          \"${OIDC_ARN}\"       },       \"Action\": \"sts:AssumeRoleWithWebIdentity\",
+                          \      \"Condition\": {         \"StringLike\": {           \"${OIDC_URL}:sub\":
+                          \"system:serviceaccount:*:tf-*\"         }       }     }
+                          \  ] }"
                         type: string
-                      value:
+                      kiam:
+                        description: KIAM requires the kiam role-name as the string
+                          input. This will add the correct annotation to the terraform
+                          execution pod
+                        type: string
+                    type: object
+                  secretNameRef:
+                    description: SecretNameRef will load environment variables into
+                      the terraform runner from a kubernetes secret
+                    properties:
+                      key:
+                        description: Key of the secret
+                        type: string
+                      name:
+                        description: Name of the secret
+                        type: string
+                      namespace:
+                        description: Namespace of the secret; Defaults to namespace
+                          of the tf resource
                         type: string
                     required:
                     - name
-                    - value
                     type: object
-                  type: array
-                exportRepo:
-                  description: ExportRepo allows the user to define
-                  properties:
-                    address:
-                      description: Address is the git repo to save to. At this time,
-                        only SSH is allowed
-                      type: string
-                    confFile:
-                      description: ConfFile is the full path relative to the root
-                        of the repo
-                      type: string
-                    tfvarsFile:
-                      description: TFVarsFile is the full path relative to the root
-                        of the repo
-                      type: string
-                  required:
-                  - address
-                  - tfvarsFile
-                  type: object
-                ignoreDelete:
-                  description: IgnoreDelete will bypass the finalization process and
-                    remove the tf resource without running any delete jobs.
+                type: object
+              type: array
+            customBackend:
+              description: CustomBackend will allow the user to configure the backend
+                of their choice. If this is omitted, the default consul template will
+                be used.
+              type: string
+            env:
+              items:
+                description: EnvVar defines key/value pairs of env vars that get picked
+                  up by terraform
+                properties:
+                  name:
+                    type: string
+                  value:
+                    type: string
+                required:
+                - name
+                - value
+                type: object
+              type: array
+            exportRepo:
+              description: ExportRepo allows the user to define
+              properties:
+                address:
+                  description: Address is the git repo to save to. At this time, only
+                    SSH is allowed
+                  type: string
+                confFile:
+                  description: ConfFile is the full path relative to the root of the
+                    repo
+                  type: string
+                tfvarsFile:
+                  description: TFVarsFile is the full path relative to the root of
+                    the repo
+                  type: string
+              required:
+              - address
+              - tfvarsFile
+              type: object
+            ignoreDelete:
+              description: IgnoreDelete will bypass the finalization process and remove
+                the tf resource without running any delete jobs.
+              type: boolean
+            postrunScript:
+              description: "PostrunScript lets the user define a script that will
+                run after terraform commands are executed on the terraform-execution
+                pod. The pod will have already set up cloudProfile (eg cloud credentials)
+                so the script can make use of it. \n Setting this field will create
+                a key in the tfvars configmap called \"postrun.sh\". This means the
+                user can alternatively pass in a posterun.sh file via config \"Sources\"."
+              type: string
+            prerunScript:
+              description: "PrerunScript lets the user define a script that will run
+                before terraform commands are executed on the terraform-execution
+                pod. The pod will have already set up cloudProfile (eg cloud credentials)
+                so the script can make use of it. \n Setting this field will create
+                a key in the tfvars configmap called \"prerun.sh\". This means the
+                user can also pass in a prerun.sh file via config \"Sources\"."
+              type: string
+            reconcile:
+              description: Reconcile are the settings used for auto-reconciliation
+              properties:
+                enable:
+                  description: Enable used to turn on the auto reconciliation of tfstate
+                    to actual provisions. Default to false
                   type: boolean
-                postrunScript:
-                  description: "PostrunScript lets the user define a script that will
-                    run after terraform commands are executed on the terraform-execution
-                    pod. The pod will have already set up cloudProfile (eg cloud credentials)
-                    so the script can make use of it. \n Setting this field will create
-                    a key in the tfvars configmap called \"postrun.sh\". This means
-                    the user can alternatively pass in a posterun.sh file via config
-                    \"Sources\"."
-                  type: string
-                prerunScript:
-                  description: "PrerunScript lets the user define a script that will
-                    run before terraform commands are executed on the terraform-execution
-                    pod. The pod will have already set up cloudProfile (eg cloud credentials)
-                    so the script can make use of it. \n Setting this field will create
-                    a key in the tfvars configmap called \"prerun.sh\". This means
-                    the user can also pass in a prerun.sh file via config \"Sources\"."
-                  type: string
-                reconcile:
-                  description: Reconcile are the settings used for auto-reconciliation
-                  properties:
-                    enable:
-                      description: Enable used to turn on the auto reconciliation
-                        of tfstate to actual provisions. Default to false
-                      type: boolean
-                    syncPeriod:
-                      description: SyncPeriod can be used to set a custom time to
-                        check actual provisions to tfstate. Defaults to 60 minutes
-                      format: int64
-                      type: integer
-                  required:
-                  - enable
-                  type: object
-                sources:
-                  items:
-                    description: SrcOpts defines a terraform source location (eg git::SSH
-                      or git::HTTPS)
-                    properties:
-                      address:
-                        description: Address defines the source address of the tf
-                          resources. This this var will try to accept any format defined
-                          in https://www.terraform.io/docs/modules/sources.html When
-                          downloading `tfvars`, the double slash `//` syntax is used
-                          to define dir or tfvar files. This can be used multiple
-                          times for multiple items.
-                        type: string
-                      extras:
-                        description: Extras will allow for giving the controller specific
-                          instructions for fetching files from the address.
-                        items:
-                          type: string
-                        type: array
-                    required:
-                    - address
-                    type: object
-                  type: array
+                syncPeriod:
+                  description: SyncPeriod can be used to set a custom time to check
+                    actual provisions to tfstate. Defaults to 60 minutes
+                  format: int64
+                  type: integer
+              required:
+              - enable
               type: object
             scmAuthMethods:
               description: SCMAuthMethods define multiple SCMs that require tokens/keys
@@ -229,7 +199,7 @@ spec:
                           requireProxy:
                             type: boolean
                           tokenSecretRef:
-                            description: TokenSecetRef defines the token or password
+                            description: TokenSecretRef defines the token or password
                               that can be used to log into a system (eg git)
                             properties:
                               key:
@@ -283,8 +253,32 @@ spec:
                 - host
                 type: object
               type: array
-            sshProxy:
-              description: TODO refactor to SSHTunnel
+            sources:
+              items:
+                description: SrcOpts defines a terraform source location (eg git::SSH
+                  or git::HTTPS)
+                properties:
+                  address:
+                    description: Address defines the source address of the tf resources.
+                      This this var will try to accept any format defined in https://www.terraform.io/docs/modules/sources.html
+                      When downloading `tfvars`, the double slash `//` syntax is used
+                      to define dir or tfvar files. This can be used multiple times
+                      for multiple items.
+                    type: string
+                  extras:
+                    description: Extras will allow for giving the controller specific
+                      instructions for fetching files from the address.
+                    items:
+                      type: string
+                    type: array
+                required:
+                - address
+                type: object
+              type: array
+            sshTunnel:
+              description: SSHTunnel can be defined for pulling from scm sources that
+                cannot be accessed by the network the operator/runner runs in. An
+                example is Enterprise Github servers running on a private network.
               properties:
                 host:
                   type: string
@@ -310,42 +304,38 @@ spec:
               required:
               - sshKeySecretRef
               type: object
-            stack:
-              description: 'INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-                Important: Run "operator-sdk generate k8s" to regenerate code after
-                modifying this file Add custom validation using kubebuilder tags:
-                https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html'
+            terraformModule:
+              description: TerraformModule is the terraform module scm address. Currently
+                supports git protocol over SSH or HTTPS
               properties:
-                configMap:
+                address:
+                  description: Address defines the source address of the tf resources.
+                    This this var will try to accept any format defined in https://www.terraform.io/docs/modules/sources.html
+                    When downloading `tfvars`, the double slash `//` syntax is used
+                    to define dir or tfvar files. This can be used multiple times
+                    for multiple items.
                   type: string
-                source:
-                  description: SrcOpts defines a terraform source location (eg git::SSH
-                    or git::HTTPS)
-                  properties:
-                    address:
-                      description: Address defines the source address of the tf resources.
-                        This this var will try to accept any format defined in https://www.terraform.io/docs/modules/sources.html
-                        When downloading `tfvars`, the double slash `//` syntax is
-                        used to define dir or tfvar files. This can be used multiple
-                        times for multiple items.
-                      type: string
-                    extras:
-                      description: Extras will allow for giving the controller specific
-                        instructions for fetching files from the address.
-                      items:
-                        type: string
-                      type: array
-                  required:
-                  - address
-                  type: object
-                terraformVersion:
-                  description: TerraformVersion helps the operator decide which terraform
-                    image to run the terraform in. Defaults to v0.11.14
-                  type: string
+                extras:
+                  description: Extras will allow for giving the controller specific
+                    instructions for fetching files from the address.
+                  items:
+                    type: string
+                  type: array
+              required:
+              - address
               type: object
+            terraformRunner:
+              description: TerraformRunner gives the user the ability to inject their
+                own container image to execute terraform. This is very helpful for
+                users who need to have a certain toolset installed on their images,
+                or who can't pull public images, such as the default image "isaaguilar/tfops".
+              type: string
+            terraformVersion:
+              description: TerraformVersion helps the operator decide which image
+                tag to pull for the terraform runner. Defaults to "0.11.14"
+              type: string
           required:
-          - config
-          - stack
+          - terraformModule
           type: object
         status:
           description: TerraformStatus defines the observed state of Terraform

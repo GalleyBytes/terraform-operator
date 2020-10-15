@@ -85,6 +85,7 @@ type RunOptions struct {
 	sshConfigData    map[string][]byte
 	applyAction      bool
 	isNewResource    bool
+	terraformRunner  string
 	terraformVersion string
 	serviceAccount   string
 }
@@ -94,22 +95,27 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 	isNewResource := false
 	applyAction := false
 	name := instance.Name
+	terraformRunner := "isaaguilar/tfops"
 	terraformVersion := "0.11.14"
 
 	if isDestroy {
 		isNewResource = false
-		applyAction = instance.Spec.Config.ApplyOnDelete
+		applyAction = instance.Spec.ApplyOnDelete
 		name = name + "-destroy"
 	} else if instance.ObjectMeta.Generation > 1 {
 		isNewResource = false
-		applyAction = instance.Spec.Config.ApplyOnUpdate
+		applyAction = instance.Spec.ApplyOnUpdate
 	} else {
 		isNewResource = true
-		applyAction = instance.Spec.Config.ApplyOnCreate
+		applyAction = instance.Spec.ApplyOnCreate
 	}
 
-	if instance.Spec.Stack.TerraformVersion != "" {
-		terraformVersion = instance.Spec.Stack.TerraformVersion
+	if instance.Spec.TerraformVersion != "" {
+		terraformVersion = instance.Spec.TerraformVersion
+	}
+
+	if instance.Spec.TerraformRunner != "" {
+		terraformRunner = instance.Spec.TerraformRunner
 	}
 
 	return RunOptions{
@@ -119,6 +125,7 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 		isNewResource:    isNewResource,
 		applyAction:      applyAction,
 		terraformVersion: terraformVersion,
+		terraformRunner:  terraformRunner,
 		serviceAccount:   "tf-" + name,
 	}
 }
@@ -255,7 +262,7 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 			// that we can retry during the next reconciliation.
 
 			// Completely ignore the finilization process if ignoreDelete is set
-			if !instance.Spec.Config.IgnoreDelete {
+			if !instance.Spec.IgnoreDelete {
 				// let's make sure that a destroy job doesn't already exists
 				d := types.NamespacedName{Namespace: request.Namespace, Name: request.Name + "-destroy"}
 				destroyFound := &batchv1.Job{}
@@ -299,7 +306,7 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 	}
 
 	if !utils.ListContainsStr(instance.GetFinalizers(), terraformFinalizer) {
-		if !instance.Spec.Config.IgnoreDelete {
+		if !instance.Spec.IgnoreDelete {
 			if err := r.addFinalizer(reqLogger, instance); err != nil {
 				r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 				return reconcile.Result{}, err
@@ -309,7 +316,7 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 
 	// Remove the finalizer when ignoreDelete exists. This is purley letting
 	// the user see that there are no finalizers when get/describe the resource
-	if instance.Spec.Config.IgnoreDelete && instance.ObjectMeta.Finalizers != nil {
+	if instance.Spec.IgnoreDelete && instance.ObjectMeta.Finalizers != nil {
 		reqLogger.V(1).Info("Removing the finalizer since ignoreDelete is true")
 		instance.SetFinalizers(utils.ListRemoveStr(instance.GetFinalizers(), terraformFinalizer))
 		err := r.client.Update(context.TODO(), instance)
@@ -444,25 +451,25 @@ func (d GitRepoAccessOptions) TunnelClose(reqLogger logr.Logger) {
 func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, k8sclient client.Client) (map[string][]byte, error) {
 	data := make(map[string]string)
 	dataAsByte := make(map[string][]byte)
-	if instance.Spec.SSHProxy != nil {
+	if instance.Spec.SSHTunnel != nil {
 		data["config"] = fmt.Sprintf("Host proxy\n"+
 			"\tStrictHostKeyChecking no\n"+
 			"\tUserKnownHostsFile=/dev/null\n"+
 			"\tUser %s\n"+
 			"\tHostname %s\n"+
 			"\tIdentityFile ~/.ssh/proxy_key\n",
-			instance.Spec.SSHProxy.User,
-			instance.Spec.SSHProxy.Host)
-		k := instance.Spec.SSHProxy.SSHKeySecretRef.Key
+			instance.Spec.SSHTunnel.User,
+			instance.Spec.SSHTunnel.Host)
+		k := instance.Spec.SSHTunnel.SSHKeySecretRef.Key
 		if k == "" {
 			k = "id_rsa"
 		}
-		ns := instance.Spec.SSHProxy.SSHKeySecretRef.Namespace
+		ns := instance.Spec.SSHTunnel.SSHKeySecretRef.Namespace
 		if ns == "" {
 			ns = instance.Namespace
 		}
 
-		key, err := loadPassword(k8sclient, k, instance.Spec.SSHProxy.SSHKeySecretRef.Name, ns)
+		key, err := loadPassword(k8sclient, k, instance.Spec.SSHTunnel.SSHKeySecretRef.Name, ns)
 		if err != nil {
 			return dataAsByte, err
 		}
@@ -529,18 +536,9 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	// runOpts.namespace = instance.Namespace
 
 	// Stack Download
-	reqLogger.Info("Reading spec.stack config")
-	if (tfv1alpha1.TerraformStack{}) == *instance.Spec.Stack {
-		// This should never get reached since it violates the crd's
-		// `spec.stack` requirement. Just in case, log an error.
-		r.recorder.Event(instance, "Warning", "ConfigError", "No stack source defined")
-		return fmt.Errorf("No stack source defined")
-	} // else if (tfv1alpha1.SrcOpts{}) == *instance.Spec.Stack.Source {
-	// 	return reconcile.Result{}, fmt.Errorf("No stack source defined")
-	// }
-	address := instance.Spec.Stack.Source.Address
+	reqLogger.Info("Reading spec.terraformModule config")
+	address := instance.Spec.TerraformModule.Address
 	stackRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
-
 	if err != nil {
 		r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err).Error())
 		return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
@@ -588,11 +586,11 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	//
 	reqLogger.Info("Reading spec.config ")
 	// TODO Validate spec.config exists
-	// TODO validate spec.config.sources exists && len > 0
-	runOpts.credentials = instance.Spec.Config.Credentails
+	// TODO validate spec.sources exists && len > 0
+	runOpts.credentials = instance.Spec.Credentails
 	tfvars := ""
 	otherConfigFiles := make(map[string]string)
-	for _, s := range instance.Spec.Config.Sources {
+	for _, s := range instance.Spec.Sources {
 		address := s.Address
 		extras := s.Extras
 		// Loop thru all the sources in spec.config
@@ -621,7 +619,7 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 					reqLogger.Error(err, "failed to start ssh proxy")
 					return err
 				}
-				defer configRepoAccessOptions.TunnelClose(reqLogger.WithValues("Spec", "config.source"))
+				defer configRepoAccessOptions.TunnelClose(reqLogger.WithValues("Spec", "source"))
 			}
 		}
 
@@ -653,17 +651,17 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	}
 
 	// Override the backend.tf by inserting a custom backend
-	if instance.Spec.Config.CustomBackend != "" {
-		data["backend_override.tf"] = instance.Spec.Config.CustomBackend
+	if instance.Spec.CustomBackend != "" {
+		data["backend_override.tf"] = instance.Spec.CustomBackend
 	}
 
-	if instance.Spec.Config.PrerunScript != "" {
-		data["prerun.sh"] = instance.Spec.Config.PrerunScript
+	if instance.Spec.PrerunScript != "" {
+		data["prerun.sh"] = instance.Spec.PrerunScript
 	}
 
 	// Do we need to run postrunscript's for finalizers?
-	if instance.Spec.Config.PostrunScript != "" && !isFinalize {
-		data["postrun.sh"] = instance.Spec.Config.PostrunScript
+	if instance.Spec.PostrunScript != "" && !isFinalize {
+		data["postrun.sh"] = instance.Spec.PostrunScript
 	}
 
 	tfvarsConfigMap := instance.Name + "-tfvars"
@@ -697,14 +695,14 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	// }
 	runOpts.tfvarsConfigMap = tfvarsConfigMap
 
-	// TODO Validate spec.config.env
-	for _, env := range instance.Spec.Config.Env {
+	// TODO Validate spec.env
+	for _, env := range instance.Spec.Env {
 		runOpts.updateEnvVars(env.Name, env.Value)
 	}
 
 	// Flatten all the .tfvars and TF_VAR envs into a single file and push
-	if instance.Spec.Config.ExportRepo != nil && !isFinalize {
-		e := instance.Spec.Config.ExportRepo
+	if instance.Spec.ExportRepo != nil && !isFinalize {
+		e := instance.Spec.ExportRepo
 
 		address := e.Address
 		exportRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
@@ -719,7 +717,7 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 
 		// TODO decide what to do on errors
 		// Closing the tunnel from within this function
-		go exportRepoAccessOptions.commitTfvars(r.client, tfvars, e.TFVarsFile, e.ConfFile, instance.Namespace, instance.Spec.Config.CustomBackend, runOpts, reqLogger)
+		go exportRepoAccessOptions.commitTfvars(r.client, tfvars, e.TFVarsFile, e.ConfFile, instance.Namespace, instance.Spec.CustomBackend, runOpts, reqLogger)
 	}
 
 	if isFinalize {
@@ -1040,7 +1038,7 @@ func (r RunOptions) generateJob() *batchv1.Job {
 						{
 							Name: "tf",
 							// TODO Version docker images more specifically than static versions
-							Image:           "isaaguilar/tfops:" + r.terraformVersion,
+							Image:           r.terraformRunner + ":" + r.terraformVersion,
 							ImagePullPolicy: "Always",
 							EnvFrom:         envFrom,
 							Env: append(envs, []corev1.EnvVar{
@@ -1157,8 +1155,8 @@ func newGitRepoAccessOptionsFromSpec(instance *tfv1alpha1.Terraform, address str
 	}
 	d.SCMAuthMethods = instance.Spec.SCMAuthMethods
 
-	if instance.Spec.SSHProxy != nil {
-		sshProxyOptions = *instance.Spec.SSHProxy
+	if instance.Spec.SSHTunnel != nil {
+		sshProxyOptions = *instance.Spec.SSHTunnel
 	}
 	d.SSHProxy = sshProxyOptions
 
