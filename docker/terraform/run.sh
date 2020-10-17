@@ -61,6 +61,24 @@ function save_plan {
     kubectl create cm ${INSTANCE_NAME}-plan --from-file tfplan
 }
 
+function save_output {
+    # Save terraform output as a configmap
+    # TODO sensative items should be stored as a secret
+    cat << EOF > "$INSTANCE_NAME-output.yaml"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: $INSTANCE_NAME-output
+  namespace: $NAMESPACE
+data:
+$(terraform output -json| jq -r '.|keys[] as $k| "  \($k): |-\n    \(.[$k].value)"')
+EOF
+
+    kubectl apply -f "$INSTANCE_NAME-output.yaml"
+
+}
+
 function get_action {
     action=`kubectl get cm ${INSTANCE_NAME}-action -ojsonpath='{.data.action}'`
     export action
@@ -183,7 +201,7 @@ kubectl create cm ${INSTANCE_NAME}-status \
     --from-file CHANGE \
     --from-file DESTROY
 
-
+save_output
 save_plan
 
 # Run the postrun script

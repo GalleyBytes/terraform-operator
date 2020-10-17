@@ -30,16 +30,10 @@ docker-push:
 	docker push ${DOCKER_REPO}/${IMAGE_NAME}:${VERSION}
 
 docker-build-job:
-	docker build -t ${DOCKER_REPO}/tfops:0.11.14 -f docker/terraform/terraform-0.11.14.Dockerfile docker/terraform/
-	docker build -t ${DOCKER_REPO}/tfops:0.12.21 -f docker/terraform/terraform-0.12.21.Dockerfile docker/terraform/
-	docker build -t ${DOCKER_REPO}/tfops:0.12.23 -f docker/terraform/terraform-0.12.23.Dockerfile docker/terraform/
-	docker build -t ${DOCKER_REPO}/tfops:0.12.26 -f docker/terraform/terraform-0.12.26.Dockerfile docker/terraform/
+	DOCKER_REPO=${DOCKER_REPO} /bin/bash docker/terraform/build.sh
 
 docker-push-job:
-	docker push ${DOCKER_REPO}/tfops:0.11.14
-	docker push ${DOCKER_REPO}/tfops:0.12.21
-	docker push ${DOCKER_REPO}/tfops:0.12.23
-	docker push ${DOCKER_REPO}/tfops:0.12.26
+	docker images ${DOCKER_REPO}/tfops --format '{{ .Repository }}:{{ .Tag }}'| grep -v '<none>'|xargs -n1 -t docker push
 
 deploy:
 	kubectl delete pod --selector name=${DEPLOYMENT} --namespace ${NAMESPACE} && sleep 4
