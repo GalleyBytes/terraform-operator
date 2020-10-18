@@ -32,3 +32,28 @@ Because `/main_module` is where ConfigMap files get placed, a user can reason ab
 
 When the "Terraform Runner" Pod is done, it saves the outputs to a new ConfigMap which is named `$RESOURCE_NAME-output`.  In this ConfigMap, each Terraform output is a data key. 
 
+## Custom Terraform Runner
+
+The user can opt to use their own image for the Terraform Runner instead of the default `isaaguilar/tfops` image. The image is configurable in `spec.terraformRunner`.  There are many reason a user may opt this option:
+
+1) Maybe the user has a narrow set of 3rd party images available. One option is to build the images themselves. The user can run the following (from the root of this repo):
+
+```bash
+# build
+DOCKER_REPO=myrepo make docker-build-job
+# push
+DOCKER_REPO=myrepo make docker-push-job
+```
+
+This will build all the Terraform versions >=0.11.8 using the same scripts as the default Terraform Runner image. 
+
+2) Perhaps there are issues with [`run.sh`](../docker/terraform/run.sh) that the user wants to add/modify/remove. The user can update the `run.sh` script and then build using the same command as above:
+
+```bash
+# build
+DOCKER_REPO=myrepo make docker-build-job
+# push
+DOCKER_REPO=myrepo make docker-push-job
+```
+
+Or contribute improvements to `run.sh` in a pull-request; always appreciated. 
