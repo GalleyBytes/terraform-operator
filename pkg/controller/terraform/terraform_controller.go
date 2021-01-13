@@ -75,6 +75,7 @@ type RunOptions struct {
 	moduleConfigMaps []string
 	namespace        string
 	name             string
+	nameTrunc63      string // 63 char limit required for a job's template labels (ie the label for "job-name")
 	tfvarsConfigMap  string
 	envVars          map[string]string
 	credentials      []tfv1alpha1.Credentials
@@ -95,6 +96,7 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 	isNewResource := false
 	applyAction := false
 	name := instance.Name
+	nameTrunc63 := utils.TruncateResourceName(name, 63)
 	terraformRunner := "isaaguilar/tfops"
 	terraformVersion := "0.11.14"
 
@@ -121,6 +123,7 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 	return RunOptions{
 		namespace:        instance.Namespace,
 		name:             name,
+		nameTrunc63:      nameTrunc63,
 		envVars:          make(map[string]string),
 		isNewResource:    isNewResource,
 		applyAction:      applyAction,
@@ -664,7 +667,10 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 		data["postrun.sh"] = instance.Spec.PostrunScript
 	}
 
-	tfvarsConfigMap := instance.Name + "-tfvars"
+	// This resource is used to create a volumeMount which have 63 char limits.
+	// Truncate the instance.Name enough to fit "-tfvars" wich will be the
+	// configmapName and volumeMount name.
+	tfvarsConfigMap := utils.TruncateResourceName(instance.Name, 56) + "-tfvars"
 
 	// make this a function for reuse
 	cm := &corev1.ConfigMap{
@@ -1023,7 +1029,7 @@ func (r RunOptions) generateJob() *batchv1.Job {
 	// Schedule a job that will execute the terraform plan
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.name,
+			Name:      r.nameTrunc63,
 			Namespace: r.namespace,
 		},
 		Spec: batchv1.JobSpec{

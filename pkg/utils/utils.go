@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -145,4 +146,15 @@ func StringWithCharset(length int, charset string) string {
 
 func RandomString(length int) string {
 	return StringWithCharset(length, charset)
+}
+
+func TruncateResourceName(s string, i int) string {
+	name := s
+	if len(s) > i {
+		name = s[0:i]
+		// End in alphanum, Assume only "-" and "." can be in name
+		name = strings.TrimRight(name, "-")
+		name = strings.TrimRight(name, ".")
+	}
+	return name
 }
