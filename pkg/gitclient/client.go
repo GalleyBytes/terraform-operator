@@ -88,7 +88,7 @@ func (g *GitRepo) downloadGitRepo(c chan error, wg *sync.WaitGroup, url, repoDir
 	gitConfigs := git.CloneOptions{
 		URL:               url,
 		RecurseSubmodules: git.DefaultSubmoduleRecursionDepth,
-		ReferenceName:     "refs/heads/master",
+		ReferenceName:     plumbing.NewBranchReferenceName("master"),
 		Progress:          os.Stdout,
 	}
 
@@ -104,8 +104,14 @@ func (g *GitRepo) downloadGitRepo(c chan error, wg *sync.WaitGroup, url, repoDir
 
 	r, err := git.PlainClone(repoDir, false, &gitConfigs)
 	if err != nil {
-		c <- fmt.Errorf("Could not checkout repo: %v", err)
-		return
+		// try using the main branch since GitHub is renaming the default branch
+		// reference: https://github.com/github/renaming
+		gitConfigs.ReferenceName = plumbing.NewBranchReferenceName("main")
+		r, err = git.PlainClone(repoDir, false, &gitConfigs)
+		if err != nil {
+			c <- fmt.Errorf("Could not checkout repo: %v", err)
+			return
+		}
 	}
 
 	// Checkout the git-refs used for checkouts
