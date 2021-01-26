@@ -76,7 +76,6 @@ type RunOptions struct {
 	namespace        string
 	name             string
 	nameTrunc63      string // 63 char limit required for a job's template labels (ie the label for "job-name")
-	tfvarsConfigMap  string
 	envVars          map[string]string
 	credentials      []tfv1alpha1.Credentials
 	stack            ParsedAddress
@@ -89,6 +88,7 @@ type RunOptions struct {
 	terraformRunner  string
 	terraformVersion string
 	serviceAccount   string
+	configMapData    map[string]string
 }
 
 func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
@@ -130,6 +130,7 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 		terraformVersion: terraformVersion,
 		terraformRunner:  terraformRunner,
 		serviceAccount:   "tf-" + name,
+		configMapData:    make(map[string]string),
 	}
 }
 
@@ -647,59 +648,25 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 			return fmt.Errorf("Error in reading otherConfigFiles: %v", err)
 		}
 	}
-	data := make(map[string]string)
-	data["tfvars"] = tfvars
+
+	runOpts.configMapData["tfvars"] = tfvars
 	for k, v := range otherConfigFiles {
-		data[k] = v
+		runOpts.configMapData[k] = v
 	}
 
 	// Override the backend.tf by inserting a custom backend
 	if instance.Spec.CustomBackend != "" {
-		data["backend_override.tf"] = instance.Spec.CustomBackend
+		runOpts.configMapData["backend_override.tf"] = instance.Spec.CustomBackend
 	}
 
 	if instance.Spec.PrerunScript != "" {
-		data["prerun.sh"] = instance.Spec.PrerunScript
+		runOpts.configMapData["prerun.sh"] = instance.Spec.PrerunScript
 	}
 
 	// Do we need to run postrunscript's for finalizers?
 	if instance.Spec.PostrunScript != "" && !isFinalize {
-		data["postrun.sh"] = instance.Spec.PostrunScript
+		runOpts.configMapData["postrun.sh"] = instance.Spec.PostrunScript
 	}
-
-	// This resource is used to create a volumeMount which have 63 char limits.
-	// Truncate the instance.Name enough to fit "-tfvars" wich will be the
-	// configmapName and volumeMount name.
-	tfvarsConfigMap := utils.TruncateResourceName(instance.Name, 56) + "-tfvars"
-
-	// make this a function for reuse
-	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      tfvarsConfigMap,
-			Namespace: instance.Namespace,
-		},
-		Data: data,
-	}
-	controllerutil.SetControllerReference(instance, cm, r.scheme)
-	err = r.client.Create(context.TODO(), cm)
-	if err != nil && errors.IsNotFound(err) {
-		r.recorder.Event(instance, "Warning", "ConfigMapCreateError", fmt.Errorf("Could not create configmap %v", err).Error())
-		return err
-	} else if err != nil {
-		reqLogger.V(1).Info(fmt.Sprintf("ConfigMap %s will be updated", cm.Name))
-		updateErr := r.client.Update(context.TODO(), cm)
-		if updateErr != nil {
-			r.recorder.Event(instance, "Warning", "ConfigMapUpdateError", fmt.Errorf("Could not update configmap %v", err).Error())
-			return updateErr
-		}
-	}
-
-	// err = c.createConfigMap(tfvarsConfigMap, instance.Namespace, make(map[string][]byte), data)
-	// if err != nil {
-	// 	r.recorder.Event(instance, "Warning", "ConfigMapCreateError", fmt.Errorf("Could not create configmap %v", err).Error())
-	// 	return fmt.Errorf("Could not create configmap %v", err)
-	// }
-	runOpts.tfvarsConfigMap = tfvarsConfigMap
 
 	// TODO Validate spec.env
 	for _, env := range instance.Spec.Env {
@@ -761,6 +728,18 @@ func (r *ReconcileTerraform) addFinalizer(reqLogger logr.Logger, instance *tfv1a
 	return nil
 }
 
+func (r RunOptions) generateConfigMap() *corev1.ConfigMap {
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.name + "-tfvars",
+			Namespace: r.namespace,
+		},
+		Data: r.configMapData,
+	}
+	return cm
+}
+
 func (r RunOptions) generateServiceAccount() *corev1.ServiceAccount {
 	annotations := make(map[string]string)
 
@@ -800,18 +779,55 @@ func (r RunOptions) generateActionConfigMap() *corev1.ConfigMap {
 }
 
 func (r RunOptions) generateRole() *rbacv1.Role {
+	// TODO tighten up default rbac security since all the cm and secret names
+	// can be predicted.
+
+	rules := []rbacv1.PolicyRule{
+		{
+			Verbs:     []string{"*"},
+			APIGroups: []string{""},
+			Resources: []string{"configmaps"},
+		},
+	}
+
+	// When using the Kubernetes backend, allow the operator to create secrets and leases
+	secretsRule := rbacv1.PolicyRule{
+		Verbs:     []string{"*"},
+		APIGroups: []string{""},
+		Resources: []string{"secrets"},
+	}
+	leasesRule := rbacv1.PolicyRule{
+		Verbs:     []string{"*"},
+		APIGroups: []string{"coordination.k8s.io"},
+		Resources: []string{"leases"},
+	}
+	if r.configMapData["backend_override.tf"] != "" {
+		// parse the backennd string the way most people write it
+		// example:
+		// terraform {
+		//   backend "kubernetes" {
+		//     ...
+		//   }
+		// }
+		s := strings.Split(r.configMapData["backend_override.tf"], "\n")
+		for _, line := range s {
+			// Assuming that config lines contain an equal sign
+			// All other lines are discarded
+			if strings.Contains(line, "backend ") && strings.Contains(line, "kubernetes") {
+				// the extra space in "backend " is intentional since thats generally
+				// how it's written
+				rules = append(rules, secretsRule, leasesRule)
+				break
+			}
+		}
+	}
+
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.name,
 			Namespace: r.namespace,
 		},
-		Rules: []rbacv1.PolicyRule{
-			{
-				Verbs:     []string{"*"},
-				APIGroups: []string{""},
-				Resources: []string{"configmaps"},
-			},
-		},
+		Rules: rules,
 	}
 	return role
 }
@@ -838,7 +854,7 @@ func (r RunOptions) generateRoleBinding() *rbacv1.RoleBinding {
 	return rb
 }
 
-func (r RunOptions) generateJob() *batchv1.Job {
+func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job {
 	// reqLogger := log.WithValues("function", "run")
 	// reqLogger.Info(fmt.Sprintf("Running job with this setup: %+v", r))
 
@@ -943,32 +959,36 @@ func (r RunOptions) generateJob() *batchv1.Job {
 			},
 		}...)
 	}
+
+	// This resource is used to create a volumeMount which have 63 char limits.
+	// Truncate the instance.Name enough to fit "-tfvars" wich will be the
+	// configmapName and volumeMount name.
+	tfvarsConfigMapVolumeName := utils.TruncateResourceName(r.name, 56) + "-tfvars"
 	tfVars := []corev1.Volume{}
-	if r.tfvarsConfigMap != "" {
-		tfVars = append(tfVars, []corev1.Volume{
-			{
-				Name: r.tfvarsConfigMap,
-				VolumeSource: corev1.VolumeSource{
-					ConfigMap: &corev1.ConfigMapVolumeSource{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: r.tfvarsConfigMap,
-						},
+	tfVars = append(tfVars, []corev1.Volume{
+		{
+			Name: tfvarsConfigMapVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: tfvarsConfigMap.Name,
 					},
 				},
 			},
-		}...)
+		},
+	}...)
 
-		envs = append(envs, []corev1.EnvVar{
-			{
-				Name:  "TFOPS_VARFILE_FLAG",
-				Value: "-var-file /tfops/" + r.tfvarsConfigMap + "/tfvars",
-			},
-			{
-				Name:  "TFOPS_CONFIGMAP_PATH",
-				Value: "/tfops/" + r.tfvarsConfigMap,
-			},
-		}...)
-	}
+	envs = append(envs, []corev1.EnvVar{
+		{
+			Name:  "TFOPS_VARFILE_FLAG",
+			Value: "-var-file /tfops/" + tfvarsConfigMapVolumeName + "/tfvars",
+		},
+		{
+			Name:  "TFOPS_CONFIGMAP_PATH",
+			Value: "/tfops/" + tfvarsConfigMapVolumeName,
+		},
+	}...)
+
 	volumes := append(tfModules, tfVars...)
 
 	volumeMounts := []corev1.VolumeMount{}
@@ -1068,13 +1088,15 @@ func (r RunOptions) generateJob() *batchv1.Job {
 func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, runOpts RunOptions) (jobName string, err error) {
 	runOpts.sshConfig = instance.Name + "-ssh-config"
 
+	tfvarsConfigMap := runOpts.generateConfigMap()
 	secret := generateSecretObject(runOpts.sshConfig, instance.Namespace, runOpts.sshConfigData)
 	serviceAccount := runOpts.generateServiceAccount()
 	roleBinding := runOpts.generateRoleBinding()
 	role := runOpts.generateRole()
 	configMap := runOpts.generateActionConfigMap()
-	job := runOpts.generateJob()
+	job := runOpts.generateJob(tfvarsConfigMap)
 
+	controllerutil.SetControllerReference(instance, tfvarsConfigMap, r.scheme)
 	controllerutil.SetControllerReference(instance, secret, r.scheme)
 	controllerutil.SetControllerReference(instance, serviceAccount, r.scheme)
 	controllerutil.SetControllerReference(instance, roleBinding, r.scheme)
@@ -1101,6 +1123,19 @@ func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terr
 		return "", err
 	} else if err != nil {
 		reqLogger.Info(err.Error())
+	}
+
+	err = r.client.Create(context.TODO(), tfvarsConfigMap)
+	if err != nil && errors.IsNotFound(err) {
+		r.recorder.Event(instance, "Warning", "ConfigMapCreateError", fmt.Errorf("Could not create configmap %v", err).Error())
+		return "", err
+	} else if err != nil {
+		reqLogger.V(1).Info(fmt.Sprintf("ConfigMap %s will be updated", tfvarsConfigMap.Name))
+		updateErr := r.client.Update(context.TODO(), tfvarsConfigMap)
+		if updateErr != nil {
+			r.recorder.Event(instance, "Warning", "ConfigMapUpdateError", fmt.Errorf("Could not update configmap %v", err).Error())
+			return "", updateErr
+		}
 	}
 
 	err = r.client.Create(context.TODO(), configMap)
