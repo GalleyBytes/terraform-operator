@@ -4,7 +4,7 @@
 
 ```console
 $ helm repo add isaaguilar https://isaaguilar.github.io/helm-charts
-$ helm install isaaguilar/terraform-operator --namespace tf-system
+$ helm install terraform-operator isaaguilar/terraform-operator --namespace tf-system --create-namespace
 ```
 
 > See [terraform-operator's helm chart](https://github.com/isaaguilar/helm-charts/tree/master/charts/terraform-operator) for options

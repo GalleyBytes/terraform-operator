@@ -36,6 +36,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -75,7 +76,7 @@ type RunOptions struct {
 	moduleConfigMaps []string
 	namespace        string
 	name             string
-	nameTrunc63      string // 63 char limit required for a job's template labels (ie the label for "job-name")
+	jobNameLabel     string
 	envVars          map[string]string
 	credentials      []tfv1alpha1.Credentials
 	stack            ParsedAddress
@@ -96,14 +97,19 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 	isNewResource := false
 	applyAction := false
 	name := instance.Name
-	nameTrunc63 := utils.TruncateResourceName(name, 63)
+	jobNameLabel := utils.TruncateResourceName(name, 63)
 	terraformRunner := "isaaguilar/tfops"
 	terraformVersion := "0.11.14"
+	sshConfig := utils.TruncateResourceName(instance.Name, 242) + "-ssh-config"
+	// By prefixing the service account with "tf-", IRSA roles can use wildcard
+	// "tf-*" service account for AWS credentials.
+	serviceAccount := "tf-" + utils.TruncateResourceName(instance.Name, 250)
 
 	if isDestroy {
 		isNewResource = false
 		applyAction = instance.Spec.ApplyOnDelete
-		name = name + "-destroy"
+		name = utils.TruncateResourceName(instance.Name, 245) + "-destroy"
+		jobNameLabel = utils.TruncateResourceName(instance.Name, 55) + "-destroy"
 	} else if instance.ObjectMeta.Generation > 1 {
 		isNewResource = false
 		applyAction = instance.Spec.ApplyOnUpdate
@@ -123,14 +129,15 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 	return RunOptions{
 		namespace:        instance.Namespace,
 		name:             name,
-		nameTrunc63:      nameTrunc63,
+		jobNameLabel:     jobNameLabel,
 		envVars:          make(map[string]string),
 		isNewResource:    isNewResource,
 		applyAction:      applyAction,
 		terraformVersion: terraformVersion,
 		terraformRunner:  terraformRunner,
-		serviceAccount:   "tf-" + name,
+		serviceAccount:   serviceAccount,
 		configMapData:    make(map[string]string),
+		sshConfig:        sshConfig,
 	}
 }
 
@@ -267,12 +274,16 @@ func (r *ReconcileTerraform) Reconcile(request reconcile.Request) (reconcile.Res
 
 			// Completely ignore the finilization process if ignoreDelete is set
 			if !instance.Spec.IgnoreDelete {
+				reqLogger.V(1).Info("Marked for deletion and ignoreDelete is not set")
 				// let's make sure that a destroy job doesn't already exists
-				d := types.NamespacedName{Namespace: request.Namespace, Name: request.Name + "-destroy"}
+				// Use the truncated name in case the terraform resource name is larger than 245 characters (253 - "-destroy")
+				d := types.NamespacedName{Namespace: request.Namespace, Name: utils.TruncateResourceName(request.Name, 245) + "-destroy"}
 				destroyFound := &batchv1.Job{}
 				err = r.client.Get(context.TODO(), d, destroyFound)
 				if err != nil && errors.IsNotFound(err) {
+					reqLogger.V(1).Info("Destroy job not found. Creating the delete job")
 					if err := r.setupAndRun(reqLogger, instance, true); err != nil {
+						reqLogger.Error(err, "Error creating destroy job")
 						r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 						return reconcile.Result{}, err
 					}
@@ -730,9 +741,10 @@ func (r *ReconcileTerraform) addFinalizer(reqLogger logr.Logger, instance *tfv1a
 
 func (r RunOptions) generateConfigMap() *corev1.ConfigMap {
 
+	nameTrunc := utils.TruncateResourceName(r.name, 246) + "-tfvars"
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.name + "-tfvars",
+			Name:      nameTrunc,
 			Namespace: r.namespace,
 		},
 		Data: r.configMapData,
@@ -768,9 +780,10 @@ func (r RunOptions) generateActionConfigMap() *corev1.ConfigMap {
 		data["action"] = "plan-only"
 	}
 
+	nameTrunc := utils.TruncateResourceName(r.name, 246) + "-action"
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.name + "-action",
+			Name:      nameTrunc,
 			Namespace: r.namespace,
 		},
 		Data: data,
@@ -1046,16 +1059,32 @@ func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job 
 		}
 	}
 
+	// Create a manual selector for jobs (lets job-names be more than 63 chars)
+	manualSelector := true
+
+	// Custom UUID for label purposes
+	uid := uuid.NewUUID()
+
+	// The job-name label must be <64 chars
+	labels := make(map[string]string)
+	labels["tf-job"] = string(uid)
+	labels["job-name"] = r.jobNameLabel
+
 	// Schedule a job that will execute the terraform plan
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.nameTrunc63,
+			Name:      r.name,
 			Namespace: r.namespace,
 		},
 		Spec: batchv1.JobSpec{
+			ManualSelector: &manualSelector,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: labels,
+			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: annotations,
+					Labels:      labels,
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: r.serviceAccount,
@@ -1086,8 +1115,6 @@ func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job 
 }
 
 func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, runOpts RunOptions) (jobName string, err error) {
-	runOpts.sshConfig = instance.Name + "-ssh-config"
-
 	tfvarsConfigMap := runOpts.generateConfigMap()
 	secret := generateSecretObject(runOpts.sshConfig, instance.Namespace, runOpts.sshConfigData)
 	serviceAccount := runOpts.generateServiceAccount()

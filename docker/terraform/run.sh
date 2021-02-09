@@ -1,4 +1,10 @@
 #!/bin/bash -e
+##
+## TODO - When the $INSTANCE_NAME approaches 253 characters, this script should 
+##        truncate accordingly to make sure that any secrets/configmaps that
+##        get saved here don't get blocked by the K8S API due to names being
+##        too long. 
+##
 # Let the finalizer or manual destroy by passing in $DESTROY="true"
 # Terraforms will be applyed only then $APPLY="true"
 function run_terraform {
