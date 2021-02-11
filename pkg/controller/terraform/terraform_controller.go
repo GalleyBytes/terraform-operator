@@ -101,9 +101,12 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 	terraformRunner := "isaaguilar/tfops"
 	terraformVersion := "0.11.14"
 	sshConfig := utils.TruncateResourceName(instance.Name, 242) + "-ssh-config"
-	// By prefixing the service account with "tf-", IRSA roles can use wildcard
-	// "tf-*" service account for AWS credentials.
-	serviceAccount := "tf-" + utils.TruncateResourceName(instance.Name, 250)
+	serviceAccount := instance.Spec.ServiceAccount
+	if serviceAccount == "" {
+		// By prefixing the service account with "tf-", IRSA roles can use wildcard
+		// "tf-*" service account for AWS credentials.
+		serviceAccount = "tf-" + utils.TruncateResourceName(instance.Name, 250)
+	}
 
 	if isDestroy {
 		isNewResource = false
@@ -756,6 +759,9 @@ func (r RunOptions) generateServiceAccount() *corev1.ServiceAccount {
 	annotations := make(map[string]string)
 
 	for _, c := range r.credentials {
+		for k, v := range c.ServiceAccountAnnotations {
+			annotations[k] = v
+		}
 		if c.AWSCredentials.IRSA != "" {
 			annotations["eks.amazonaws.com/role-arn"] = c.AWSCredentials.IRSA
 		}
@@ -1117,7 +1123,11 @@ func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job 
 func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, runOpts RunOptions) (jobName string, err error) {
 	tfvarsConfigMap := runOpts.generateConfigMap()
 	secret := generateSecretObject(runOpts.sshConfig, instance.Namespace, runOpts.sshConfigData)
-	serviceAccount := runOpts.generateServiceAccount()
+	var serviceAccount *corev1.ServiceAccount
+	serviceAccountName := instance.Spec.ServiceAccount
+	if serviceAccountName == "" {
+		serviceAccount = runOpts.generateServiceAccount()
+	}
 	roleBinding := runOpts.generateRoleBinding()
 	role := runOpts.generateRole()
 	configMap := runOpts.generateActionConfigMap()
@@ -1125,17 +1135,20 @@ func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terr
 
 	controllerutil.SetControllerReference(instance, tfvarsConfigMap, r.scheme)
 	controllerutil.SetControllerReference(instance, secret, r.scheme)
-	controllerutil.SetControllerReference(instance, serviceAccount, r.scheme)
 	controllerutil.SetControllerReference(instance, roleBinding, r.scheme)
 	controllerutil.SetControllerReference(instance, role, r.scheme)
 	controllerutil.SetControllerReference(instance, configMap, r.scheme)
 	controllerutil.SetControllerReference(instance, job, r.scheme)
 
-	err = r.client.Create(context.TODO(), serviceAccount)
-	if err != nil && errors.IsNotFound(err) {
-		return "", err
-	} else if err != nil {
-		reqLogger.Info(err.Error())
+	if serviceAccount != nil {
+		controllerutil.SetControllerReference(instance, serviceAccount, r.scheme)
+
+		err = r.client.Create(context.TODO(), serviceAccount)
+		if err != nil && errors.IsNotFound(err) {
+			return "", err
+		} else if err != nil {
+			reqLogger.Info(err.Error())
+		}
 	}
 
 	err = r.client.Create(context.TODO(), role)

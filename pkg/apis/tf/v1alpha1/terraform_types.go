@@ -45,6 +45,10 @@ type TerraformSpec struct {
 	Sources []*SrcOpts `json:"sources,omitempty"`
 	Env     []EnvVar   `json:"env,omitempty"`
 
+	// ServiceAccount use a specific kubernetes ServiceAccount for running the create + destroy pods.
+	// If not specified we create a new ServiceAccount per Terraform
+	ServiceAccount string `json:"serviceAccount,omitempty"`
+
 	// Credentials is an array of credentials generally used for Terraform
 	// providers
 	Credentails []Credentials `json:"credentials,omitempty"`
@@ -241,6 +245,10 @@ type Credentials struct {
 	// for the Terraform AWS Provider. If using AWS_ACCESS_KEY_ID and/or environment
 	// variables for credentials, use fromEnvs.
 	AWSCredentials AWSCredentials `json:"aws,omitempty"`
+
+	// ServiceAccountAnnotations allows the service account to be annotated with
+	// cloud IAM roles such as Workload Identity on GCP
+	ServiceAccountAnnotations map[string]string `json:"serviceAccountAnnotations,omitempty"`
 
 	// TODO Add other commonly used cloud providers to this list
 }
