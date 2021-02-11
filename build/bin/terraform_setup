@@ -1,7 +1,0 @@
-#!/bin/sh
-
-yum install unzip -y
-curl -o terraform.zip https://releases.hashicorp.com/terraform/0.11.14/terraform_0.11.14_linux_386.zip
-unzip terraform.zip
-chmod +x terraform
-mv terraform /usr/local/bin/terraform
