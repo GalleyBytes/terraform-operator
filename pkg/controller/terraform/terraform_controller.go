@@ -77,7 +77,7 @@ type RunOptions struct {
 	namespace        string
 	name             string
 	jobNameLabel     string
-	envVars          map[string]string
+	envVars          map[string]*tfv1alpha1.EnvVar
 	credentials      []tfv1alpha1.Credentials
 	stack            ParsedAddress
 	token            string
@@ -133,7 +133,7 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 		namespace:        instance.Namespace,
 		name:             name,
 		jobNameLabel:     jobNameLabel,
-		envVars:          make(map[string]string),
+		envVars:          make(map[string]*tfv1alpha1.EnvVar),
 		isNewResource:    isNewResource,
 		applyAction:      applyAction,
 		terraformVersion: terraformVersion,
@@ -148,8 +148,8 @@ func (r *RunOptions) updateDownloadedModules(module string) {
 	r.moduleConfigMaps = append(r.moduleConfigMaps, module)
 }
 
-func (r *RunOptions) updateEnvVars(k, v string) {
-	r.envVars[k] = v
+func (r *RunOptions) updateEnvVars(v *tfv1alpha1.EnvVar) {
+	r.envVars[v.Name] = v
 }
 
 const terraformFinalizer = "finalizer.tf.isaaguilar.com"
@@ -550,7 +550,10 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	// resources that are not owned by this CR, like a PVC.
 
 	runOpts := newRunOptions(instance, isFinalize)
-	runOpts.updateEnvVars("DEPLOYMENT", instance.Name)
+	runOpts.updateEnvVars(&tfv1alpha1.EnvVar{
+		Name:  "DEPLOYMENT",
+		Value: instance.Name,
+	})
 	// runOpts.namespace = instance.Namespace
 
 	// Stack Download
@@ -683,8 +686,9 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	}
 
 	// TODO Validate spec.env
-	for _, env := range instance.Spec.Env {
-		runOpts.updateEnvVars(env.Name, env.Value)
+	for i := range instance.Spec.Env {
+		env := &instance.Spec.Env[i]
+		runOpts.updateEnvVars(env)
 	}
 
 	// Flatten all the .tfvars and TF_VAR envs into a single file and push
@@ -708,7 +712,7 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	}
 
 	if isFinalize {
-		runOpts.envVars["DESTROY"] = "true"
+		runOpts.getOrCreateEnv("DESTROY").Value = "true"
 	}
 
 	// RUN
@@ -973,8 +977,9 @@ func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job 
 	for k, v := range r.envVars {
 		envs = append(envs, []corev1.EnvVar{
 			{
-				Name:  k,
-				Value: v,
+				Name:      k,
+				Value:     v.Value,
+				ValueFrom: v.ToValueFrom(),
 			},
 		}...)
 	}
@@ -1118,6 +1123,18 @@ func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job 
 	}
 
 	return job
+}
+
+func (r *RunOptions) getOrCreateEnv(name string) *tfv1alpha1.EnvVar {
+	e := r.envVars[name]
+	if e != nil {
+		return e
+	}
+	e = &tfv1alpha1.EnvVar{
+		Name: name,
+	}
+	r.envVars[name] = e
+	return e
 }
 
 func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, runOpts RunOptions) (jobName string, err error) {
@@ -2047,12 +2064,16 @@ func (d GitRepoAccessOptions) commitTfvars(k8sclient client.Client, tfvars, tfva
 	}
 
 	// Format TFVars File
-	// Fist read in the tfvar file that gets created earlier. This tfvar
+	// First read in the tfvar file that gets created earlier. This tfvar
 	// file should have already concatenated all the tfvars found
 	// from the git repos
 	tfvarsFileContent := tfvars
-	for k, v := range runOpts.envVars {
+	for k, e := range runOpts.envVars {
 		if !strings.Contains(k, "TF_VAR") {
+			continue
+		}
+		v := e.Value
+		if v == "" {
 			continue
 		}
 		k = strings.ReplaceAll(k, "TF_VAR_", "")

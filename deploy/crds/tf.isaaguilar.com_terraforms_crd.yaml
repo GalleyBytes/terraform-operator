@@ -107,6 +107,13 @@ spec:
                     required:
                     - name
                     type: object
+                  serviceAccountAnnotations:
+                    additionalProperties:
+                      type: string
+                    description: ServiceAccountAnnotations allows the service account
+                      to be annotated with cloud IAM roles such as Workload Identity
+                      on GCP
+                    type: object
                 type: object
               type: array
             customBackend:
@@ -123,6 +130,29 @@ spec:
                     type: string
                   value:
                     type: string
+                  valueFrom:
+                    description: Source for the environment variable's value. Cannot
+                      be used if value is not empty.
+                    properties:
+                      secretKeyRef:
+                        description: Selects a key of a secret in the pod's namespace
+                        properties:
+                          key:
+                            description: The key of the secret to select from.  Must
+                              be a valid secret key.
+                            type: string
+                          name:
+                            description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              TODO: Add other useful fields. apiVersion, kind, uid?'
+                            type: string
+                          optional:
+                            description: Specify whether the Secret or its key must
+                              be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                    type: object
                 required:
                 - name
                 - value
@@ -253,6 +283,11 @@ spec:
                 - host
                 type: object
               type: array
+            serviceAccount:
+              description: ServiceAccount use a specific kubernetes ServiceAccount
+                for running the create + destroy pods. If not specified we create
+                a new ServiceAccount per Terraform
+              type: string
             sources:
               items:
                 description: SrcOpts defines a terraform source location (eg git::SSH
