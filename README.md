@@ -1,5 +1,5 @@
 <p align="center">
-<img src="https://s3.amazonaws.com/classic.isaaguilar.com/terraform-operator-logo.gif" alt="Terraform Operator" width="50%"></img>
+<img src="https://s3.amazonaws.com/classic.isaaguilar.com/terraform-operator-logo.gif" alt="Terraform Operator"></img>
 </p>
 
 > A Kubernetes CRD and Controller to handle Terraform operations by generating k8s jobs catered to perform Terraform workflows
@@ -47,6 +47,6 @@ This project is not:
 
 Requires the following installed on your system:
 
-- go v1.13.3
-- operator-sdk v0.15.1
+- go >= v1.15.0
+- operator-sdk ~ v1.4.0
 

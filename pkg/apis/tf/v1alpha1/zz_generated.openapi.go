@@ -58,17 +58,20 @@ func schema_pkg_apis_tf_v1alpha1_Terraform(ref common.ReferenceCallback) common.
 					},
 					"metadata": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"),
+							Default: map[string]interface{}{},
+							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"),
 						},
 					},
 					"spec": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformSpec"),
+							Default: map[string]interface{}{},
+							Ref:     ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformSpec"),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformStatus"),
+							Default: map[string]interface{}{},
+							Ref:     ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.TerraformStatus"),
 						},
 					},
 				},
@@ -124,10 +127,18 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
-										Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.EnvVar"),
+										Default: map[string]interface{}{},
+										Ref:     ref("k8s.io/api/core/v1.EnvVar"),
 									},
 								},
 							},
+						},
+					},
+					"serviceAccount": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ServiceAccount use a specific kubernetes ServiceAccount for running the create + destroy pods. If not specified we create a new ServiceAccount per Terraform",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 					"credentials": {
@@ -137,7 +148,8 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
-										Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Credentials"),
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Credentials"),
 									},
 								},
 							},
@@ -217,7 +229,8 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
-										Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod"),
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod"),
 									},
 								},
 							},
@@ -228,7 +241,7 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 			},
 		},
 		Dependencies: []string{
-			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Credentials", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.EnvVar", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ExportRepo", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ReconcileTerraformDeployment", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SrcOpts"},
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Credentials", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ExportRepo", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ReconcileTerraformDeployment", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SrcOpts", "k8s.io/api/core/v1.EnvVar"},
 	}
 }
 
@@ -242,14 +255,16 @@ func schema_pkg_apis_tf_v1alpha1_TerraformStatus(ref common.ReferenceCallback) c
 					"phase": {
 						SchemaProps: spec.SchemaProps{
 							Description: "INSERT ADDITIONAL STATUS FIELD - define observed state of cluster Important: Run \"operator-sdk generate k8s\" to regenerate code after modifying this file Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html",
+							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
 						},
 					},
 					"lastGeneration": {
 						SchemaProps: spec.SchemaProps{
-							Type:   []string{"integer"},
-							Format: "int64",
+							Default: 0,
+							Type:    []string{"integer"},
+							Format:  "int64",
 						},
 					},
 				},
