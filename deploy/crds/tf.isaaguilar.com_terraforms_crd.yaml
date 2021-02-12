@@ -107,6 +107,13 @@ spec:
                     required:
                     - name
                     type: object
+                  serviceAccountAnnotations:
+                    additionalProperties:
+                      type: string
+                    description: ServiceAccountAnnotations allows the service account
+                      to be annotated with cloud IAM roles such as Workload Identity
+                      on GCP
+                    type: object
                 type: object
               type: array
             customBackend:
@@ -253,6 +260,11 @@ spec:
                 - host
                 type: object
               type: array
+            serviceAccount:
+              description: ServiceAccount use a specific kubernetes ServiceAccount
+                for running the create + destroy pods. If not specified we create
+                a new ServiceAccount per Terraform
+              type: string
             sources:
               items:
                 description: SrcOpts defines a terraform source location (eg git::SSH

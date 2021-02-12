@@ -66,6 +66,13 @@ func (in *Credentials) DeepCopyInto(out *Credentials) {
 	*out = *in
 	out.SecretNameRef = in.SecretNameRef
 	out.AWSCredentials = in.AWSCredentials
+	if in.ServiceAccountAnnotations != nil {
+		in, out := &in.ServiceAccountAnnotations, &out.ServiceAccountAnnotations
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	return
 }
 
@@ -420,10 +427,12 @@ func (in *TerraformSpec) DeepCopyInto(out *TerraformSpec) {
 		*out = make([]EnvVar, len(*in))
 		copy(*out, *in)
 	}
-	if in.Credentails != nil {
-		in, out := &in.Credentails, &out.Credentails
+	if in.Credentials != nil {
+		in, out := &in.Credentials, &out.Credentials
 		*out = make([]Credentials, len(*in))
-		copy(*out, *in)
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 	if in.Reconcile != nil {
 		in, out := &in.Reconcile, &out.Reconcile

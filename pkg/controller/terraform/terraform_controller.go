@@ -605,7 +605,7 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	reqLogger.Info("Reading spec.config ")
 	// TODO Validate spec.config exists
 	// TODO validate spec.sources exists && len > 0
-	runOpts.credentials = instance.Spec.Credentails
+	runOpts.credentials = instance.Spec.Credentials
 	tfvars := ""
 	otherConfigFiles := make(map[string]string)
 	for _, s := range instance.Spec.Sources {
