@@ -3,7 +3,7 @@ DOCKER_REPO ?= isaaguilar
 IMAGE_NAME ?= terraform-operator
 DEPLOYMENT ?= ${IMAGE_NAME}
 NAMESPACE ?= tf-system
-VERSION ?= $(shell if git status -s|wc -l|grep -w "0" >/dev/null 2>&1;then git tag --points-at HEAD|cat; fi)
+VERSION ?= $(shell if git ls-remote .|grep $(git rev-parse HEAD).*tags|head -n1|sed "s/^.*\///" >/dev/null 2>&1;then git tag --points-at HEAD|cat; fi)
 ifeq ($(VERSION),)
 VERSION := v0.0.0
 endif
