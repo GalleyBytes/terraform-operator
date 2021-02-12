@@ -17,6 +17,8 @@ spec:
     kind: Terraform
     listKind: TerraformList
     plural: terraforms
+    shortNames:
+    - tf
     singular: terraform
   scope: Namespaced
   subresources:
