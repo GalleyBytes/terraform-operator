@@ -77,7 +77,7 @@ type RunOptions struct {
 	namespace        string
 	name             string
 	jobNameLabel     string
-	envVars          map[string]*tfv1alpha1.EnvVar
+	envVars          []corev1.EnvVar
 	credentials      []tfv1alpha1.Credentials
 	stack            ParsedAddress
 	token            string
@@ -133,7 +133,7 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 		namespace:        instance.Namespace,
 		name:             name,
 		jobNameLabel:     jobNameLabel,
-		envVars:          make(map[string]*tfv1alpha1.EnvVar),
+		envVars:          instance.Spec.Env,
 		isNewResource:    isNewResource,
 		applyAction:      applyAction,
 		terraformVersion: terraformVersion,
@@ -148,8 +148,8 @@ func (r *RunOptions) updateDownloadedModules(module string) {
 	r.moduleConfigMaps = append(r.moduleConfigMaps, module)
 }
 
-func (r *RunOptions) updateEnvVars(v *tfv1alpha1.EnvVar) {
-	r.envVars[v.Name] = v
+func (r *RunOptions) updateEnvVars(v corev1.EnvVar) {
+	r.envVars = append(r.envVars, v)
 }
 
 const terraformFinalizer = "finalizer.tf.isaaguilar.com"
@@ -550,7 +550,7 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	// resources that are not owned by this CR, like a PVC.
 
 	runOpts := newRunOptions(instance, isFinalize)
-	runOpts.updateEnvVars(&tfv1alpha1.EnvVar{
+	runOpts.updateEnvVars(corev1.EnvVar{
 		Name:  "DEPLOYMENT",
 		Value: instance.Name,
 	})
@@ -685,12 +685,6 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 		runOpts.configMapData["postrun.sh"] = instance.Spec.PostrunScript
 	}
 
-	// TODO Validate spec.env
-	for i := range instance.Spec.Env {
-		env := &instance.Spec.Env[i]
-		runOpts.updateEnvVars(env)
-	}
-
 	// Flatten all the .tfvars and TF_VAR envs into a single file and push
 	if instance.Spec.ExportRepo != nil && !isFinalize {
 		e := instance.Spec.ExportRepo
@@ -712,7 +706,7 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	}
 
 	if isFinalize {
-		runOpts.getOrCreateEnv("DESTROY").Value = "true"
+		runOpts.getOrCreateEnv("DESTROY", "true")
 	}
 
 	// RUN
@@ -882,10 +876,10 @@ func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job 
 	// reqLogger.Info(fmt.Sprintf("Running job with this setup: %+v", r))
 
 	// TF Module
-	envs := []corev1.EnvVar{}
 	if r.mainModule == "" {
 		r.mainModule = "main_module"
 	}
+	envs := r.envVars
 	envs = append(envs, []corev1.EnvVar{
 		{
 			Name:  "TFOPS_MAIN_MODULE",
@@ -969,17 +963,6 @@ func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job 
 			{
 				Name:  "IS_NEW_RESOURCE",
 				Value: "true",
-			},
-		}...)
-	}
-
-	// TF Vars
-	for k, v := range r.envVars {
-		envs = append(envs, []corev1.EnvVar{
-			{
-				Name:      k,
-				Value:     v.Value,
-				ValueFrom: v.ToValueFrom(),
 			},
 		}...)
 	}
@@ -1125,16 +1108,18 @@ func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job 
 	return job
 }
 
-func (r *RunOptions) getOrCreateEnv(name string) *tfv1alpha1.EnvVar {
-	e := r.envVars[name]
-	if e != nil {
-		return e
+// getOrCreateEnv will check if an env exists. If it does not, it will be
+// created with the value
+func (r *RunOptions) getOrCreateEnv(name, value string) {
+	for _, i := range r.envVars {
+		if i.Name == name {
+			return
+		}
 	}
-	e = &tfv1alpha1.EnvVar{
-		Name: name,
-	}
-	r.envVars[name] = e
-	return e
+	r.envVars = append(r.envVars, corev1.EnvVar{
+		Name:  name,
+		Value: value,
+	})
 }
 
 func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, runOpts RunOptions) (jobName string, err error) {
@@ -2068,12 +2053,15 @@ func (d GitRepoAccessOptions) commitTfvars(k8sclient client.Client, tfvars, tfva
 	// file should have already concatenated all the tfvars found
 	// from the git repos
 	tfvarsFileContent := tfvars
-	for k, e := range runOpts.envVars {
-		if !strings.Contains(k, "TF_VAR") {
+	for _, i := range runOpts.envVars {
+		k := i.Name
+		v := i.Value
+		// TODO Attempt to resolve other kinds of TF_VAR_ values via
+		// 		an EnvVarSource other than `Value`
+		if v == "" {
 			continue
 		}
-		v := e.Value
-		if v == "" {
+		if !strings.Contains(k, "TF_VAR") {
 			continue
 		}
 		k = strings.ReplaceAll(k, "TF_VAR_", "")
