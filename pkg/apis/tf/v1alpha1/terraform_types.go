@@ -52,7 +52,7 @@ type TerraformSpec struct {
 
 	// Credentials is an array of credentials generally used for Terraform
 	// providers
-	Credentails []Credentials `json:"credentials,omitempty"`
+	Credentials []Credentials `json:"credentials,omitempty"`
 
 	// ApplyOnCreate is used to apply any planned changes when the resource is
 	// first created. Omitting this or setting it to false will resort to

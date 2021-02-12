@@ -414,8 +414,8 @@ func (in *TerraformSpec) DeepCopyInto(out *TerraformSpec) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
-	if in.Credentails != nil {
-		in, out := &in.Credentails, &out.Credentails
+	if in.Credentials != nil {
+		in, out := &in.Credentials, &out.Credentials
 		*out = make([]Credentials, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
