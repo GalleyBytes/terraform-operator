@@ -79,3 +79,49 @@ spec:
   - aws:
       irsa: arn:aws:iam::111222333444:role/my-irsa-role
 ```
+
+## Google Cloud and Workload Identity
+       
+If you are using [Google Cloud]() then [Workload Identity](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity) is a great way to associate a kubernetes `ServiceAccount` with a GCP Service Account + Cloud IAM Roles. 
+
+It can be a little fiddly getting the exact kubernetes `ServiceAccount` resource in a namespace associated with the GCP project and IAM identity and roles.
+
+e.g. [here is an example](https://github.com/mattmoor/mink/blob/master/WORKLOAD-IDENTITY.md#gke-workload-identity) of creating an IAM service account `mink-controller` and then associating that with a kubernetes `ServiceAccount` in namespace `mink-system` with name `controller.
+
+Because you need to both link the kubernetes `ServiceAccount` to the IAM role and vice versa, its hard to dyanmically create a `ServiceAccount` per `Terraform` resource (which is the default behaviour in the Terraform Operator).
+
+
+So to work well with [Workload Identity](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity) its easier to just specify the kubernetes `ServiceAccount` name inside your `Terraform` resource as follows:
+
+```yaml
+apiVersion: tf.isaaguilar.com/v1alpha1
+kind: Terraform
+# (...)
+spec:
+  serviceAccount: my-tf-sa 
+```
+
+Then the `Terraform` resource will use the kubernetes `ServiceAccount` called `my-tf-sa` for the apply and destroy Jobs which you can then use [Workload Identity](https://cloud.google.com/kubernetes-engine/docs/how-to/workload-identity) and the annotation on the `ServiceAccount` to associate with the necessary Cloud IAM roles.
+
+Here is a [complete example](../examples/complete-examples/gcp-simple-template.yaml).
+
+## Other clouds
+
+You may find its easier to use the above approach with Google Cloud and use a specific `spec.serviceAccount` and have that kubernetes `ServiceAccount` associated with cloud IAM roles if your cloud provider supports it.
+
+If your cloud provider supports annotations to associate a kubernetes `ServiceAccount` with cloud IAM roles you can add those service accounts here:
+
+
+```yaml
+apiVersion: tf.isaaguilar.com/v1alpha1
+kind: Terraform
+# (...)
+spec:
+  credentials: 
+  - serviceAccountAnnotations:
+      myannotation: something
+      anotherAnnotation: oneMoreThingHere
+```
+
+
+

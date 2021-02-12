@@ -1,0 +1,57 @@
+apiVersion: tf.isaaguilar.com/v1alpha1
+kind: Terraform
+metadata:
+  name: simple-template-example
+spec:
+  sshTunnel:
+    host: 10.151.36.97
+    user: ec2-user
+    sshKeySecretRef:
+      name: proxysshkey
+  scmAuthMethods:
+  - host: github.com
+    git:
+      ssh:
+        requireProxy: true
+        sshKeySecretRef:
+          name: gitsshkey
+  
+  terraformVersion: 0.12.23
+  terraformModule:
+    address: git@github.com:iaguilar/scratch.git//create-file
+  
+  customBackend: |-
+    terraform {
+      backend "s3" {
+        key            = "tf-operator-examples/simple-template.tfstate"
+        region         = "us-east-1"
+        bucket         = "terraform-isaaguilar"
+        dynamodb_table = "terraform-isaaguilar-lock"
+        profile        = "isaaguilar"
+      }
+    }
+  applyOnCreate: true
+  applyOnUpdate: true
+  applyOnDelete: true
+  ignoreDelete: true
+
+  # lets use a custom kubernetes Service Account for the terraform Jobs:
+  serviceAccount: my-tf-sa
+
+  sources:
+  - address: git@github.com:iaguilar/scratch.git//create-file/path/to/template/files/foo.tpl.txt
+    extras:
+    - is-file
+  env:
+  - name: TF_VAR_template_file
+    value: ./foo.tpl.txt
+  exportRepo:
+    address: git@github.com:iaguilar/scratch.git
+    tfvarsFile: tf-operator-examples/simple-template.tfvars
+    confFile: tf-operator-examples/simple-template.conf
+  prerunScript: |-
+    #!/usr/bin/env bash
+    echo 'I want to replace the template....muahahaha! ${REPLACE_ME}... :)' > ${TF_VAR_template_file}
+  postrunScript: |-
+    #!/usr/bin/env bash
+    echo "Terraform is done!" 
