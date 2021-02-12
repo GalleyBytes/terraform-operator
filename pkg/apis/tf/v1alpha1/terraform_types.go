@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -42,8 +43,8 @@ type TerraformSpec struct {
 	// git protocol over SSH or HTTPS
 	TerraformModule *SrcOpts `json:"terraformModule"`
 
-	Sources []*SrcOpts `json:"sources,omitempty"`
-	Env     []EnvVar   `json:"env,omitempty"`
+	Sources []*SrcOpts  `json:"sources,omitempty"`
+	Env     []v1.EnvVar `json:"env,omitempty"`
 
 	// ServiceAccount use a specific kubernetes ServiceAccount for running the create + destroy pods.
 	// If not specified we create a new ServiceAccount per Terraform
@@ -171,12 +172,6 @@ type ReconcileTerraformDeployment struct {
 	// SyncPeriod can be used to set a custom time to check actual provisions
 	// to tfstate. Defaults to 60 minutes
 	SyncPeriod int64 `json:"syncPeriod,omitempty"`
-}
-
-// EnvVar defines key/value pairs of env vars that get picked up by terraform
-type EnvVar struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
 }
 
 // Source is used to describe details of where to find configs

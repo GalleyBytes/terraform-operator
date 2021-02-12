@@ -77,7 +77,7 @@ type RunOptions struct {
 	namespace        string
 	name             string
 	jobNameLabel     string
-	envVars          map[string]string
+	envVars          []corev1.EnvVar
 	credentials      []tfv1alpha1.Credentials
 	stack            ParsedAddress
 	token            string
@@ -133,7 +133,7 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 		namespace:        instance.Namespace,
 		name:             name,
 		jobNameLabel:     jobNameLabel,
-		envVars:          make(map[string]string),
+		envVars:          instance.Spec.Env,
 		isNewResource:    isNewResource,
 		applyAction:      applyAction,
 		terraformVersion: terraformVersion,
@@ -148,8 +148,8 @@ func (r *RunOptions) updateDownloadedModules(module string) {
 	r.moduleConfigMaps = append(r.moduleConfigMaps, module)
 }
 
-func (r *RunOptions) updateEnvVars(k, v string) {
-	r.envVars[k] = v
+func (r *RunOptions) updateEnvVars(v corev1.EnvVar) {
+	r.envVars = append(r.envVars, v)
 }
 
 const terraformFinalizer = "finalizer.tf.isaaguilar.com"
@@ -550,7 +550,10 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	// resources that are not owned by this CR, like a PVC.
 
 	runOpts := newRunOptions(instance, isFinalize)
-	runOpts.updateEnvVars("DEPLOYMENT", instance.Name)
+	runOpts.updateEnvVars(corev1.EnvVar{
+		Name:  "DEPLOYMENT",
+		Value: instance.Name,
+	})
 	// runOpts.namespace = instance.Namespace
 
 	// Stack Download
@@ -682,11 +685,6 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 		runOpts.configMapData["postrun.sh"] = instance.Spec.PostrunScript
 	}
 
-	// TODO Validate spec.env
-	for _, env := range instance.Spec.Env {
-		runOpts.updateEnvVars(env.Name, env.Value)
-	}
-
 	// Flatten all the .tfvars and TF_VAR envs into a single file and push
 	if instance.Spec.ExportRepo != nil && !isFinalize {
 		e := instance.Spec.ExportRepo
@@ -708,7 +706,7 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	}
 
 	if isFinalize {
-		runOpts.envVars["DESTROY"] = "true"
+		runOpts.getOrCreateEnv("DESTROY", "true")
 	}
 
 	// RUN
@@ -878,10 +876,10 @@ func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job 
 	// reqLogger.Info(fmt.Sprintf("Running job with this setup: %+v", r))
 
 	// TF Module
-	envs := []corev1.EnvVar{}
 	if r.mainModule == "" {
 		r.mainModule = "main_module"
 	}
+	envs := r.envVars
 	envs = append(envs, []corev1.EnvVar{
 		{
 			Name:  "TFOPS_MAIN_MODULE",
@@ -965,16 +963,6 @@ func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job 
 			{
 				Name:  "IS_NEW_RESOURCE",
 				Value: "true",
-			},
-		}...)
-	}
-
-	// TF Vars
-	for k, v := range r.envVars {
-		envs = append(envs, []corev1.EnvVar{
-			{
-				Name:  k,
-				Value: v,
 			},
 		}...)
 	}
@@ -1118,6 +1106,20 @@ func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job 
 	}
 
 	return job
+}
+
+// getOrCreateEnv will check if an env exists. If it does not, it will be
+// created with the value
+func (r *RunOptions) getOrCreateEnv(name, value string) {
+	for _, i := range r.envVars {
+		if i.Name == name {
+			return
+		}
+	}
+	r.envVars = append(r.envVars, corev1.EnvVar{
+		Name:  name,
+		Value: value,
+	})
 }
 
 func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, runOpts RunOptions) (jobName string, err error) {
@@ -2047,11 +2049,18 @@ func (d GitRepoAccessOptions) commitTfvars(k8sclient client.Client, tfvars, tfva
 	}
 
 	// Format TFVars File
-	// Fist read in the tfvar file that gets created earlier. This tfvar
+	// First read in the tfvar file that gets created earlier. This tfvar
 	// file should have already concatenated all the tfvars found
 	// from the git repos
 	tfvarsFileContent := tfvars
-	for k, v := range runOpts.envVars {
+	for _, i := range runOpts.envVars {
+		k := i.Name
+		v := i.Value
+		// TODO Attempt to resolve other kinds of TF_VAR_ values via
+		// 		an EnvVarSource other than `Value`
+		if v == "" {
+			continue
+		}
 		if !strings.Contains(k, "TF_VAR") {
 			continue
 		}
