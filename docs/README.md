@@ -25,7 +25,7 @@ $ kubectl apply -f deploy --namespace tf-system
 
 Once the operator is installed, terraform resources are ready to be deployed.
 
-Check out the [examples](examples) directory to see the different options tf-operator handles. See [complete-examples](examples/complete-examples) for realistic examples.
+Check out the [examples](examples) directory to see the different options tf-operator handles. See [complete-examples](../examples/complete-examples) for realistic examples.
 
 ## Hello Terraform Operator Example
 
