@@ -278,6 +278,27 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			// Completely ignore the finilization process if ignoreDelete is set
 			if !instance.Spec.IgnoreDelete {
 				reqLogger.V(1).Info("Marked for deletion and ignoreDelete is not set")
+
+				// lets try get the apply job
+				aj := types.NamespacedName{Namespace: request.Namespace, Name: request.Name}
+				applyFound := &batchv1.Job{}
+				err = r.client.Get(context.TODO(), aj, applyFound)
+				if err == nil && !IsJobFinished(applyFound) {
+					// lets delete the apply job to avoid running concurrent apply and delete jobs
+					err = r.client.Delete(context.TODO(), applyFound)
+					if err != nil {
+						reqLogger.Error(err, "Failed to delete Job")
+						r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+						return reconcile.Result{}, err
+					} else {
+						reqLogger.Info(fmt.Sprintf("removed pending Job %s", request.Name))
+					}
+				} else if err != nil && !errors.IsNotFound(err) {
+					reqLogger.Error(err, "Failed to get Job")
+					r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+					return reconcile.Result{}, err
+				}
+
 				// let's make sure that a destroy job doesn't already exists
 				// Use the truncated name in case the terraform resource name is larger than 245 characters (253 - "-destroy")
 				d := types.NamespacedName{Namespace: request.Namespace, Name: utils.TruncateResourceName(request.Name, 245) + "-destroy"}
@@ -453,6 +474,12 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	// TODO manually triggers apply/destroy
 
 	return reconcile.Result{}, nil
+}
+
+// IsJobFinished returns true if the job has completed
+func IsJobFinished(job *batchv1.Job) bool {
+	BackoffLimit := job.Spec.BackoffLimit
+	return job.Status.CompletionTime != nil || (job.Status.Active == 0 && BackoffLimit != nil && job.Status.Failed >= *BackoffLimit)
 }
 
 func (d GitRepoAccessOptions) TunnelClose(reqLogger logr.Logger) {
