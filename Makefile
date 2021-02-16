@@ -55,6 +55,24 @@ else
 OPENAPI_GEN=$(shell which openapi-gen)
 endif
 
+
+client-gen-bin:
+ifeq (, $(shell which client-gen))
+	@{ \
+	set -e ;\
+	CLIENT_GEN_TMP_DIR=$$(mktemp -d) ;\
+	cd $$CLIENT_GEN_TMP_DIR ;\
+	git clone https://github.com/kubernetes/code-generator.git ;\
+	cd code-generator ;\
+	go install ./cmd/client-gen ;\
+	rm -rf $$CLIENT_GEN_TMP_DIR ;\
+	}
+CLIENT_GEN=$(GOBIN)/client-gen
+else
+CLIENT_GEN=$(shell which client-gen)
+endif
+
+
 # rbac:roleName=manager-role
 # Generate manifests e.g. CRD, RBAC etc.
 crds: controller-gen
@@ -63,7 +81,10 @@ crds: controller-gen
 openapi-gen: openapi-gen-bin
 	$(OPENAPI_GEN) --logtostderr=true -o "" -i ./pkg/apis/tf/v1alpha1 -O zz_generated.openapi -p ./pkg/apis/tf/v1alpha1 -h ./hack/boilerplate.go.txt -r "-"
 
-k8s-gen: crds openapi-gen
+client-gen: client-gen-bin
+	$(CLIENT_GEN) -n versioned --input-base ""  --input ${PKG}/pkg/apis/tf/v1alpha1 -p ${PKG}/pkg/client/clientset -h ./hack/boilerplate.go.txt
+
+k8s-gen: crds openapi-gen client-gen
 	
 docker-build:
 	docker build -t ${DOCKER_REPO}/${IMAGE_NAME}:${VERSION} -f build/Dockerfile .
@@ -91,4 +112,4 @@ push: docker-push
 push-all: push docker-push-job
 run: docker-build-local deploy
 
-.PHONY: build push run docker-build docker-push deploy openapi-gen k8s-gen crds contoller-gen
+.PHONY: build push run docker-build docker-build-local docker-push deploy openapi-gen k8s-gen crds contoller-gen client-gen
