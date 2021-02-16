@@ -285,6 +285,9 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 				err = r.client.Get(context.TODO(), aj, applyFound)
 				if err == nil && !IsJobFinished(applyFound) {
 					// lets delete the apply job to avoid running concurrent apply and delete jobs
+					// Note that any running pod continues to run even after destroying the job.
+					// This is safe when used with terraform-locks, but it will leave orphaned pods.
+					// TODO: Clean up orphaned pods when the owner gets deleted from underneath
 					err = r.client.Delete(context.TODO(), applyFound)
 					if err != nil {
 						reqLogger.Error(err, "Failed to delete Job")
