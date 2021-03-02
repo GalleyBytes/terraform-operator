@@ -34,6 +34,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -257,7 +258,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			// Request object not found, could have been deleted after reconcile request.
 			// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
 			// Return and don't requeue
-			reqLogger.Info(fmt.Sprintf("Not found, instance is defined as: %+v", instance))
+			// reqLogger.Info(fmt.Sprintf("Not found, instance is defined as: %+v", instance))
 			reqLogger.Info("Terraform resource not found. Ignoring since object must be deleted")
 			return reconcile.Result{}, nil
 		}
@@ -270,80 +271,140 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	// indicated by the deletion timestamp being set.
 	isMarkedToBeDeleted := instance.GetDeletionTimestamp() != nil
 	if isMarkedToBeDeleted {
-		if utils.ListContainsStr(instance.GetFinalizers(), terraformFinalizer) {
-			// Run finalization logic for terraformFinalizer. If the
-			// finalization logic fails, don't remove the finalizer so
-			// that we can retry during the next reconciliation.
+		// reqLogger.V(1).Info("Marked for deletion")
+		go func() {
+			if utils.ListContainsStr(instance.GetFinalizers(), terraformFinalizer) {
+				// Run finalization logic for terraformFinalizer. If the
+				// finalization logic fails, don't remove the finalizer so
+				// that we can retry during the next reconciliation.
 
-			// Completely ignore the finilization process if ignoreDelete is set
-			if !instance.Spec.IgnoreDelete {
-				reqLogger.V(1).Info("Marked for deletion and ignoreDelete is not set")
-
-				// lets try get the apply job
-				aj := types.NamespacedName{Namespace: request.Namespace, Name: request.Name}
-				applyFound := &batchv1.Job{}
-				err = r.client.Get(context.TODO(), aj, applyFound)
-				if err == nil && !IsJobFinished(applyFound) {
-					// lets delete the apply job to avoid running concurrent apply and delete jobs
-					// Note that any running pod continues to run even after destroying the job.
-					// This is safe when used with terraform-locks, but it will leave orphaned pods.
-					// TODO: Clean up orphaned pods when the owner gets deleted from underneath
-					err = r.client.Delete(context.TODO(), applyFound)
-					if err != nil {
-						reqLogger.Error(err, "Failed to delete Job")
-						r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
-						return reconcile.Result{}, err
-					} else {
-						reqLogger.Info(fmt.Sprintf("removed pending Job %s", request.Name))
-					}
-				} else if err != nil && !errors.IsNotFound(err) {
-					reqLogger.Error(err, "Failed to get Job")
-					r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
-					return reconcile.Result{}, err
-				}
-
-				// let's make sure that a destroy job doesn't already exists
+				// Find the destroy job
 				// Use the truncated name in case the terraform resource name is larger than 245 characters (253 - "-destroy")
 				d := types.NamespacedName{Namespace: request.Namespace, Name: utils.TruncateResourceName(request.Name, 245) + "-destroy"}
-				destroyFound := &batchv1.Job{}
-				err = r.client.Get(context.TODO(), d, destroyFound)
-				if err != nil && errors.IsNotFound(err) {
-					reqLogger.V(1).Info("Destroy job not found. Creating the delete job")
-					if err := r.setupAndRun(reqLogger, instance, true); err != nil {
-						reqLogger.Error(err, "Error creating destroy job")
+				destroyJob := &batchv1.Job{}
+
+				// Find the applyJob
+				aj := types.NamespacedName{Namespace: request.Namespace, Name: request.Name}
+				applyJob := &batchv1.Job{}
+				applyJobFound := false
+
+				// List any runner pods associated with the apply job
+				runnerPods := &corev1.PodList{}
+
+				// Completely ignore the finilization process if ignoreDelete is set
+				if !instance.Spec.IgnoreDelete {
+
+					// let's make sure that a destroy job doesn't already exists
+					err = r.client.Get(context.TODO(), d, destroyJob)
+					if err == nil {
+						reqLogger.V(1).Info(fmt.Sprintf("Job '%s' is already running", d))
+						return
+					} else if errors.IsNotFound(err) {
+						reqLogger.V(1).Info(fmt.Sprintf("Creating the delete job '%s'", d))
+						if err := r.setupAndRun(reqLogger, instance, true); err != nil {
+							reqLogger.Error(err, fmt.Sprintf("Error creating job '%s'", d))
+							r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+							return
+						}
+					} else {
 						r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
-						return reconcile.Result{}, err
+						return
 					}
-				} else if err != nil {
-					reqLogger.Error(err, "Failed to get Job")
-					r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
-					return reconcile.Result{}, err
+
+					// reqLogger.V(1).Info("Marked for deletion and ignoreDelete is not set")
+
+					// lets try get the apply job
+					err = r.client.Get(context.TODO(), aj, applyJob)
+					if err == nil && !IsJobFinished(applyJob) {
+						applyJobFound = true
+						// lets delete the apply job to avoid running concurrent apply and delete jobs
+						// Note that any running pod continues to run even after destroying the job.
+						// This is safe when used with terraform-locks, but it will leave orphaned pods.
+
+						// Remove the apply job
+						err = r.client.Delete(context.TODO(), applyJob)
+						if err != nil {
+							reqLogger.Error(err, fmt.Sprintf("Failed to delete job '%s'", aj))
+							r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+							return
+						}
+
+					} else if err != nil && !errors.IsNotFound(err) {
+						reqLogger.Error(err, fmt.Sprintf("Failed to get job '%s'", aj))
+						r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+						return
+					}
+
+					for {
+						time.Sleep(30 * time.Second)
+						reqLogger.Info("Checking if destroy task is done")
+						destroyJob = &batchv1.Job{}
+						err = r.client.Get(context.TODO(), d, destroyJob)
+						if err != nil {
+							if errors.IsNotFound(err) {
+								reqLogger.Info(fmt.Sprintf("Job not found: '%s'. Ignoring since object must be deleted", d))
+								return
+							}
+							reqLogger.Error(err, fmt.Sprintf("Failed to get Job: '%s'", d))
+							return
+						}
+						if destroyJob.Status.Succeeded > 0 {
+							reqLogger.Info(fmt.Sprintf("Job '%s' completed successfully", d))
+							break
+						}
+					}
+
 				}
 
+				// Get the instance again to make sure it exists since we can't
+				// be sure that the terraform hasn't been removed
+				instance := &tfv1alpha1.Terraform{}
+				err := r.client.Get(context.TODO(), request.NamespacedName, instance)
+				if err != nil {
+					if errors.IsNotFound(err) {
+						reqLogger.Info("Terraform resource not found. Ignoring since object must be deleted")
+						return
+					}
+					reqLogger.Error(err, "Failed to get Terraform")
+					return
+				}
+				// Remove terraformFinalizer. Once all finalizers have been
+				// removed, the object will be deleted.
+				reqLogger.Info(fmt.Sprintf("Checking for finalizers on the '%s' terraform resource", request.NamespacedName))
+				instance.SetFinalizers(utils.ListRemoveStr(instance.GetFinalizers(), terraformFinalizer))
+				reqLogger.Info(fmt.Sprintf("Removing any finalizers on the '%s' terraform resource", request.NamespacedName))
+				err = r.client.Update(context.TODO(), instance)
+				if err != nil {
+					reqLogger.Error(err, fmt.Sprintf("Could not remove the finalizer on the '%s' terraform resource", request.NamespacedName))
+					r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+					return
+				}
+
+				// Cleanup Pods Here
 				for {
-					reqLogger.Info("Checking if destroy task is done")
-					destroyFound = &batchv1.Job{}
-					err = r.client.Get(context.TODO(), d, destroyFound)
-					if err == nil {
-						if destroyFound.Status.Succeeded > 0 {
-							break
-						}
-						if destroyFound.Status.Failed > 6 {
-							break
+					if !applyJobFound {
+						break
+					}
+					// Get pods if exists for a final cleanup after pods are done running
+					opts := &client.ListOptions{LabelSelector: labels.SelectorFromSet(labels.Set(applyJob.Spec.Selector.MatchLabels))}
+					_ = r.client.List(context.TODO(), runnerPods, opts)
+
+					if len(runnerPods.Items) == 0 {
+						break
+					}
+					for _, pod := range runnerPods.Items {
+						if pod.Status.Phase == "Succeeded" || pod.Status.Phase == "Failed" {
+							err = r.client.Delete(context.TODO(), &pod)
+							if err == nil {
+								reqLogger.V(1).Info(fmt.Sprintf("Cleaned up pod '%s/%s' since terraform '%s' has been deleted", pod.Namespace, pod.Name, request.NamespacedName))
+							}
 						}
 					}
-					time.Sleep(30 * time.Second)
+					time.Sleep(5 * time.Second)
 				}
 			}
-			// Remove terraformFinalizer. Once all finalizers have been
-			// removed, the object will be deleted.
-			instance.SetFinalizers(utils.ListRemoveStr(instance.GetFinalizers(), terraformFinalizer))
-			err := r.client.Update(context.TODO(), instance)
-			if err != nil {
-				r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
-				return reconcile.Result{}, err
-			}
-		}
+			reqLogger.V(1).Info(fmt.Sprintf("Closing thread to delete '%s'", request.NamespacedName))
+		}()
 		return reconcile.Result{}, nil
 	}
 
@@ -587,7 +648,6 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	// runOpts.namespace = instance.Namespace
 
 	// Stack Download
-	reqLogger.Info("Reading spec.terraformModule config")
 	address := instance.Spec.TerraformModule.Address
 	stackRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
 	if err != nil {
@@ -635,7 +695,6 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	// Download the tfvar configs (and optionally save to external repo)
 	//
 	//
-	reqLogger.Info("Reading spec.config ")
 	// TODO Validate spec.config exists
 	// TODO validate spec.sources exists && len > 0
 	runOpts.credentials = instance.Spec.Credentials
@@ -740,7 +799,6 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	}
 
 	// RUN
-	reqLogger.V(1).Info("Ready to run terraform")
 	jobName, err := r.run(reqLogger, instance, runOpts)
 	if err != nil {
 		reqLogger.Error(err, "Failed to run job")
@@ -749,10 +807,6 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	}
 
 	r.recorder.Event(instance, "Normal", "SuccessfulCreate", fmt.Sprintf("Created Job: %s", jobName))
-
-	if isFinalize {
-		reqLogger.V(0).Info(fmt.Sprintf("Successfully finalized terraform on: %+v", instance))
-	}
 
 	return nil
 }
@@ -1796,7 +1850,7 @@ func (d *GitRepoAccessOptions) startHTTPSProxy(k8sclient client.Client, namespac
 	if strings.Contains(d.host, ":") {
 		proxyServer = d.SSHProxy.Host
 	} else {
-		fmt.Sprintf("%s:22", d.SSHProxy.Host)
+		// fmt.Sprintf("%s:22", d.SSHProxy.Host)
 	}
 
 	hostKey := goSocks5.NewHostKey()
