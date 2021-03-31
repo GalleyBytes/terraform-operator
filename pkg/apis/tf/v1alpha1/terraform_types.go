@@ -1,7 +1,7 @@
 package v1alpha1
 
 import (
-	v1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -41,12 +41,17 @@ type TerraformSpec struct {
 	// public images, such as the default image "isaaguilar/tfops".
 	TerraformRunner string `json:"terraformRunner,omitempty"`
 
+	// TerraformRunnerPullPolicy describes a policy for if/when to pull the
+	// TerraformRunner image. Acceptable values are "Always", "Never", or
+	// "IfNotPresent".
+	TerraformRunnerPullPolicy corev1.PullPolicy `json:"terraformRunnerPullPolicy,omitempty"`
+
 	// TerraformModule is the terraform module scm address. Currently supports
 	// git protocol over SSH or HTTPS
 	TerraformModule *SrcOpts `json:"terraformModule"`
 
-	Sources []*SrcOpts  `json:"sources,omitempty"`
-	Env     []v1.EnvVar `json:"env,omitempty"`
+	Sources []*SrcOpts      `json:"sources,omitempty"`
+	Env     []corev1.EnvVar `json:"env,omitempty"`
 
 	// ServiceAccount use a specific kubernetes ServiceAccount for running the create + destroy pods.
 	// If not specified we create a new ServiceAccount per Terraform

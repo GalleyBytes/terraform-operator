@@ -73,24 +73,25 @@ type GitRepoAccessOptions struct {
 }
 
 type RunOptions struct {
-	mainModule       string
-	moduleConfigMaps []string
-	namespace        string
-	name             string
-	jobNameLabel     string
-	envVars          []corev1.EnvVar
-	credentials      []tfv1alpha1.Credentials
-	stack            ParsedAddress
-	token            string
-	tokenSecret      *tfv1alpha1.TokenSecretRef
-	sshConfig        string
-	sshConfigData    map[string][]byte
-	applyAction      bool
-	isNewResource    bool
-	terraformRunner  string
-	terraformVersion string
-	serviceAccount   string
-	configMapData    map[string]string
+	mainModule                string
+	moduleConfigMaps          []string
+	namespace                 string
+	name                      string
+	jobNameLabel              string
+	envVars                   []corev1.EnvVar
+	credentials               []tfv1alpha1.Credentials
+	stack                     ParsedAddress
+	token                     string
+	tokenSecret               *tfv1alpha1.TokenSecretRef
+	sshConfig                 string
+	sshConfigData             map[string][]byte
+	applyAction               bool
+	isNewResource             bool
+	terraformRunner           string
+	terraformRunnerPullPolicy corev1.PullPolicy
+	terraformVersion          string
+	serviceAccount            string
+	configMapData             map[string]string
 }
 
 func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
@@ -100,6 +101,7 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 	name := instance.Name
 	jobNameLabel := utils.TruncateResourceName(name, 63)
 	terraformRunner := "isaaguilar/tfops"
+	terraformRunnerPullPolicy := corev1.PullAlways
 	terraformVersion := "0.11.14"
 	sshConfig := utils.TruncateResourceName(instance.Name, 242) + "-ssh-config"
 	serviceAccount := instance.Spec.ServiceAccount
@@ -107,6 +109,10 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 		// By prefixing the service account with "tf-", IRSA roles can use wildcard
 		// "tf-*" service account for AWS credentials.
 		serviceAccount = "tf-" + utils.TruncateResourceName(instance.Name, 250)
+	}
+
+	if instance.Spec.TerraformRunnerPullPolicy != "" {
+		terraformRunnerPullPolicy = instance.Spec.TerraformRunnerPullPolicy
 	}
 
 	if isDestroy {
@@ -131,17 +137,18 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 	}
 
 	return RunOptions{
-		namespace:        instance.Namespace,
-		name:             name,
-		jobNameLabel:     jobNameLabel,
-		envVars:          instance.Spec.Env,
-		isNewResource:    isNewResource,
-		applyAction:      applyAction,
-		terraformVersion: terraformVersion,
-		terraformRunner:  terraformRunner,
-		serviceAccount:   serviceAccount,
-		configMapData:    make(map[string]string),
-		sshConfig:        sshConfig,
+		namespace:                 instance.Namespace,
+		name:                      name,
+		jobNameLabel:              jobNameLabel,
+		envVars:                   instance.Spec.Env,
+		isNewResource:             isNewResource,
+		applyAction:               applyAction,
+		terraformVersion:          terraformVersion,
+		terraformRunner:           terraformRunner,
+		terraformRunnerPullPolicy: terraformRunnerPullPolicy,
+		serviceAccount:            serviceAccount,
+		configMapData:             make(map[string]string),
+		sshConfig:                 sshConfig,
 	}
 }
 
@@ -1172,7 +1179,7 @@ func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job 
 							Name: "tf",
 							// TODO Version docker images more specifically than static versions
 							Image:           r.terraformRunner + ":" + r.terraformVersion,
-							ImagePullPolicy: "Always",
+							ImagePullPolicy: r.terraformRunnerPullPolicy,
 							EnvFrom:         envFrom,
 							Env: append(envs, []corev1.EnvVar{
 								{
