@@ -437,6 +437,11 @@ spec:
                 users who need to have a certain toolset installed on their images,
                 or who can't pull public images, such as the default image "isaaguilar/tfops".
               type: string
+            terraformRunnerPullPolicy:
+              description: TerraformRunnerPullPolicy describes a policy for if/when
+                to pull the TerraformRunner image. Acceptable values are "Always",
+                "Never", or "IfNotPresent".
+              type: string
             terraformVersion:
               description: TerraformVersion helps the operator decide which image
                 tag to pull for the terraform runner. Defaults to "0.11.14"
