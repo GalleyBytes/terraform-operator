@@ -106,10 +106,21 @@ deploy:
 	kubectl delete pod --selector name=${DEPLOYMENT} --namespace ${NAMESPACE} && sleep 4
 	kubectl logs -f --selector name=${DEPLOYMENT} --namespace ${NAMESPACE}
 
+# Run go fmt against code
+fmt:
+	go fmt ./...
+
+# Run go vet against code
+vet:
+	go vet ./...
+
+# Run against the configured Kubernetes cluster in ~/.kube/config
+run: fmt vet
+	go run cmd/manager/main.go
+
 build: k8s-gen openapi-gen docker-build-local
 build-all: build docker-build-job
 push: docker-push
 push-all: push docker-push-job
-run: docker-build-local deploy
 
 .PHONY: build push run docker-build docker-build-local docker-push deploy openapi-gen k8s-gen crds contoller-gen client-gen
