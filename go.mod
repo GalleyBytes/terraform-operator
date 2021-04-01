@@ -1,7 +1,5 @@
 module github.com/isaaguilar/terraform-operator
 
-
-
 replace (
 	google.golang.org/grpc => google.golang.org/grpc v1.29.1
 	k8s.io/kube-state-metrics => k8s.io/kube-state-metrics v1.6.0
@@ -9,6 +7,7 @@ replace (
 )
 
 replace github.com/docker/docker => github.com/moby/moby v0.7.3-0.20190826074503-38ab9da00309 // Required by Helm
+
 replace github.com/openshift/api => github.com/openshift/api v0.0.0-20190924102528-32369d4db2ad // Required until https://github.com/operator-framework/operator-lifecycle-manager/pull/1241 is resolved
 
 go 1.15

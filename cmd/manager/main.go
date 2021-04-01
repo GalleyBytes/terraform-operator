@@ -1,113 +1,88 @@
 package main
 
 import (
-	"context"
 	"flag"
-	"fmt"
 	"os"
-	"runtime"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"github.com/isaaguilar/terraform-operator/pkg/apis"
-	"github.com/isaaguilar/terraform-operator/pkg/controller"
-	"github.com/operator-framework/operator-lib/leader"
-	"github.com/spf13/pflag"
+	"github.com/isaaguilar/terraform-operator/pkg/controllers"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
-	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 )
 
-var log = ctrl.Log.WithName("setup")
+var (
+	scheme   = runtime.NewScheme()
+	setupLog = ctrl.Log.WithName("setup")
+)
 
-func printVersion() {
-	log.Info(fmt.Sprintf("Go Version: %s", runtime.Version()))
-	log.Info(fmt.Sprintf("Go OS/Arch: %s/%s", runtime.GOOS, runtime.GOARCH))
+func init() {
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
+	utilruntime.Must(apis.AddToScheme(scheme))
+	// +kubebuilder:scaffold:scheme
 }
 
 func main() {
-	// Add the zap logger flag set to the CLI. The flag set must
-	// be added before calling pflag.Parse().
-	opts := zap.Options{}
+	var metricsAddr string
+	var enableLeaderElection bool
+	var probeAddr string
+	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
+	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
+		"Enable leader election for controller manager. "+
+			"Enabling this will ensure there is only one active controller manager.")
+	opts := zap.Options{
+		Development: true,
+	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	// Add flags registered by imported packages (e.g. glog and
-	// controller-runtime)
-	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	pflag.Parse()
-
-	// Use a zap logr.Logger implementation. If none of the zap
-	// flags are configured (or if the zap flag set is not being
-	// used), this defaults to a production zap logger.
-	//
-	// The logger instantiated here can be changed to any logger
-	// implementing the logr.Logger interface. This logger will
-	// be propagated through the whole operator, generating
-	// uniform and structured logs.
-	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
-
-	printVersion()
-
-	WatchNamespaceEnvVar := "WATCH_NAMESPACE"
-	namespace, found := os.LookupEnv(WatchNamespaceEnvVar)
-	if !found {
-		log.Error(fmt.Errorf("Failed to get watch namespace"), "")
-		os.Exit(1)
-
-	}
-
-	// Get a config to talk to the apiserver
-	cfg, err := config.GetConfig()
-	if err != nil {
-		log.Error(err, "")
-		os.Exit(1)
-	}
-
-	ctx := context.TODO()
-	// Become the leader before proceeding
-	err = leader.Become(ctx, "terraform-operator-lock")
-	if err != nil {
-		log.Error(err, "")
-		os.Exit(1)
-	}
-
-	// Create a new Cmd to provide shared dependencies and start components
-	mgr, err := manager.New(cfg, manager.Options{
-		Namespace:          namespace,
-		MapperProvider:     apiutil.NewDiscoveryRESTMapper,
-		MetricsBindAddress: "0", // set to "0" to disable the metrics serving
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+		Scheme:                 scheme,
+		MetricsBindAddress:     metricsAddr,
+		Port:                   9443,
+		HealthProbeBindAddress: probeAddr,
+		LeaderElection:         enableLeaderElection,
+		LeaderElectionID:       "050c8fba.isaaguilar.com",
 	})
 	if err != nil {
-		log.Error(err, "")
+		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
 
-	log.Info("Registering Components...")
+	if err = (&controllers.ReconcileTerraform{
+		Client:   mgr.GetClient(),
+		Log:      ctrl.Log.WithName("terraform_controller"),
+		Recorder: mgr.GetEventRecorderFor("terraform-controller"),
+		Scheme:   mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Cluster")
+		os.Exit(1)
+	}
+	// +kubebuilder:scaffold:builder
 
-	// Setup Scheme for all resources
-	if err := apis.AddToScheme(mgr.GetScheme()); err != nil {
-		log.Error(err, "")
+	if err := mgr.AddHealthzCheck("health", healthz.Ping); err != nil {
+		setupLog.Error(err, "unable to set up health check")
+		os.Exit(1)
+	}
+	if err := mgr.AddReadyzCheck("check", healthz.Ping); err != nil {
+		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}
 
-	// Setup all Controllers
-	if err := controller.AddToManager(mgr); err != nil {
-		log.Error(err, "")
-		os.Exit(1)
-	}
-
-	log.Info("Starting the terraform-operator controller")
-
-	// Start the Cmd
-	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
-		log.Error(err, "Manager exited non-zero")
+	setupLog.Info("starting manager")
+	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
 }

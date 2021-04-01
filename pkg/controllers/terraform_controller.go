@@ -1,4 +1,4 @@
-package terraform
+package controllers
 
 import (
 	"archive/tar"
@@ -41,13 +41,43 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
+
+// SetupWithManager sets up the controller with the Manager.
+func (r *ReconcileTerraform) SetupWithManager(mgr ctrl.Manager) error {
+	err := ctrl.NewControllerManagedBy(mgr).
+		For(&tfv1alpha1.Terraform{}).
+		Complete(r)
+	if err != nil {
+		return err
+	}
+
+	err = ctrl.NewControllerManagedBy(mgr).
+		For(&batchv1.Job{}).
+		Watches(&source.Kind{Type: &batchv1.Job{}}, &handler.EnqueueRequestForOwner{
+			IsController: true,
+			OwnerType:    &tfv1alpha1.Terraform{},
+		}).
+		Complete(r)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// ReconcileTerraform reconciles a Terraform object
+type ReconcileTerraform struct {
+	// This client, initialized using mgr.Client() above, is a split client
+	// that reads objects from the cache and writes to the apiserver
+	Client   client.Client
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
+	Log      logr.Logger
+}
 
 type ParsedAddress struct {
 	sourcedir string
@@ -164,87 +194,6 @@ const terraformFinalizer = "finalizer.tf.isaaguilar.com"
 
 var logf = ctrl.Log.WithName("terraform_controller")
 
-/**
-* USER ACTION REQUIRED: This is a scaffold file intended for the user to modify with their own Controller
-* business logic.  Delete these comments after modifying this file.*
- */
-
-// Add creates a new Terraform Controller and adds it to the Manager. The Manager will set fields on the Controller
-// and Start it when the Manager is Started.
-func Add(mgr manager.Manager) error {
-	return add(mgr, newReconciler(mgr))
-}
-
-// newReconciler returns a new reconcile.Reconciler
-func newReconciler(mgr manager.Manager) reconcile.Reconciler {
-	return &ReconcileTerraform{
-		client:   mgr.GetClient(),
-		scheme:   mgr.GetScheme(),
-		recorder: mgr.GetEventRecorderFor("terraform-controller"),
-	}
-}
-
-// add adds a new Controller to mgr with r as the reconcile.Reconciler
-func add(mgr manager.Manager, r reconcile.Reconciler) error {
-	// Create a new controller
-	c, err := controller.New("terraform-controller", mgr, controller.Options{Reconciler: r})
-	if err != nil {
-		return err
-	}
-
-	// Watch for changes to primary resource Terraform
-	err = c.Watch(&source.Kind{Type: &tfv1alpha1.Terraform{}}, &handler.EnqueueRequestForObject{})
-	if err != nil {
-		return err
-	}
-
-	// Watch for terraform job completions
-	err = c.Watch(&source.Kind{Type: &batchv1.Job{}}, &handler.EnqueueRequestForOwner{
-		IsController: true,
-		OwnerType:    &tfv1alpha1.Terraform{},
-	})
-	if err != nil {
-		return err
-	}
-
-	// // Watch for changes to secondary resource Pods and requeue the owner Terraform
-	// err = c.Watch(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForOwner{
-	// 	IsController: true,
-	// 	OwnerType:    &tfv1alpha1.Terraform{},
-	// })
-	// if err != nil {
-	// 	return err
-	// }
-
-	return nil
-}
-
-// blank assignment to verify that ReconcileTerraform implements reconcile.Reconciler
-var _ reconcile.Reconciler = &ReconcileTerraform{}
-
-// ReconcileTerraform reconciles a Terraform object
-type ReconcileTerraform struct {
-	// This client, initialized using mgr.Client() above, is a split client
-	// that reads objects from the cache and writes to the apiserver
-	client   client.Client
-	scheme   *runtime.Scheme
-	recorder record.EventRecorder
-}
-
-// func (r *ReconcileTerraform) manageError(obj metav1.Object, issue error) (reconcile.Result, error) {
-// 	runtimeObj, ok := (obj).(runtime.Object)
-// 	if !ok {
-// 		return reconcile.Result{}, nil
-// 	}
-// 	var retryInterval time.Duration
-// 	r.recorder.Event(runtimeObj, "Warning", "ProcessingError", issue.Error())
-
-// 	return reconcile.Result{
-// 		RequeueAfter: time.Duration(math.Min(float64(retryInterval.Nanoseconds()*2), float64(time.Hour.Nanoseconds()*6))),
-// 		Requeue:      true,
-// 	}, nil
-// }
-
 // Reconcile reads that state of the cluster for a Terraform object and makes changes based on the state read
 // and what is in the Terraform.Spec
 // TODO(user): Modify this Reconcile function to implement your Controller logic.  This example creates
@@ -253,12 +202,12 @@ type ReconcileTerraform struct {
 // The Controller will requeue the Request to be processed again if the returned error is non-nil or
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
 func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
-	reqLogger := logf.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
+	reqLogger := r.Log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
 	reqLogger.Info("Reconciling Terraform")
 
 	// Fetch the Terraform instance
 	instance := &tfv1alpha1.Terraform{}
-	err := r.client.Get(context.TODO(), request.NamespacedName, instance)
+	err := r.Client.Get(context.TODO(), request.NamespacedName, instance)
 	// reqLogger.Info(fmt.Sprintf("Here is the object's status before starting %+v", instance.Status))
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -302,7 +251,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 				if !instance.Spec.IgnoreDelete {
 
 					// let's make sure that a destroy job doesn't already exists
-					err = r.client.Get(context.TODO(), d, destroyJob)
+					err = r.Client.Get(context.TODO(), d, destroyJob)
 					if err == nil {
 						reqLogger.V(1).Info(fmt.Sprintf("Job '%s' is already running", d))
 						return
@@ -310,18 +259,18 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 						reqLogger.V(1).Info(fmt.Sprintf("Creating the delete job '%s'", d))
 						if err := r.setupAndRun(reqLogger, instance, true); err != nil {
 							reqLogger.Error(err, fmt.Sprintf("Error creating job '%s'", d))
-							r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+							r.Recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 							return
 						}
 					} else {
-						r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+						r.Recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 						return
 					}
 
 					// reqLogger.V(1).Info("Marked for deletion and ignoreDelete is not set")
 
 					// lets try get the apply job
-					err = r.client.Get(context.TODO(), aj, applyJob)
+					err = r.Client.Get(context.TODO(), aj, applyJob)
 					if err == nil && !IsJobFinished(applyJob) {
 						applyJobFound = true
 						// lets delete the apply job to avoid running concurrent apply and delete jobs
@@ -329,16 +278,16 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 						// This is safe when used with terraform-locks, but it will leave orphaned pods.
 
 						// Remove the apply job
-						err = r.client.Delete(context.TODO(), applyJob)
+						err = r.Client.Delete(context.TODO(), applyJob)
 						if err != nil {
 							reqLogger.Error(err, fmt.Sprintf("Failed to delete job '%s'", aj))
-							r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+							r.Recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 							return
 						}
 
 					} else if err != nil && !errors.IsNotFound(err) {
 						reqLogger.Error(err, fmt.Sprintf("Failed to get job '%s'", aj))
-						r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+						r.Recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 						return
 					}
 
@@ -346,7 +295,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 						time.Sleep(30 * time.Second)
 						reqLogger.Info("Checking if destroy task is done")
 						destroyJob = &batchv1.Job{}
-						err = r.client.Get(context.TODO(), d, destroyJob)
+						err = r.Client.Get(context.TODO(), d, destroyJob)
 						if err != nil {
 							if errors.IsNotFound(err) {
 								reqLogger.Info(fmt.Sprintf("Job not found: '%s'. Ignoring since object must be deleted", d))
@@ -366,7 +315,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 				// Get the instance again to make sure it exists since we can't
 				// be sure that the terraform hasn't been removed
 				instance := &tfv1alpha1.Terraform{}
-				err := r.client.Get(context.TODO(), request.NamespacedName, instance)
+				err := r.Client.Get(context.TODO(), request.NamespacedName, instance)
 				if err != nil {
 					if errors.IsNotFound(err) {
 						reqLogger.Info("Terraform resource not found. Ignoring since object must be deleted")
@@ -380,10 +329,10 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 				reqLogger.Info(fmt.Sprintf("Checking for finalizers on the '%s' terraform resource", request.NamespacedName))
 				instance.SetFinalizers(utils.ListRemoveStr(instance.GetFinalizers(), terraformFinalizer))
 				reqLogger.Info(fmt.Sprintf("Removing any finalizers on the '%s' terraform resource", request.NamespacedName))
-				err = r.client.Update(context.TODO(), instance)
+				err = r.Client.Update(context.TODO(), instance)
 				if err != nil {
 					reqLogger.Error(err, fmt.Sprintf("Could not remove the finalizer on the '%s' terraform resource", request.NamespacedName))
-					r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+					r.Recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 					return
 				}
 
@@ -394,14 +343,14 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 					}
 					// Get pods if exists for a final cleanup after pods are done running
 					opts := &client.ListOptions{LabelSelector: labels.SelectorFromSet(labels.Set(applyJob.Spec.Selector.MatchLabels))}
-					_ = r.client.List(context.TODO(), runnerPods, opts)
+					_ = r.Client.List(context.TODO(), runnerPods, opts)
 
 					if len(runnerPods.Items) == 0 {
 						break
 					}
 					for _, pod := range runnerPods.Items {
 						if pod.Status.Phase == "Succeeded" || pod.Status.Phase == "Failed" {
-							err = r.client.Delete(context.TODO(), &pod)
+							err = r.Client.Delete(context.TODO(), &pod)
 							if err == nil {
 								reqLogger.V(1).Info(fmt.Sprintf("Cleaned up pod '%s/%s' since terraform '%s' has been deleted", pod.Namespace, pod.Name, request.NamespacedName))
 							}
@@ -418,7 +367,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	if !utils.ListContainsStr(instance.GetFinalizers(), terraformFinalizer) {
 		if !instance.Spec.IgnoreDelete {
 			if err := r.addFinalizer(reqLogger, instance); err != nil {
-				r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+				r.Recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 				return reconcile.Result{}, err
 			}
 		}
@@ -429,16 +378,16 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	if instance.Spec.IgnoreDelete && instance.ObjectMeta.Finalizers != nil {
 		reqLogger.V(1).Info("Removing the finalizer since ignoreDelete is true")
 		instance.SetFinalizers(utils.ListRemoveStr(instance.GetFinalizers(), terraformFinalizer))
-		err := r.client.Update(context.TODO(), instance)
+		err := r.Client.Update(context.TODO(), instance)
 		if err != nil {
-			r.recorder.Event(instance, "Warning", "ProcessingError", err.Error())
+			r.Recorder.Event(instance, "Warning", "ProcessingError", err.Error())
 			return reconcile.Result{}, err
 		}
 	}
 
 	// Check if the deployment already exists, if not create a new one
 	found := &batchv1.Job{} // found gets updated in the next line
-	err = r.client.Get(context.TODO(), request.NamespacedName, found)
+	err = r.Client.Get(context.TODO(), request.NamespacedName, found)
 
 	if err != nil && errors.IsNotFound(err) {
 		err := r.setupAndRun(reqLogger, instance, false)
@@ -458,7 +407,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	if found.Status.Active != 0 {
 		// The terraform is still being executed, wait until 0 active
 		instance.Status.Phase = "running"
-		r.client.Status().Update(context.TODO(), instance)
+		r.Client.Status().Update(context.TODO(), instance)
 		requeueAfter := time.Duration(30 * time.Second)
 		return reconcile.Result{Requeue: true, RequeueAfter: requeueAfter}, nil
 
@@ -475,12 +424,12 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			reqLogger.V(1).Info("Preparing to restart job by first deleting old job")
 			job := &batchv1.Job{}
 			jobName := types.NamespacedName{Namespace: instance.Namespace, Name: instance.Name}
-			err = r.client.Get(context.TODO(), jobName, job)
+			err = r.Client.Get(context.TODO(), jobName, job)
 			if err != nil {
 				return reconcile.Result{}, err
 			}
 			reqLogger.V(1).Info(fmt.Sprintf("Deleting the job: %+v", job.ObjectMeta))
-			err = r.client.Delete(context.TODO(), job)
+			err = r.Client.Delete(context.TODO(), job)
 			// err = client.BatchV1().Jobs(instance.Namespace).Delete(instance.Name, &metav1.DeleteOptions{})
 			if err != nil {
 				return reconcile.Result{}, err
@@ -494,7 +443,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 				}
 
 				found := &batchv1.Job{}
-				err = r.client.Get(context.TODO(), jobName, found)
+				err = r.Client.Get(context.TODO(), jobName, found)
 				if err != nil && errors.IsNotFound(err) {
 					reqLogger.V(1).Info("Old job deleted")
 					return reconcile.Result{Requeue: true}, nil
@@ -505,10 +454,10 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		requeue := false
 		instance.Status.Phase = "stopped"
 		instance.Status.LastGeneration = instance.ObjectMeta.Generation
-		r.client.Status().Update(context.TODO(), instance)
+		r.Client.Status().Update(context.TODO(), instance)
 
 		// The terraform is still being executed, wait until 0 active
-		cm, err := readConfigMap(r.client, instance.Name+"-status", instance.Namespace)
+		cm, err := readConfigMap(r.Client, instance.Name+"-status", instance.Namespace)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
@@ -520,7 +469,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		labelSelector := make(map[string]string)
 		labelSelector["job-name"] = instance.Name
 		matchingLabels := client.MatchingLabels(labelSelector)
-		err = r.client.List(context.TODO(), collection, inNamespace, matchingLabels)
+		err = r.Client.List(context.TODO(), collection, inNamespace, matchingLabels)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
@@ -532,7 +481,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			// keep the pod around for 6 houra
 			diff := now.Sub(pod.Status.StartTime.Time)
 			if diff.Minutes() > 360 {
-				_ = r.client.Delete(context.TODO(), &pod)
+				_ = r.Client.Delete(context.TODO(), &pod)
 			}
 		}
 
@@ -641,7 +590,7 @@ func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, k
 }
 
 func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, isFinalize bool) error {
-	r.recorder.Event(instance, "Normal", "InitializeJobCreate", fmt.Sprintf("Setting up a Job"))
+	r.Recorder.Event(instance, "Normal", "InitializeJobCreate", fmt.Sprintf("Setting up a Job"))
 	// TODO(user): Add the cleanup steps that the operator
 	// needs to do before the CR can be deleted. Examples
 	// of finalizers include performing backups and deleting
@@ -658,13 +607,13 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	address := instance.Spec.TerraformModule.Address
 	stackRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
 	if err != nil {
-		r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err).Error())
+		r.Recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err).Error())
 		return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 	}
 
 	err = stackRepoAccessOptions.getParsedAddress()
 	if err != nil {
-		r.recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in parsing address: %v", err).Error())
+		r.Recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in parsing address: %v", err).Error())
 		return fmt.Errorf("Error in parsing address: %v", err)
 	}
 
@@ -686,9 +635,9 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 			}
 		}
 		if m.Git.SSH != nil {
-			sshConfigData, err := formatJobSSHConfig(reqLogger, instance, r.client)
+			sshConfigData, err := formatJobSSHConfig(reqLogger, instance, r.Client)
 			if err != nil {
-				r.recorder.Event(instance, "Warning", "SSHConfigError", fmt.Errorf("%v", err).Error())
+				r.Recorder.Event(instance, "Warning", "SSHConfigError", fmt.Errorf("%v", err).Error())
 				return fmt.Errorf("Error setting up sshconfig: %v", err)
 			}
 			runOpts.sshConfigData = sshConfigData
@@ -713,7 +662,7 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 		// Loop thru all the sources in spec.config
 		configRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, extras)
 		if err != nil {
-			r.recorder.Event(instance, "Warning", "ConfigError", fmt.Errorf("Error in Spec: %v", err).Error())
+			r.Recorder.Event(instance, "Warning", "ConfigError", fmt.Errorf("Error in Spec: %v", err).Error())
 			return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 		}
 
@@ -725,13 +674,13 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 
 		if (tfv1alpha1.ProxyOpts{}) != configRepoAccessOptions.SSHProxy {
 			if strings.Contains(configRepoAccessOptions.protocol, "http") {
-				err := configRepoAccessOptions.startHTTPSProxy(r.client, instance.Namespace, reqLogger)
+				err := configRepoAccessOptions.startHTTPSProxy(r.Client, instance.Namespace, reqLogger)
 				if err != nil {
 					reqLogger.Error(err, "failed to start ssh proxy")
 					return err
 				}
 			} else if configRepoAccessOptions.protocol == "ssh" {
-				err := configRepoAccessOptions.startSSHProxy(r.client, instance.Namespace, reqLogger)
+				err := configRepoAccessOptions.startSSHProxy(r.Client, instance.Namespace, reqLogger)
 				if err != nil {
 					reqLogger.Error(err, "failed to start ssh proxy")
 					return err
@@ -740,9 +689,9 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 			}
 		}
 
-		err = configRepoAccessOptions.download(r.client, instance.Namespace)
+		err = configRepoAccessOptions.download(r.Client, instance.Namespace)
 		if err != nil {
-			r.recorder.Event(instance, "Warning", "DownloadError", fmt.Errorf("Error in download: %v", err).Error())
+			r.Recorder.Event(instance, "Warning", "DownloadError", fmt.Errorf("Error in download: %v", err).Error())
 			return fmt.Errorf("Error in download: %v", err)
 		}
 
@@ -750,14 +699,14 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 
 		tfvarSource, err := configRepoAccessOptions.tfvarFiles()
 		if err != nil {
-			r.recorder.Event(instance, "Warning", "ReadFileError", fmt.Errorf("Error reading tfvar files: %v", err).Error())
+			r.Recorder.Event(instance, "Warning", "ReadFileError", fmt.Errorf("Error reading tfvar files: %v", err).Error())
 			return fmt.Errorf("Error in reading tfvarFiles: %v", err)
 		}
 		tfvars += tfvarSource
 
 		otherConfigFiles, err = configRepoAccessOptions.otherConfigFiles()
 		if err != nil {
-			r.recorder.Event(instance, "Warning", "ReadFileError", fmt.Errorf("Error reading files: %v", err).Error())
+			r.Recorder.Event(instance, "Warning", "ReadFileError", fmt.Errorf("Error reading files: %v", err).Error())
 			return fmt.Errorf("Error in reading otherConfigFiles: %v", err)
 		}
 	}
@@ -788,7 +737,7 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 		address := e.Address
 		exportRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
 		if err != nil {
-			r.recorder.Event(instance, "Warning", "ConfigError", fmt.Errorf("Error getting git repo access options: %v", err).Error())
+			r.Recorder.Event(instance, "Warning", "ConfigError", fmt.Errorf("Error getting git repo access options: %v", err).Error())
 			return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 		}
 		err = exportRepoAccessOptions.getParsedAddress()
@@ -798,7 +747,7 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 
 		// TODO decide what to do on errors
 		// Closing the tunnel from within this function
-		go exportRepoAccessOptions.commitTfvars(r.client, tfvars, e.TFVarsFile, e.ConfFile, instance.Namespace, instance.Spec.CustomBackend, runOpts, reqLogger)
+		go exportRepoAccessOptions.commitTfvars(r.Client, tfvars, e.TFVarsFile, e.ConfFile, instance.Namespace, instance.Spec.CustomBackend, runOpts, reqLogger)
 	}
 
 	if isFinalize {
@@ -809,11 +758,11 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	jobName, err := r.run(reqLogger, instance, runOpts)
 	if err != nil {
 		reqLogger.Error(err, "Failed to run job")
-		r.recorder.Event(instance, "Warning", "StartJobError", err.Error())
+		r.Recorder.Event(instance, "Warning", "StartJobError", err.Error())
 		return err
 	}
 
-	r.recorder.Event(instance, "Normal", "SuccessfulCreate", fmt.Sprintf("Created Job: %s", jobName))
+	r.Recorder.Event(instance, "Normal", "SuccessfulCreate", fmt.Sprintf("Created Job: %s", jobName))
 
 	return nil
 }
@@ -823,7 +772,7 @@ func (r *ReconcileTerraform) addFinalizer(reqLogger logr.Logger, instance *tfv1a
 	instance.SetFinalizers(append(instance.GetFinalizers(), terraformFinalizer))
 
 	// Update CR
-	err := r.client.Update(context.TODO(), instance)
+	err := r.Client.Update(context.TODO(), instance)
 	if err != nil {
 		reqLogger.Error(err, "Failed to update terraform with finalizer")
 		return err
@@ -1226,17 +1175,17 @@ func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terr
 	configMap := runOpts.generateActionConfigMap()
 	job := runOpts.generateJob(tfvarsConfigMap)
 
-	controllerutil.SetControllerReference(instance, tfvarsConfigMap, r.scheme)
-	controllerutil.SetControllerReference(instance, secret, r.scheme)
-	controllerutil.SetControllerReference(instance, roleBinding, r.scheme)
-	controllerutil.SetControllerReference(instance, role, r.scheme)
-	controllerutil.SetControllerReference(instance, configMap, r.scheme)
-	controllerutil.SetControllerReference(instance, job, r.scheme)
+	controllerutil.SetControllerReference(instance, tfvarsConfigMap, r.Scheme)
+	controllerutil.SetControllerReference(instance, secret, r.Scheme)
+	controllerutil.SetControllerReference(instance, roleBinding, r.Scheme)
+	controllerutil.SetControllerReference(instance, role, r.Scheme)
+	controllerutil.SetControllerReference(instance, configMap, r.Scheme)
+	controllerutil.SetControllerReference(instance, job, r.Scheme)
 
 	if serviceAccount != nil {
-		controllerutil.SetControllerReference(instance, serviceAccount, r.scheme)
+		controllerutil.SetControllerReference(instance, serviceAccount, r.Scheme)
 
-		err = r.client.Create(context.TODO(), serviceAccount)
+		err = r.Client.Create(context.TODO(), serviceAccount)
 		if err != nil && errors.IsNotFound(err) {
 			return "", err
 		} else if err != nil {
@@ -1244,39 +1193,39 @@ func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terr
 		}
 	}
 
-	err = r.client.Create(context.TODO(), role)
+	err = r.Client.Create(context.TODO(), role)
 	if err != nil && errors.IsNotFound(err) {
 		return "", err
 	} else if err != nil {
 		reqLogger.Info(err.Error())
 	}
 
-	err = r.client.Create(context.TODO(), roleBinding)
+	err = r.Client.Create(context.TODO(), roleBinding)
 	if err != nil && errors.IsNotFound(err) {
 		return "", err
 	} else if err != nil {
 		reqLogger.Info(err.Error())
 	}
 
-	err = r.client.Create(context.TODO(), tfvarsConfigMap)
+	err = r.Client.Create(context.TODO(), tfvarsConfigMap)
 	if err != nil && errors.IsNotFound(err) {
-		r.recorder.Event(instance, "Warning", "ConfigMapCreateError", fmt.Errorf("Could not create configmap %v", err).Error())
+		r.Recorder.Event(instance, "Warning", "ConfigMapCreateError", fmt.Errorf("Could not create configmap %v", err).Error())
 		return "", err
 	} else if err != nil {
 		reqLogger.V(1).Info(fmt.Sprintf("ConfigMap %s will be updated", tfvarsConfigMap.Name))
-		updateErr := r.client.Update(context.TODO(), tfvarsConfigMap)
+		updateErr := r.Client.Update(context.TODO(), tfvarsConfigMap)
 		if updateErr != nil {
-			r.recorder.Event(instance, "Warning", "ConfigMapUpdateError", fmt.Errorf("Could not update configmap %v", err).Error())
+			r.Recorder.Event(instance, "Warning", "ConfigMapUpdateError", fmt.Errorf("Could not update configmap %v", err).Error())
 			return "", updateErr
 		}
 	}
 
-	err = r.client.Create(context.TODO(), configMap)
+	err = r.Client.Create(context.TODO(), configMap)
 	if err != nil && errors.IsNotFound(err) {
 		return "", err
 	} else if err != nil {
 		reqLogger.Info(fmt.Sprintf("ConfigMap %s already exists", configMap.Name))
-		updateErr := r.client.Update(context.TODO(), configMap)
+		updateErr := r.Client.Update(context.TODO(), configMap)
 		if updateErr != nil && errors.IsNotFound(updateErr) {
 			return "", updateErr
 		} else if updateErr != nil {
@@ -1284,12 +1233,12 @@ func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terr
 		}
 	}
 
-	err = r.client.Create(context.TODO(), secret)
+	err = r.Client.Create(context.TODO(), secret)
 	if err != nil && errors.IsNotFound(err) {
 		return "", err
 	} else if err != nil {
 		reqLogger.Info(fmt.Sprintf("Secret %s already exists", secret.Name))
-		updateErr := r.client.Update(context.TODO(), secret)
+		updateErr := r.Client.Update(context.TODO(), secret)
 		if updateErr != nil && errors.IsNotFound(updateErr) {
 			return "", updateErr
 		} else if updateErr != nil {
@@ -1297,7 +1246,7 @@ func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terr
 		}
 	}
 
-	err = r.client.Create(context.TODO(), job)
+	err = r.Client.Create(context.TODO(), job)
 	if err != nil && errors.IsNotFound(err) {
 		return "", err
 	} else if err != nil {
@@ -1709,8 +1658,6 @@ func unique(s []string) []string {
 }
 
 func tarit(filename, source, target string) error {
-	reqLogger := logf.WithValues("function", "tarit", "filename", filename)
-
 	target = filepath.Join(target, fmt.Sprintf("%s.tar", filename))
 	tarfile, err := os.Create(target)
 	if err != nil {
@@ -1725,7 +1672,6 @@ func tarit(filename, source, target string) error {
 	if err != nil {
 		return nil
 	}
-	reqLogger.Info(fmt.Sprintf(""))
 
 	var baseDir string
 	if info.IsDir() {

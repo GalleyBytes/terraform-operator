@@ -103,6 +103,13 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 							Format:      "",
 						},
 					},
+					"terraformRunnerPullPolicy": {
+						SchemaProps: spec.SchemaProps{
+							Description: "TerraformRunnerPullPolicy describes a policy for if/when to pull the TerraformRunner image. Acceptable values are \"Always\", \"Never\", or \"IfNotPresent\".",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
 					"terraformModule": {
 						SchemaProps: spec.SchemaProps{
 							Description: "TerraformModule is the terraform module scm address. Currently supports git protocol over SSH or HTTPS",
