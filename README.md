@@ -17,6 +17,35 @@ This project is not:
 - An HCL to YAML converter or vice versa
 - A Terraform module definition
 
+## Quick Start
+
+Install the operator with helm:
+
+```
+helm repo add isaaguilar https://isaaguilar.github.io/helm-charts 
+helm repo update
+helm install terraform-operator isaaguilar/terraform-operator
+```
+
+Then start running workloads. For example from this repo, run:
+
+```
+kubectl apply -f examples/complete-examples/simple-template.yaml
+```
+
+A terraform runner pod should appear shortly. The runner executes the terraform module configured in `spec.terraformModule.address`. In the example, the module configured is `https://github.com/cloudposse/terraform-example-module.git?ref=master` which simply generates a random number. 
+
+## Development
+
+Requires the following installed on your system:
+
+- go >= v1.15.0
+
+Run `make install` to install or update the crd in your current-context cluster. 
+
+Finally, run `make run` to start the controller to operate in your current-context cluster. 
+
+
 ## Docs
 
 **Installation**
@@ -43,11 +72,7 @@ This project is not:
 - [Terraform Operator Design](docs/architecture.md) (The design overview of the Project)
 - [Terraform Outputs](docs/architecture.md#outputs) (Finding Terraform outputs after running terraform)
 
+## Contributing
 
-## Development
-
-Requires the following installed on your system:
-
-- go >= v1.15.0
-- operator-sdk ~ v1.4.0
+Issues and Pull Requests are welcomed.
 

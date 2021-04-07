@@ -3,54 +3,52 @@ kind: Terraform
 metadata:
   name: simple-template-example
 spec:
-  sshTunnel:
-    host: 10.151.36.97
-    user: ec2-user
-    sshKeySecretRef:
-      name: proxysshkey
-  scmAuthMethods:
-  - host: github.com
-    git:
-      ssh:
-        requireProxy: true
-        sshKeySecretRef:
-          name: gitsshkey
   
-  terraformVersion: 0.12.23
+  # Use the default terraform runner image isaaguilar/tfops:0.13.6
+  terraformVersion: 0.13.6
+  terraformRunnerPullPolicy: IfNotPresent
+  
+  # Pull this module to execute
   terraformModule:
-    address: git@github.com:iaguilar/scratch.git//create-file
+    address: https://github.com/cloudposse/terraform-example-module.git?ref=master
   
+  # Use kubernetes as a backend which is available for terraform >= v0.13
   customBackend: |-
     terraform {
-      backend "s3" {
-        key            = "tf-operator-examples/simple-template.tfstate"
-        region         = "us-east-1"
-        bucket         = "terraform-isaaguilar"
-        dynamodb_table = "terraform-isaaguilar-lock"
-        profile        = "isaaguilar"
+      backend "kubernetes" {
+        secret_suffix    = "simple-template-example"
+        in_cluster_config  = true
       }
     }
   applyOnCreate: true
   applyOnUpdate: true
   applyOnDelete: true
-  ignoreDelete: true
-  credentials:
-  - secretNameRef:
-      name: aws-session-credentials    
-  sources:
-  - address: git@github.com:iaguilar/scratch.git//create-file/path/to/template/files/foo.tpl.txt
-    extras:
-    - is-file
+  ignoreDelete: false
+  
+  ## Optionally pull some tfvars from a file. For this, "extras" must be "['is-file']"
+  # sources:
+  # - address: https://github.com/cloudposse/terraform-example-module.git//examples/complete/fixtures.us-east-2.tfvars
+  #   extras:
+  #   - is-file
+
+  # Create a tfvar env for the terraform to use
   env:
-  - name: TF_VAR_template_file
-    value: ./foo.tpl.txt
-  exportRepo:
-    address: git@github.com:iaguilar/scratch.git
-    tfvarsFile: tf-operator-examples/simple-template.tfvars
-    confFile: tf-operator-examples/simple-template.conf
+  - name: TF_VAR_name
+    value: simple-template
+  - name: TF_VAR_environment
+    value: example
+  
+  # Print hello before running terraform
   prerunScript: |-
     #!/usr/bin/env bash
-    echo 'I want to replace the template....muahahaha! ${REPLACE_ME}... :)' > ${TF_VAR_template_file}
+    
+    echo "Hello, I am here -> $(pwd)"
+    
+  
+  # Sleep after running terraform just as an example. 
   postrunScript: |-
     #!/usr/bin/env bash
-    echo "Terraform is done!" 
+    
+    cd "/$TFOPS_MAIN_MODULE"
+    terraform_output_id=$(terraform output id)
+    echo "$terraform_output_id Terraform is done!" 

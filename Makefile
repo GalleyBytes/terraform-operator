@@ -114,13 +114,19 @@ fmt:
 vet:
 	go vet ./...
 
+install: crds
+	kubectl apply -f deploy/crds/tf.isaaguilar.com_terraforms_crd.yaml
+
+
 # Run against the configured Kubernetes cluster in ~/.kube/config
 run: fmt vet
 	go run cmd/manager/main.go
+
+
 
 build: k8s-gen openapi-gen docker-build-local
 build-all: build docker-build-job
 push: docker-push
 push-all: push docker-push-job
 
-.PHONY: build push run docker-build docker-build-local docker-push deploy openapi-gen k8s-gen crds contoller-gen client-gen
+.PHONY: build push run install fmt vet docker-build docker-build-local docker-push deploy openapi-gen k8s-gen crds contoller-gen client-gen
