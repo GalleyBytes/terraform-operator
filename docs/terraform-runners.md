@@ -61,6 +61,7 @@ The following is a list of `terraformRunner` versions availble:
 - 0.14.0-beta2
 - 0.14.0-rc1
 - 0.14.1
+- 0.14.10
 - 0.14.2
 - 0.14.3
 - 0.14.4
@@ -75,3 +76,4 @@ The following is a list of `terraformRunner` versions availble:
 - 0.15.0-beta1
 - 0.15.0-beta2
 - 0.15.0-rc1
+- 0.15.0-rc2
