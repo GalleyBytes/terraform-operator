@@ -122,7 +122,12 @@ install: crds
 run: fmt vet
 	go run cmd/manager/main.go
 
-
+# Run tests
+ENVTEST_ASSETS_DIR=$(shell pwd)/testbin
+test: openapi-gen fmt vet crds
+	mkdir -p ${ENVTEST_ASSETS_DIR}
+	test -f ${ENVTEST_ASSETS_DIR}/setup-envtest.sh || curl -sSLo ${ENVTEST_ASSETS_DIR}/setup-envtest.sh https://raw.githubusercontent.com/kubernetes-sigs/controller-runtime/v0.7.0/hack/setup-envtest.sh
+	source ${ENVTEST_ASSETS_DIR}/setup-envtest.sh; fetch_envtest_tools $(ENVTEST_ASSETS_DIR); setup_envtest_env $(ENVTEST_ASSETS_DIR); go test ./... -coverprofile cover.out
 
 build: k8s-gen openapi-gen docker-build-local
 build-all: build docker-build-job

@@ -16,10 +16,13 @@ require (
 	github.com/cloudfoundry/go-socks5 v0.0.0-20180221174514-54f73bdb8a8e // indirect
 	github.com/cloudfoundry/socks5-proxy v0.2.0 // indirect
 	github.com/elliotchance/sshtunnel v1.1.1
+	github.com/ghodss/yaml v1.0.0
 	github.com/go-logr/logr v0.3.0
 	github.com/go-openapi/spec v0.19.6
 	github.com/hashicorp/go-getter v1.5.2
 	github.com/isaaguilar/socks5-proxy v0.3.0
+	github.com/onsi/ginkgo v1.14.1
+	github.com/onsi/gomega v1.10.2
 	github.com/operator-framework/operator-lib v0.4.0
 	github.com/operator-framework/operator-sdk v1.4.0
 	github.com/spf13/pflag v1.0.5
