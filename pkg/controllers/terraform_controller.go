@@ -657,7 +657,7 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 	tfvars := ""
 	otherConfigFiles := make(map[string]string)
 	for _, s := range instance.Spec.Sources {
-		address := s.Address
+		address := strings.TrimSpace(s.Address)
 		extras := s.Extras
 		// Loop thru all the sources in spec.config
 		configRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, extras)
