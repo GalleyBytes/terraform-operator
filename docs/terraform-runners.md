@@ -7,6 +7,7 @@ The following is a list of `terraformRunner` versions availble:
 - 0.11.12
 - 0.11.13
 - 0.11.14
+- 0.11.15
 - 0.11.8
 - 0.11.9
 - 0.12.0
@@ -36,6 +37,7 @@ The following is a list of `terraformRunner` versions availble:
 - 0.12.29
 - 0.12.3
 - 0.12.30
+- 0.12.31
 - 0.12.4
 - 0.12.5
 - 0.12.6
@@ -53,6 +55,7 @@ The following is a list of `terraformRunner` versions availble:
 - 0.13.4
 - 0.13.5
 - 0.13.6
+- 0.13.7
 - 0.14.0
 - 0.14.0-alpha20200910
 - 0.14.0-alpha20200923
@@ -62,6 +65,7 @@ The following is a list of `terraformRunner` versions availble:
 - 0.14.0-rc1
 - 0.14.1
 - 0.14.10
+- 0.14.11
 - 0.14.2
 - 0.14.3
 - 0.14.4
@@ -70,6 +74,7 @@ The following is a list of `terraformRunner` versions availble:
 - 0.14.7
 - 0.14.8
 - 0.14.9
+- 0.15.0
 - 0.15.0-alpha20210107
 - 0.15.0-alpha20210127
 - 0.15.0-alpha20210210
@@ -77,3 +82,4 @@ The following is a list of `terraformRunner` versions availble:
 - 0.15.0-beta2
 - 0.15.0-rc1
 - 0.15.0-rc2
+- 0.15.1
