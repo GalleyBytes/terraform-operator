@@ -5,7 +5,9 @@ doc="$dir/../docs/terraform-runners.md"
 
 printf '# Terraform Runner Images
 
-The following is a list of `terraformRunner` versions availble:
+The default Terraform Runner is named `isaaguilar/tfops`. This can be changed by updating `spec.terraformRunner`. Note that the image name will be a composition of `spec.terraformRunner` and `spec.terraformVersion`. (eg `isaaguilar/tfops:0.13.7`)
+
+The following is a list of `terraformRunner` versions available:
 
 ' > "$doc"
 
