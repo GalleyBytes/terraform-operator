@@ -130,8 +130,10 @@ func ListRemoveStr(list []string, s string) []string {
 	return list
 }
 
-const charset = "abcdefghijklmnopqrstuvwxyz" +
-	"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+const (
+	Charset  string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	AlphaNum string = "abcdefghijklmnopqrstuvwxyz0123456789"
+)
 
 var seededRand *rand.Rand = rand.New(
 	rand.NewSource(time.Now().UnixNano()))
@@ -145,7 +147,7 @@ func StringWithCharset(length int, charset string) string {
 }
 
 func RandomString(length int) string {
-	return StringWithCharset(length, charset)
+	return StringWithCharset(length, Charset)
 }
 
 func TruncateResourceName(s string, i int) string {

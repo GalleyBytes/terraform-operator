@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MakeNowJust/heredoc"
 	"github.com/elliotchance/sshtunnel"
 	"github.com/go-logr/logr"
 	getter "github.com/hashicorp/go-getter"
@@ -33,11 +34,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/fields"
+
+	// "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,16 +52,27 @@ import (
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ReconcileTerraform) SetupWithManager(mgr ctrl.Manager) error {
-	err := ctrl.NewControllerManagedBy(mgr).
-		For(&tfv1alpha1.Terraform{}).
-		Complete(r)
-	if err != nil {
-		return err
-	}
+	// err := ctrl.NewControllerManagedBy(mgr).
+	// 	For(&tfv1alpha1.Terraform{}).
+	// 	Complete(r)
+	// if err != nil {
+	// 	return err
+	// }
 
+	// err = ctrl.NewControllerManagedBy(mgr).
+	// 	For(&batchv1.Job{}).
+	// 	Watches(&source.Kind{Type: &batchv1.Job{}}, &handler.EnqueueRequestForOwner{
+	// 		IsController: true,
+	// 		OwnerType:    &tfv1alpha1.Terraform{},
+	// 	}).
+	// 	Complete(r)
+	// if err != nil {
+	// 	return err
+	// }
+	var err error
 	err = ctrl.NewControllerManagedBy(mgr).
-		For(&batchv1.Job{}).
-		Watches(&source.Kind{Type: &batchv1.Job{}}, &handler.EnqueueRequestForOwner{
+		For(&tfv1alpha1.Terraform{}).
+		Watches(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForOwner{
 			IsController: true,
 			OwnerType:    &tfv1alpha1.Terraform{},
 		}).
@@ -103,82 +117,98 @@ type GitRepoAccessOptions struct {
 }
 
 type RunOptions struct {
-	mainModule                string
 	moduleConfigMaps          []string
 	namespace                 string
 	name                      string
-	jobNameLabel              string
 	envVars                   []corev1.EnvVar
 	credentials               []tfv1alpha1.Credentials
 	stack                     ParsedAddress
-	token                     string
-	tokenSecret               *tfv1alpha1.TokenSecretRef
-	sshConfig                 string
-	sshConfigData             map[string][]byte
-	applyAction               bool
-	isNewResource             bool
+	serviceAccount            string
+	configMapData             map[string]string
+	secretData                map[string][]byte
 	terraformRunner           string
 	terraformRunnerPullPolicy corev1.PullPolicy
 	terraformVersion          string
-	serviceAccount            string
-	configMapData             map[string]string
+	scriptRunner              string
+	scriptRunnerPullPolicy    corev1.PullPolicy
+	scriptRunnerVersion       string
+	setupRunner               string
+	setupRunnerPullPolicy     corev1.PullPolicy
+	setupRunnerVersion        string
 }
 
-func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
+func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	// TODO Read the tfstate and decide IF_NEW_RESOURCE based on that
-	isNewResource := false
-	applyAction := false
-	name := instance.Name
-	jobNameLabel := utils.TruncateResourceName(name, 63)
-	terraformRunner := "isaaguilar/tfops"
-	terraformRunnerPullPolicy := corev1.PullAlways
-	terraformVersion := "0.11.14"
-	sshConfig := utils.TruncateResourceName(instance.Name, 242) + "-ssh-config"
-	serviceAccount := instance.Spec.ServiceAccount
+	// applyAction := false
+	name := tf.Status.PodNamePrefix
+	terraformRunner := "isaaguilar/tf-runner-alphav1"
+	terraformRunnerPullPolicy := corev1.PullIfNotPresent
+	terraformVersion := "0.13.7"
+
+	scriptRunner := "isaaguilar/script-runner-alphav1"
+	scriptRunnerPullPolicy := corev1.PullIfNotPresent
+	scriptRunnerVersion := "1.0.0"
+
+	setupRunner := "isaaguilar/setup-runner-alphav1"
+	setupRunnerPullPolicy := corev1.PullIfNotPresent
+	setupRunnerVersion := "1.0.0"
+
+	// sshConfig := utils.TruncateResourceName(tf.Name, 242) + "-ssh-config"
+	serviceAccount := tf.Spec.ServiceAccount
 	if serviceAccount == "" {
 		// By prefixing the service account with "tf-", IRSA roles can use wildcard
 		// "tf-*" service account for AWS credentials.
-		serviceAccount = "tf-" + utils.TruncateResourceName(instance.Name, 250)
+		serviceAccount = "tf-" + name
 	}
 
-	if instance.Spec.TerraformRunnerPullPolicy != "" {
-		terraformRunnerPullPolicy = instance.Spec.TerraformRunnerPullPolicy
+	if tf.Spec.TerraformRunner != "" {
+		terraformRunner = tf.Spec.TerraformRunner
+	}
+	if tf.Spec.TerraformRunnerPullPolicy != "" {
+		terraformRunnerPullPolicy = tf.Spec.TerraformRunnerPullPolicy
+	}
+	if tf.Spec.TerraformVersion != "" {
+		terraformVersion = tf.Spec.TerraformVersion
 	}
 
-	if isDestroy {
-		isNewResource = false
-		applyAction = instance.Spec.ApplyOnDelete
-		name = utils.TruncateResourceName(instance.Name, 245) + "-destroy"
-		jobNameLabel = utils.TruncateResourceName(instance.Name, 55) + "-destroy"
-	} else if instance.ObjectMeta.Generation > 1 {
-		isNewResource = false
-		applyAction = instance.Spec.ApplyOnUpdate
-	} else {
-		isNewResource = true
-		applyAction = instance.Spec.ApplyOnCreate
+	if tf.Spec.ScriptRunner != "" {
+		scriptRunner = tf.Spec.ScriptRunner
+	}
+	if tf.Spec.ScriptRunnerPullPolicy != "" {
+		scriptRunnerPullPolicy = tf.Spec.ScriptRunnerPullPolicy
+	}
+	if tf.Spec.ScriptRunnerVersion != "" {
+		scriptRunnerVersion = tf.Spec.ScriptRunnerVersion
 	}
 
-	if instance.Spec.TerraformVersion != "" {
-		terraformVersion = instance.Spec.TerraformVersion
+	if tf.Spec.SetupRunner != "" {
+		setupRunner = tf.Spec.SetupRunner
 	}
-
-	if instance.Spec.TerraformRunner != "" {
-		terraformRunner = instance.Spec.TerraformRunner
+	if tf.Spec.SetupRunnerPullPolicy != "" {
+		setupRunnerPullPolicy = tf.Spec.SetupRunnerPullPolicy
 	}
+	if tf.Spec.SetupRunnerVersion != "" {
+		setupRunnerVersion = tf.Spec.SetupRunnerVersion
+	}
+	credentials := tf.Spec.Credentials
 
 	return RunOptions{
-		namespace:                 instance.Namespace,
+		namespace:                 tf.Namespace,
 		name:                      name,
-		jobNameLabel:              jobNameLabel,
-		envVars:                   instance.Spec.Env,
-		isNewResource:             isNewResource,
-		applyAction:               applyAction,
+		envVars:                   tf.Spec.Env,
+		credentials:               credentials,
 		terraformVersion:          terraformVersion,
 		terraformRunner:           terraformRunner,
 		terraformRunnerPullPolicy: terraformRunnerPullPolicy,
 		serviceAccount:            serviceAccount,
 		configMapData:             make(map[string]string),
-		sshConfig:                 sshConfig,
+		secretData:                make(map[string][]byte),
+		scriptRunner:              scriptRunner,
+		scriptRunnerPullPolicy:    scriptRunnerPullPolicy,
+		scriptRunnerVersion:       scriptRunnerVersion,
+		setupRunner:               setupRunner,
+		setupRunnerPullPolicy:     setupRunnerPullPolicy,
+		setupRunnerVersion:        setupRunnerVersion,
 	}
 }
 
@@ -202,20 +232,19 @@ var logf = ctrl.Log.WithName("terraform_controller")
 // The Controller will requeue the Request to be processed again if the returned error is non-nil or
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
 func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
-	reqLogger := r.Log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
-	reqLogger.Info("Reconciling Terraform")
+	reqLogger := r.Log.WithValues("Terraform", request.NamespacedName)
+	reqLogger.V(2).Info("Reconciling Terraform")
 
-	// Fetch the Terraform instance
-	instance := &tfv1alpha1.Terraform{}
-	err := r.Client.Get(context.TODO(), request.NamespacedName, instance)
-	// reqLogger.Info(fmt.Sprintf("Here is the object's status before starting %+v", instance.Status))
+	// Check for the resource's existance
+	tf := &tfv1alpha1.Terraform{}
+	err := r.Client.Get(ctx, request.NamespacedName, tf)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
 			// Owned objects are automatically garbage collected. For additional cleanup logic use finalizers.
 			// Return and don't requeue
 			// reqLogger.Info(fmt.Sprintf("Not found, instance is defined as: %+v", instance))
-			reqLogger.Info("Terraform resource not found. Ignoring since object must be deleted")
+			reqLogger.V(1).Info("Terraform resource not found. Ignoring since object must be deleted")
 			return reconcile.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
@@ -223,277 +252,470 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		return reconcile.Result{}, err
 	}
 
-	// Check if the job is marked to be deleted, which is
-	// indicated by the deletion timestamp being set.
-	isMarkedToBeDeleted := instance.GetDeletionTimestamp() != nil
-	if isMarkedToBeDeleted {
-		// reqLogger.V(1).Info("Marked for deletion")
-		go func() {
-			if utils.ListContainsStr(instance.GetFinalizers(), terraformFinalizer) {
-				// Run finalization logic for terraformFinalizer. If the
-				// finalization logic fails, don't remove the finalizer so
-				// that we can retry during the next reconciliation.
-
-				// Find the destroy job
-				// Use the truncated name in case the terraform resource name is larger than 245 characters (253 - "-destroy")
-				d := types.NamespacedName{Namespace: request.Namespace, Name: utils.TruncateResourceName(request.Name, 245) + "-destroy"}
-				destroyJob := &batchv1.Job{}
-
-				// Find the applyJob
-				aj := types.NamespacedName{Namespace: request.Namespace, Name: request.Name}
-				applyJob := &batchv1.Job{}
-				applyJobFound := false
-
-				// List any runner pods associated with the apply job
-				runnerPods := &corev1.PodList{}
-
-				// Completely ignore the finilization process if ignoreDelete is set
-				if !instance.Spec.IgnoreDelete {
-
-					// let's make sure that a destroy job doesn't already exists
-					err = r.Client.Get(context.TODO(), d, destroyJob)
-					if err == nil {
-						reqLogger.V(1).Info(fmt.Sprintf("Job '%s' is already running", d))
-						return
-					} else if errors.IsNotFound(err) {
-						reqLogger.V(1).Info(fmt.Sprintf("Creating the delete job '%s'", d))
-						if err := r.setupAndRun(reqLogger, instance, true); err != nil {
-							reqLogger.Error(err, fmt.Sprintf("Error creating job '%s'", d))
-							r.Recorder.Event(instance, "Warning", "ProcessingError", err.Error())
-							return
-						}
-					} else {
-						r.Recorder.Event(instance, "Warning", "ProcessingError", err.Error())
-						return
-					}
-
-					// reqLogger.V(1).Info("Marked for deletion and ignoreDelete is not set")
-
-					// lets try get the apply job
-					err = r.Client.Get(context.TODO(), aj, applyJob)
-					if err == nil && !IsJobFinished(applyJob) {
-						applyJobFound = true
-						// lets delete the apply job to avoid running concurrent apply and delete jobs
-						// Note that any running pod continues to run even after destroying the job.
-						// This is safe when used with terraform-locks, but it will leave orphaned pods.
-
-						// Remove the apply job
-						err = r.Client.Delete(context.TODO(), applyJob)
-						if err != nil {
-							reqLogger.Error(err, fmt.Sprintf("Failed to delete job '%s'", aj))
-							r.Recorder.Event(instance, "Warning", "ProcessingError", err.Error())
-							return
-						}
-
-					} else if err != nil && !errors.IsNotFound(err) {
-						reqLogger.Error(err, fmt.Sprintf("Failed to get job '%s'", aj))
-						r.Recorder.Event(instance, "Warning", "ProcessingError", err.Error())
-						return
-					}
-
-					for {
-						time.Sleep(30 * time.Second)
-						reqLogger.Info("Checking if destroy task is done")
-						destroyJob = &batchv1.Job{}
-						err = r.Client.Get(context.TODO(), d, destroyJob)
-						if err != nil {
-							if errors.IsNotFound(err) {
-								reqLogger.Info(fmt.Sprintf("Job not found: '%s'. Ignoring since object must be deleted", d))
-								return
-							}
-							reqLogger.Error(err, fmt.Sprintf("Failed to get Job: '%s'", d))
-							return
-						}
-						if destroyJob.Status.Succeeded > 0 {
-							reqLogger.Info(fmt.Sprintf("Job '%s' completed successfully", d))
-							break
-						}
-					}
-
-				}
-
-				// Get the instance again to make sure it exists since we can't
-				// be sure that the terraform hasn't been removed
-				instance := &tfv1alpha1.Terraform{}
-				err := r.Client.Get(context.TODO(), request.NamespacedName, instance)
-				if err != nil {
-					if errors.IsNotFound(err) {
-						reqLogger.Info("Terraform resource not found. Ignoring since object must be deleted")
-						return
-					}
-					reqLogger.Error(err, "Failed to get Terraform")
-					return
-				}
-				// Remove terraformFinalizer. Once all finalizers have been
-				// removed, the object will be deleted.
-				reqLogger.Info(fmt.Sprintf("Checking for finalizers on the '%s' terraform resource", request.NamespacedName))
-				instance.SetFinalizers(utils.ListRemoveStr(instance.GetFinalizers(), terraformFinalizer))
-				reqLogger.Info(fmt.Sprintf("Removing any finalizers on the '%s' terraform resource", request.NamespacedName))
-				err = r.Client.Update(context.TODO(), instance)
-				if err != nil {
-					reqLogger.Error(err, fmt.Sprintf("Could not remove the finalizer on the '%s' terraform resource", request.NamespacedName))
-					r.Recorder.Event(instance, "Warning", "ProcessingError", err.Error())
-					return
-				}
-
-				// Cleanup Pods Here
-				for {
-					if !applyJobFound {
-						break
-					}
-					// Get pods if exists for a final cleanup after pods are done running
-					opts := &client.ListOptions{LabelSelector: labels.SelectorFromSet(labels.Set(applyJob.Spec.Selector.MatchLabels))}
-					_ = r.Client.List(context.TODO(), runnerPods, opts)
-
-					if len(runnerPods.Items) == 0 {
-						break
-					}
-					for _, pod := range runnerPods.Items {
-						if pod.Status.Phase == "Succeeded" || pod.Status.Phase == "Failed" {
-							err = r.Client.Delete(context.TODO(), &pod)
-							if err == nil {
-								reqLogger.V(1).Info(fmt.Sprintf("Cleaned up pod '%s/%s' since terraform '%s' has been deleted", pod.Namespace, pod.Name, request.NamespacedName))
-							}
-						}
-					}
-					time.Sleep(5 * time.Second)
-				}
-			}
-			reqLogger.V(1).Info(fmt.Sprintf("Closing thread to delete '%s'", request.NamespacedName))
-		}()
+	// Final delete by removing finalizers
+	if tf.Status.Phase == tfv1alpha1.PhaseDeleted {
+		reqLogger.Info("Remove finalizers")
+		_ = updateFinalizer(tf)
+		err := r.update(ctx, tf)
+		if err != nil {
+			r.Recorder.Event(tf, "Warning", "ProcessingError", err.Error())
+			return reconcile.Result{}, err
+		}
 		return reconcile.Result{}, nil
 	}
 
-	if !utils.ListContainsStr(instance.GetFinalizers(), terraformFinalizer) {
-		if !instance.Spec.IgnoreDelete {
-			if err := r.addFinalizer(reqLogger, instance); err != nil {
-				r.Recorder.Event(instance, "Warning", "ProcessingError", err.Error())
-				return reconcile.Result{}, err
-			}
-		}
-	}
-
-	// Remove the finalizer when ignoreDelete exists. This is purley letting
-	// the user see that there are no finalizers when get/describe the resource
-	if instance.Spec.IgnoreDelete && instance.ObjectMeta.Finalizers != nil {
-		reqLogger.V(1).Info("Removing the finalizer since ignoreDelete is true")
-		instance.SetFinalizers(utils.ListRemoveStr(instance.GetFinalizers(), terraformFinalizer))
-		err := r.Client.Update(context.TODO(), instance)
-		if err != nil {
-			r.Recorder.Event(instance, "Warning", "ProcessingError", err.Error())
-			return reconcile.Result{}, err
-		}
-	}
-
-	// Check if the deployment already exists, if not create a new one
-	found := &batchv1.Job{} // found gets updated in the next line
-	err = r.Client.Get(context.TODO(), request.NamespacedName, found)
-
-	if err != nil && errors.IsNotFound(err) {
-		err := r.setupAndRun(reqLogger, instance, false)
+	// Finalizers
+	if updateFinalizer(tf) {
+		err := r.update(ctx, tf)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
-		// Job created successfully - return and requeue
-		return reconcile.Result{Requeue: true}, nil
-	} else if err != nil {
-		reqLogger.Error(err, "Failed to get Job")
-		return reconcile.Result{}, err
-	} else {
-		// Found
-		// reqLogger.Info(fmt.Sprintf("Job if found, printing status: %+v", found.Status))
+		reqLogger.V(1).Info("Updated finalizer")
+		return reconcile.Result{}, nil
 	}
 
-	if found.Status.Active != 0 {
-		// The terraform is still being executed, wait until 0 active
-		instance.Status.Phase = "running"
-		r.Client.Status().Update(context.TODO(), instance)
-		requeueAfter := time.Duration(30 * time.Second)
-		return reconcile.Result{Requeue: true, RequeueAfter: requeueAfter}, nil
-
+	// Initialize resource
+	if tf.Status.PodNamePrefix == "" {
+		// Generate a unique name for everything related to this tf resource
+		// Must trucate at 220 chars of original name to ensure room for the
+		// suffixes that will be added (and possible future suffix expansion)
+		tf.Status.PodNamePrefix = fmt.Sprintf("%s-%s",
+			utils.TruncateResourceName(tf.Name, 220),
+			utils.StringWithCharset(8, utils.AlphaNum),
+		)
+		tf.Status.Stages = []tfv1alpha1.Stage{}
+		tf.Status.LastCompletedGeneration = 0
+		tf.Status.Phase = tfv1alpha1.PhaseInitializing
+		err := r.updateStatus(ctx, tf)
+		if err != nil {
+			reqLogger.V(1).Info(err.Error())
+		}
+		return reconcile.Result{}, nil
 	}
 
-	if found.Status.Succeeded > 0 {
+	// Add the first stage
+	if len(tf.Status.Stages) == 0 {
+		podType := tfv1alpha1.PodInit
+		stageState := tfv1alpha1.StateInitializing
+		interruptible := tfv1alpha1.CanNotBeInterrupt
+		addNewStage(tf, podType, "TF_RESOURCE_CREATED", interruptible, stageState)
+		err := r.updateStatus(ctx, tf)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		return reconcile.Result{}, nil
+	}
 
-		// Check if job has already been stopped before and "generations" match.
-		// The second predicate will be true when terraform spec is updated
-		// after an already successful deployment.
+	deletePhases := []string{
+		string(tfv1alpha1.PhaseDeleting),
+		string(tfv1alpha1.PhaseInitDelete),
+		string(tfv1alpha1.PhaseDeleted),
+	}
 
-		if instance.Status.Phase == "stopped" && instance.Status.LastGeneration != instance.ObjectMeta.Generation {
-			// Delete the current job and restart
-			reqLogger.V(1).Info("Preparing to restart job by first deleting old job")
-			job := &batchv1.Job{}
-			jobName := types.NamespacedName{Namespace: instance.Namespace, Name: instance.Name}
-			err = r.Client.Get(context.TODO(), jobName, job)
+	// Check if the resource is marked to be deleted which is
+	// indicated by the deletion timestamp being set.
+	if tf.GetDeletionTimestamp() != nil && !utils.ListContainsStr(deletePhases, string(tf.Status.Phase)) {
+		tf.Status.Phase = tfv1alpha1.PhaseInitDelete
+	}
+
+	// Check the status on stages that have not completed
+	for _, stage := range tf.Status.Stages {
+		if stage.State == tfv1alpha1.StateInProgress {
+			// TODO
+		}
+	}
+
+	if checkSetNewStage(tf) {
+		err := r.updateStatus(ctx, tf)
+		if err != nil {
+			reqLogger.V(1).Info(err.Error())
+		}
+		return reconcile.Result{}, nil
+	}
+
+	var podType tfv1alpha1.PodType
+	var generation int64
+	n := len(tf.Status.Stages)
+	currentStage := tf.Status.Stages[n-1]
+	podType = currentStage.PodType
+	generation = currentStage.Generation
+
+	if podType == "" {
+		if tf.Status.Phase == tfv1alpha1.PhaseRunning {
+			tf.Status.Phase = tfv1alpha1.PhaseCompleted
+			err := r.updateStatus(ctx, tf)
 			if err != nil {
+				reqLogger.V(1).Info(err.Error())
 				return reconcile.Result{}, err
 			}
-			reqLogger.V(1).Info(fmt.Sprintf("Deleting the job: %+v", job.ObjectMeta))
-			err = r.Client.Delete(context.TODO(), job)
-			// err = client.BatchV1().Jobs(instance.Namespace).Delete(instance.Name, &metav1.DeleteOptions{})
+		} else if tf.Status.Phase == tfv1alpha1.PhaseDeleting {
+			tf.Status.Phase = tfv1alpha1.PhaseDeleted
+			err := r.updateStatus(ctx, tf)
 			if err != nil {
+				reqLogger.V(1).Info(err.Error())
 				return reconcile.Result{}, err
 			}
-
-			var timer int64 = 30 //seconds
-			startDeleteTimer := time.Now().Unix()
-			for {
-				if (time.Now().Unix() - startDeleteTimer) > timer {
-					return reconcile.Result{}, fmt.Errorf("Job could not delete in %d seconds", timer)
-				}
-
-				found := &batchv1.Job{}
-				err = r.Client.Get(context.TODO(), jobName, found)
-				if err != nil && errors.IsNotFound(err) {
-					reqLogger.V(1).Info("Old job deleted")
-					return reconcile.Result{Requeue: true}, nil
-				}
-			}
 		}
-		now := time.Now()
-		requeue := false
-		instance.Status.Phase = "stopped"
-		instance.Status.LastGeneration = instance.ObjectMeta.Generation
-		r.Client.Status().Update(context.TODO(), instance)
+		return reconcile.Result{}, nil
+	}
 
-		// The terraform is still being executed, wait until 0 active
-		cm, err := readConfigMap(r.Client, instance.Name+"-status", instance.Namespace)
+	// Check for the current stage pod
+	inNamespace := client.InNamespace(tf.Namespace)
+	f := fields.Set{
+		"metadata.generateName": fmt.Sprintf("%s-%s-", tf.Status.PodNamePrefix, podType),
+	}
+	labels := map[string]string{
+		"tfGeneration": fmt.Sprintf("%d", generation),
+	}
+	matchingFields := client.MatchingFields(f)
+	matchingLabels := client.MatchingLabels(labels)
+	pods := &corev1.PodList{}
+	err = r.Client.List(ctx, pods, inNamespace, matchingFields, matchingLabels)
+	if err != nil {
+		reqLogger.Error(err, "")
+		return reconcile.Result{}, nil
+	}
+
+	if len(pods.Items) == 0 && tf.Status.Stages[n-1].State == tfv1alpha1.StateInProgress {
+		// This condition is generally met when the user deletes the pod.
+		// Force the state to transition away from in-progress and then
+		// requeue.
+		tf.Status.Stages[n-1].State = tfv1alpha1.StateInitializing
+		err = r.updateStatus(ctx, tf)
 		if err != nil {
+			reqLogger.V(1).Info(err.Error())
+			return reconcile.Result{Requeue: true}, nil
+		}
+		return reconcile.Result{}, nil
+	}
+
+	if len(pods.Items) == 0 {
+		// Trigger a new pod when no pods are found for current stage
+		reqLogger.V(1).Info(fmt.Sprintf("Setting up the '%s' pod", podType))
+		err := r.setupAndRun(ctx, tf)
+		if err != nil {
+			reqLogger.Error(err, "")
 			return reconcile.Result{}, err
 		}
-		reqLogger.V(1).Info(fmt.Sprintf("Setting status of terraform plan as %v", cm.Data))
+		if tf.Status.Phase == tfv1alpha1.PhaseInitializing {
+			tf.Status.Phase = tfv1alpha1.PhaseRunning
+		} else if tf.Status.Phase == tfv1alpha1.PhaseInitDelete {
+			tf.Status.Phase = tfv1alpha1.PhaseDeleting
+		}
+		tf.Status.Stages[n-1].State = tfv1alpha1.StateInProgress
 
-		// Find the successful pod
-		collection := &corev1.PodList{}
-		inNamespace := client.InNamespace(instance.Namespace)
-		labelSelector := make(map[string]string)
-		labelSelector["job-name"] = instance.Name
-		matchingLabels := client.MatchingLabels(labelSelector)
-		err = r.Client.List(context.TODO(), collection, inNamespace, matchingLabels)
+		// TODO Becuase the pod is already running, is it critical that the
+		// phase and state be updated. The updateStatus function needs to retry
+		// if it fails to update.
+		err = r.updateStatus(ctx, tf)
 		if err != nil {
+			reqLogger.V(1).Info(err.Error())
+			return reconcile.Result{Requeue: true}, nil
+		}
+		// When the pod is created, don't requeue. The pod's status changes
+		// will trigger tfo to reconcile.
+		return reconcile.Result{}, nil
+	}
+
+	// At this point, a pod is found for the current stage. We can check the
+	// pod status to find out more info about the pod.
+	podName := pods.Items[0].ObjectMeta.Name
+	podPhase := pods.Items[0].Status.Phase
+	msg := fmt.Sprintf("Pod '%s' %s", podName, podPhase)
+
+	// TODO Does the user need reason and message?
+	// reason := pods.Items[0].Status.Reason
+	// message := pods.Items[0].Status.Message
+	// if reason != "" {
+	// 	msg = fmt.Sprintf("%s %s", msg, reason)
+	// }
+	// if message != "" {
+	// 	msg = fmt.Sprintf("%s %s", msg, message)
+	// }
+	reqLogger.V(1).Info(msg)
+
+	if pods.Items[0].Status.Phase == corev1.PodFailed {
+		tf.Status.Stages[n-1].State = tfv1alpha1.StateFailed
+		tf.Status.Stages[n-1].StopTime = metav1.NewTime(time.Now())
+		err = r.updateStatus(ctx, tf)
+		if err != nil {
+			reqLogger.V(1).Info(err.Error())
 			return reconcile.Result{}, err
 		}
+		return reconcile.Result{}, nil
+	}
 
-		if len(collection.Items) == 0 {
-			requeue = true
+	if pods.Items[0].Status.Phase == corev1.PodSucceeded {
+		tf.Status.Stages[n-1].State = tfv1alpha1.StateComplete
+		tf.Status.Stages[n-1].StopTime = metav1.NewTime(time.Now())
+		err = r.updateStatus(ctx, tf)
+		if err != nil {
+			reqLogger.V(1).Info(err.Error())
+			return reconcile.Result{}, err
 		}
-		for _, pod := range collection.Items {
-			// keep the pod around for 6 houra
-			diff := now.Sub(pod.Status.StartTime.Time)
-			if diff.Minutes() > 360 {
-				_ = r.Client.Delete(context.TODO(), &pod)
-			}
+		err := r.Client.Delete(ctx, &pods.Items[0])
+		if err != nil {
+			reqLogger.V(1).Info(err.Error())
 		}
-
-		requeueAfter := time.Duration(60 * time.Second)
-		return reconcile.Result{Requeue: requeue, RequeueAfter: requeueAfter}, nil
-
+		return reconcile.Result{}, nil
 	}
 
 	// TODO should tf operator "auto" reconciliate (eg plan+apply)?
-	// TODO manually triggers apply/destroy
-
+	// TODO how should we handle manually triggering apply
 	return reconcile.Result{}, nil
+}
+
+// func stageCheck(tf *tfv1alpha1.Terraform) {
+// 	n := len(tf.Status.Stages)
+// 	if tf.Status.Stages[n-1].State == tfv1alpha1.StateComplete {
+// 		// Get the next stage and set to initialize and return after appending
+// 		// the new stage
+// 	}
+// }
+
+func addNewStage(tf *tfv1alpha1.Terraform, podType tfv1alpha1.PodType, reason string, interruptible tfv1alpha1.Interruptible, stageState tfv1alpha1.StageState) {
+	startTime := metav1.NewTime(time.Now())
+	stopTime := metav1.NewTime(time.Unix(0, 0))
+	if stageState == tfv1alpha1.StateComplete {
+		stopTime = startTime
+	}
+	tf.Status.Stages = append(tf.Status.Stages, tfv1alpha1.Stage{
+		Generation:    tf.Generation,
+		Interruptible: interruptible,
+		Reason:        reason,
+		State:         stageState,
+		PodType:       podType,
+		StartTime:     startTime,
+		StopTime:      stopTime,
+	})
+}
+
+// checkSetNewStage uses the tf resource's `.status.stage` state to find the next stage of the terraform run. The following set of rules are used:
+//
+// 1. Generation - Check that the resource's generation matches the stage's generation. When the generation changes the old generation can no longer add a new stage.
+//
+// 2. Check that the current stage is completed. If it is not, this function returns false and the pod status will be determined which will update the stage for the next iteration.
+//
+// 3. Scripts defined in the tf resource manifest will trigger the script runner podTypes.
+//
+// When a stage has already triggered a pod, the only way for the pod to
+// transition to the next stage is for the pod to complete successfully. Any
+// other pod phase will keep the pod in the current stage.
+//
+// TODO Should stages be cleaned? If not, the `.status.stages` list can become very long.
+//
+func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
+	var isNewStage bool
+
+	deletePhases := []string{
+		string(tfv1alpha1.PhaseDeleted),
+		string(tfv1alpha1.PhaseInitDelete),
+		string(tfv1alpha1.PhaseDeleted),
+	}
+	tfIsFinalizing := utils.ListContainsStr(deletePhases, string(tf.Status.Phase))
+	tfIsNotFinalizing := !tfIsFinalizing
+
+	deletePodTypes := []string{
+		string(tfv1alpha1.PodPreInitDelete),
+		string(tfv1alpha1.PodInitDelete),
+		string(tfv1alpha1.PodPostInitDelete),
+	}
+	initDelete := tf.Status.Phase == tfv1alpha1.PhaseInitDelete
+
+	var podType tfv1alpha1.PodType
+	var reason string
+	stageState := tfv1alpha1.StateInitializing
+	interruptible := tfv1alpha1.CanBeInterrupt
+	// current stage
+	n := len(tf.Status.Stages)
+	if n == 0 {
+		// There should always be at least 1 stage, this shouldn't happen
+	}
+	currentStage := tf.Status.Stages[n-1]
+	currentStagePodType := currentStage.PodType
+	currentStageCanNotBeInterrupted := currentStage.Interruptible == tfv1alpha1.CanNotBeInterrupt
+	currentStageIsRunning := currentStage.State == tfv1alpha1.StateInProgress
+
+	// resource status
+	if currentStageCanNotBeInterrupted && currentStageIsRunning {
+		// Cannot change to the next stage becuase the current stage cannot be
+		// interrupted and is currently running
+		isNewStage = false
+	} else if currentStage.Generation != tf.Generation && tfIsNotFinalizing {
+		// The current generation has changed and this is the first pod in the
+		// normal terraform workflow
+		isNewStage = true
+		reason = "GENERATION_CHANGE"
+		podType = tfv1alpha1.PodInit
+
+	} else if initDelete && !utils.ListContainsStr(deletePodTypes, string(currentStagePodType)) {
+		// The tf resource is marked for deletion and this is the first pod
+		// in the terraform destroy workflow.
+		isNewStage = true
+		reason = "TF_RESOURCE_DELETED"
+		podType = tfv1alpha1.PodInitDelete
+		interruptible = tfv1alpha1.CanNotBeInterrupt
+
+	} else if currentStage.State == tfv1alpha1.StateComplete {
+		isNewStage = true
+		reason = ""
+
+		switch currentStagePodType {
+		//
+		// init types
+		//
+		case tfv1alpha1.PodInit:
+			if tf.Spec.PostInitScript != "" {
+				podType = tfv1alpha1.PodPostInit
+			} else {
+				podType = tfv1alpha1.PodPlan
+				interruptible = tfv1alpha1.CanNotBeInterrupt
+			}
+
+		case tfv1alpha1.PodPostInit:
+			podType = tfv1alpha1.PodPlan
+			interruptible = tfv1alpha1.CanNotBeInterrupt
+
+		//
+		// plan types
+		//
+		case tfv1alpha1.PodPlan:
+			if tf.Spec.PostPlanScript != "" {
+				podType = tfv1alpha1.PodPostPlan
+			} else {
+				podType = tfv1alpha1.PodApply
+				interruptible = tfv1alpha1.CanNotBeInterrupt
+			}
+
+		case tfv1alpha1.PodPostPlan:
+			podType = tfv1alpha1.PodApply
+			interruptible = tfv1alpha1.CanNotBeInterrupt
+
+		//
+		// apply types
+		//
+		case tfv1alpha1.PodApply:
+			if tf.Spec.PostApplyScript != "" {
+				podType = tfv1alpha1.PodPostApply
+			} else {
+				reason = "COMPLETED_TERRAFORM"
+				podType = tfv1alpha1.PodNil
+				stageState = tfv1alpha1.StateComplete
+			}
+
+		case tfv1alpha1.PodPostApply:
+			reason = "COMPLETED_TERRAFORM"
+			podType = tfv1alpha1.PodNil
+			stageState = tfv1alpha1.StateComplete
+
+		//
+		// init (delete) types
+		case tfv1alpha1.PodInitDelete:
+			if tf.Spec.PostInitDeleteScript != "" {
+				podType = tfv1alpha1.PodPostInitDelete
+			} else {
+				podType = tfv1alpha1.PodPlanDelete
+				interruptible = tfv1alpha1.CanNotBeInterrupt
+			}
+
+		case tfv1alpha1.PodPostInitDelete:
+			podType = tfv1alpha1.PodPlanDelete
+			interruptible = tfv1alpha1.CanNotBeInterrupt
+
+		//
+		// plan (delete) types
+		//
+		case tfv1alpha1.PodPlanDelete:
+			if tf.Spec.PostPlanDeleteScript != "" {
+				podType = tfv1alpha1.PodPostPlanDelete
+			} else {
+				podType = tfv1alpha1.PodApplyDelete
+				interruptible = tfv1alpha1.CanNotBeInterrupt
+			}
+
+		case tfv1alpha1.PodPostPlanDelete:
+			podType = tfv1alpha1.PodApplyDelete
+			interruptible = tfv1alpha1.CanNotBeInterrupt
+
+		//
+		// apply (delete) types
+		//
+		case tfv1alpha1.PodApplyDelete:
+			if tf.Spec.PostApplyDeleteScript != "" {
+				podType = tfv1alpha1.PodPostApplyDelete
+			} else {
+				reason = "COMPLETED_TERRAFORM"
+				podType = tfv1alpha1.PodNil
+				stageState = tfv1alpha1.StateComplete
+			}
+
+		case tfv1alpha1.PodPostApplyDelete:
+			reason = "COMPLETED_TERRAFORM"
+			podType = tfv1alpha1.PodNil
+			stageState = tfv1alpha1.StateComplete
+
+		case tfv1alpha1.PodNil:
+			isNewStage = false
+		}
+
+	}
+	if isNewStage {
+		addNewStage(tf, podType, reason, interruptible, stageState)
+	}
+	return isNewStage
+}
+
+// updateFinalizer sets and unsets the finalizer on the tf resource. When
+// IgnoreDelete is true, the finalizer is removed. When IgnoreDelete is false,
+// the finalizer is added.
+//
+// The finalizer will be responsible for kicking off the destroy workflow.
+func updateFinalizer(tf *tfv1alpha1.Terraform) bool {
+	finalizers := tf.GetFinalizers()
+
+	if tf.Status.Phase == tfv1alpha1.PhaseDeleted {
+		if utils.ListContainsStr(finalizers, terraformFinalizer) {
+			tf.SetFinalizers(utils.ListRemoveStr(finalizers, terraformFinalizer))
+			return true
+		}
+	}
+
+	if tf.Spec.IgnoreDelete && len(finalizers) > 0 {
+		if utils.ListContainsStr(finalizers, terraformFinalizer) {
+			tf.SetFinalizers(utils.ListRemoveStr(finalizers, terraformFinalizer))
+			return true
+		}
+	}
+
+	if !tf.Spec.IgnoreDelete {
+		if !utils.ListContainsStr(finalizers, terraformFinalizer) {
+			tf.SetFinalizers(append(finalizers, terraformFinalizer))
+			return true
+		}
+	}
+	return false
+}
+
+func (r ReconcileTerraform) update(ctx context.Context, tf *tfv1alpha1.Terraform) error {
+	err := r.Client.Update(ctx, tf)
+	if err != nil {
+		return fmt.Errorf("failed to update tf resource: %s", err)
+	}
+	return nil
+}
+
+func (r ReconcileTerraform) updateStatus(ctx context.Context, tf *tfv1alpha1.Terraform) error {
+	err := r.Client.Status().Update(ctx, tf)
+	if err != nil {
+		return fmt.Errorf("failed to update tf status: %s", err)
+	}
+	return nil
+}
+
+func (r ReconcileTerraform) PodStatus(ctx context.Context, tf tfv1alpha1.Terraform, stage tfv1alpha1.Stage) (tfv1alpha1.StageState, error) {
+
+	return tfv1alpha1.StateInProgress, nil
+
 }
 
 // IsJobFinished returns true if the job has completed
@@ -513,7 +735,7 @@ func (d GitRepoAccessOptions) TunnelClose(reqLogger logr.Logger) {
 	return
 }
 
-func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, k8sclient client.Client) (map[string][]byte, error) {
+func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, instance *tfv1alpha1.Terraform, k8sclient client.Client) (map[string][]byte, error) {
 	data := make(map[string]string)
 	dataAsByte := make(map[string][]byte)
 	if instance.Spec.SSHTunnel != nil {
@@ -534,7 +756,7 @@ func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, k
 			ns = instance.Namespace
 		}
 
-		key, err := loadPassword(k8sclient, k, instance.Spec.SSHTunnel.SSHKeySecretRef.Name, ns)
+		key, err := loadPassword(ctx, k8sclient, k, instance.Spec.SSHTunnel.SSHKeySecretRef.Name, ns)
 		if err != nil {
 			return dataAsByte, err
 		}
@@ -574,7 +796,7 @@ func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, k
 			if ns == "" {
 				ns = instance.Namespace
 			}
-			key, err := loadPassword(k8sclient, k, m.Git.SSH.SSHKeySecretRef.Name, ns)
+			key, err := loadPassword(ctx, k8sclient, k, m.Git.SSH.SSHKeySecretRef.Name, ns)
 			if err != nil {
 				return dataAsByte, err
 			}
@@ -589,31 +811,36 @@ func formatJobSSHConfig(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, k
 	return dataAsByte, nil
 }
 
-func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, isFinalize bool) error {
-	r.Recorder.Event(instance, "Normal", "InitializeJobCreate", fmt.Sprintf("Setting up a Job"))
+func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Terraform) error {
+	reqLogger := r.Log.WithValues("Terraform", types.NamespacedName{Name: tf.Name, Namespace: tf.Namespace}.String())
+	n := len(tf.Status.Stages)
+	isNewGeneration := tf.Status.Stages[n-1].Reason == "GENERATION_CHANGE"
+	isFirstInstall := tf.Status.Stages[n-1].Reason == "TF_RESOURCE_CREATED"
+	isChanged := isNewGeneration || isFirstInstall
+	// r.Recorder.Event(tf, "Normal", "InitializeJobCreate", fmt.Sprintf("Setting up a Job"))
 	// TODO(user): Add the cleanup steps that the operator
 	// needs to do before the CR can be deleted. Examples
 	// of finalizers include performing backups and deleting
 	// resources that are not owned by this CR, like a PVC.
 
-	runOpts := newRunOptions(instance, isFinalize)
-	runOpts.updateEnvVars(corev1.EnvVar{
-		Name:  "DEPLOYMENT",
-		Value: instance.Name,
-	})
+	runOpts := newRunOptions(tf)
+	// runOpts.updateEnvVars(corev1.EnvVar{
+	// 	Name:  "DEPLOYMENT",
+	// 	Value: instance.Name,
+	// })
 	// runOpts.namespace = instance.Namespace
 
 	// Stack Download
-	address := instance.Spec.TerraformModule.Address
-	stackRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
+	address := tf.Spec.TerraformModule.Address
+	stackRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(tf, address, []string{})
 	if err != nil {
-		r.Recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err).Error())
+		r.Recorder.Event(tf, "Warning", "ProcessingError", fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err).Error())
 		return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 	}
 
 	err = stackRepoAccessOptions.getParsedAddress()
 	if err != nil {
-		r.Recorder.Event(instance, "Warning", "ProcessingError", fmt.Errorf("Error in parsing address: %v", err).Error())
+		r.Recorder.Event(tf, "Warning", "ProcessingError", fmt.Errorf("Error in parsing address: %v", err).Error())
 		return fmt.Errorf("Error in parsing address: %v", err)
 	}
 
@@ -624,120 +851,179 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 
 	runOpts.updateDownloadedModules(stackRepoAccessOptions.hash)
 	runOpts.stack = stackRepoAccessOptions.ParsedAddress
-
-	// I think Terraform only allows for one git token. Add the first one
-	// to the job's env vars as GIT_PASSWORD.
-	for _, m := range stackRepoAccessOptions.SCMAuthMethods {
-		if m.Git.HTTPS != nil {
-			runOpts.tokenSecret = m.Git.HTTPS.TokenSecretRef
-			if runOpts.tokenSecret.Key == "" {
-				runOpts.tokenSecret.Key = "token"
-			}
-		}
-		if m.Git.SSH != nil {
-			sshConfigData, err := formatJobSSHConfig(reqLogger, instance, r.Client)
-			if err != nil {
-				r.Recorder.Event(instance, "Warning", "SSHConfigError", fmt.Errorf("%v", err).Error())
-				return fmt.Errorf("Error setting up sshconfig: %v", err)
-			}
-			runOpts.sshConfigData = sshConfigData
-		}
-		break
+	if runOpts.stack.repo == "" {
+		return fmt.Errorf("Error is parsing terraformModule")
 	}
 
-	runOpts.mainModule = stackRepoAccessOptions.hash
+	// TODO Update secrets only when the generation changes
+	if isChanged {
+		for _, m := range stackRepoAccessOptions.SCMAuthMethods {
+			// I think Terraform only allows for one git token. Add the first one
+			// to the job's env vars as GIT_PASSWORD.
+			if m.Git.HTTPS != nil {
+				tokenSecret := *m.Git.HTTPS.TokenSecretRef
+				if tokenSecret.Key == "" {
+					tokenSecret.Key = "token"
+				}
+				gitAskpass, err := r.createGitAskpass(ctx, tokenSecret)
+				if err != nil {
+					return err
+				}
+				runOpts.secretData["gitAskpass"] = gitAskpass
+
+			}
+			if m.Git.SSH != nil {
+				sshConfigData, err := formatJobSSHConfig(ctx, reqLogger, tf, r.Client)
+				if err != nil {
+					r.Recorder.Event(tf, "Warning", "SSHConfigError", fmt.Errorf("%v", err).Error())
+					return fmt.Errorf("Error setting up sshconfig: %v", err)
+				}
+				for k, v := range sshConfigData {
+					runOpts.secretData[k] = v
+				}
+
+			}
+			break
+		}
+	}
+
 	//
+	// TODO
+	//		The following section can have downloads from other sources. This
+	//		can take a few seconds to a few mintues to complete and will block
+	// 		the entire queue until it is completed.
 	//
-	// Download the tfvar configs (and optionally save to external repo)
+	//		Implement a way to run this in the background and signal that the
+	//		configmap is ready for usage which will then trigger the controller
+	//		to go ahead and configure the pods.
 	//
-	//
-	// TODO Validate spec.config exists
-	// TODO validate spec.sources exists && len > 0
-	runOpts.credentials = instance.Spec.Credentials
 	tfvars := ""
-	otherConfigFiles := make(map[string]string)
-	for _, s := range instance.Spec.Sources {
-		address := strings.TrimSpace(s.Address)
-		extras := s.Extras
-		// Loop thru all the sources in spec.config
-		configRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, extras)
-		if err != nil {
-			r.Recorder.Event(instance, "Warning", "ConfigError", fmt.Errorf("Error in Spec: %v", err).Error())
-			return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
-		}
+	if isChanged {
+		// ConfigMap Data only needs to be updated when generation changes
 
-		err = configRepoAccessOptions.getParsedAddress()
-		if err != nil {
-			return err
-		}
-		reqLogger.V(1).Info("Setting up download options for config repo access")
+		otherConfigFiles := make(map[string]string)
+		for _, s := range tf.Spec.Sources {
+			address := strings.TrimSpace(s.Address)
+			extras := s.Extras
+			// Loop thru all the sources in spec.config
+			configRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(tf, address, extras)
+			if err != nil {
+				r.Recorder.Event(tf, "Warning", "ConfigError", fmt.Errorf("Error in Spec: %v", err).Error())
+				return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
+			}
 
-		if (tfv1alpha1.ProxyOpts{}) != configRepoAccessOptions.SSHProxy {
-			if strings.Contains(configRepoAccessOptions.protocol, "http") {
-				err := configRepoAccessOptions.startHTTPSProxy(r.Client, instance.Namespace, reqLogger)
-				if err != nil {
-					reqLogger.Error(err, "failed to start ssh proxy")
-					return err
+			err = configRepoAccessOptions.getParsedAddress()
+			if err != nil {
+				return err
+			}
+			reqLogger.V(1).Info("Setting up download options for config repo access")
+
+			if (tfv1alpha1.ProxyOpts{}) != configRepoAccessOptions.SSHProxy {
+				if strings.Contains(configRepoAccessOptions.protocol, "http") {
+					err := configRepoAccessOptions.startHTTPSProxy(ctx, r.Client, tf.Namespace, reqLogger)
+					if err != nil {
+						reqLogger.Error(err, "failed to start ssh proxy")
+						return err
+					}
+				} else if configRepoAccessOptions.protocol == "ssh" {
+					err := configRepoAccessOptions.startSSHProxy(ctx, r.Client, tf.Namespace, reqLogger)
+					if err != nil {
+						reqLogger.Error(err, "failed to start ssh proxy")
+						return err
+					}
+					defer configRepoAccessOptions.TunnelClose(reqLogger.WithValues("Spec", "source"))
 				}
-			} else if configRepoAccessOptions.protocol == "ssh" {
-				err := configRepoAccessOptions.startSSHProxy(r.Client, instance.Namespace, reqLogger)
-				if err != nil {
-					reqLogger.Error(err, "failed to start ssh proxy")
-					return err
-				}
-				defer configRepoAccessOptions.TunnelClose(reqLogger.WithValues("Spec", "source"))
+			}
+
+			err = configRepoAccessOptions.download(ctx, r.Client, tf.Namespace)
+			if err != nil {
+				r.Recorder.Event(tf, "Warning", "DownloadError", fmt.Errorf("Error in download: %v", err).Error())
+				return fmt.Errorf("Error in download: %v", err)
+			}
+
+			reqLogger.V(1).Info(fmt.Sprintf("Config was downloaded and updated GitRepoAccessOptions: %+v", configRepoAccessOptions))
+
+			tfvarSource, err := configRepoAccessOptions.tfvarFiles()
+			if err != nil {
+				r.Recorder.Event(tf, "Warning", "ReadFileError", fmt.Errorf("Error reading tfvar files: %v", err).Error())
+				return fmt.Errorf("Error in reading tfvarFiles: %v", err)
+			}
+			tfvars += tfvarSource
+
+			otherConfigFiles, err = configRepoAccessOptions.otherConfigFiles()
+			if err != nil {
+				r.Recorder.Event(tf, "Warning", "ReadFileError", fmt.Errorf("Error reading files: %v", err).Error())
+				return fmt.Errorf("Error in reading otherConfigFiles: %v", err)
 			}
 		}
 
-		err = configRepoAccessOptions.download(r.Client, instance.Namespace)
-		if err != nil {
-			r.Recorder.Event(instance, "Warning", "DownloadError", fmt.Errorf("Error in download: %v", err).Error())
-			return fmt.Errorf("Error in download: %v", err)
+		runOpts.configMapData["tfvars"] = tfvars
+		for k, v := range otherConfigFiles {
+			runOpts.configMapData[k] = v
 		}
 
-		reqLogger.V(1).Info(fmt.Sprintf("Config was downloaded and updated GitRepoAccessOptions: %+v", configRepoAccessOptions))
-
-		tfvarSource, err := configRepoAccessOptions.tfvarFiles()
-		if err != nil {
-			r.Recorder.Event(instance, "Warning", "ReadFileError", fmt.Errorf("Error reading tfvar files: %v", err).Error())
-			return fmt.Errorf("Error in reading tfvarFiles: %v", err)
+		// Override the backend.tf by inserting a custom backend
+		if tf.Spec.CustomBackend != "" {
+			runOpts.configMapData["backend_override.tf"] = tf.Spec.CustomBackend
 		}
-		tfvars += tfvarSource
 
-		otherConfigFiles, err = configRepoAccessOptions.otherConfigFiles()
-		if err != nil {
-			r.Recorder.Event(instance, "Warning", "ReadFileError", fmt.Errorf("Error reading files: %v", err).Error())
-			return fmt.Errorf("Error in reading otherConfigFiles: %v", err)
+		if tf.Spec.PreInitScript != "" {
+			runOpts.configMapData[string(tfv1alpha1.PodPreInit)] = tf.Spec.PreInitScript
 		}
-	}
 
-	runOpts.configMapData["tfvars"] = tfvars
-	for k, v := range otherConfigFiles {
-		runOpts.configMapData[k] = v
-	}
+		if tf.Spec.PostInitScript != "" {
+			runOpts.configMapData[string(tfv1alpha1.PodPostInit)] = tf.Spec.PostInitScript
+		}
 
-	// Override the backend.tf by inserting a custom backend
-	if instance.Spec.CustomBackend != "" {
-		runOpts.configMapData["backend_override.tf"] = instance.Spec.CustomBackend
-	}
+		if tf.Spec.PrePlanScript != "" {
+			runOpts.configMapData[string(tfv1alpha1.PodPrePlan)] = tf.Spec.PrePlanScript
+		}
 
-	if instance.Spec.PrerunScript != "" {
-		runOpts.configMapData["prerun.sh"] = instance.Spec.PrerunScript
-	}
+		if tf.Spec.PostPlanScript != "" {
+			runOpts.configMapData[string(tfv1alpha1.PodPostPlan)] = tf.Spec.PostPlanScript
+		}
 
-	// Do we need to run postrunscript's for finalizers?
-	if instance.Spec.PostrunScript != "" && !isFinalize {
-		runOpts.configMapData["postrun.sh"] = instance.Spec.PostrunScript
+		if tf.Spec.PreApplyScript != "" {
+			runOpts.configMapData[string(tfv1alpha1.PodPreApply)] = tf.Spec.PreApplyScript
+		}
+
+		if tf.Spec.PostApplyScript != "" {
+			runOpts.configMapData[string(tfv1alpha1.PodPostApply)] = tf.Spec.PostApplyScript
+		}
+
+		if tf.Spec.PreInitDeleteScript != "" {
+			runOpts.configMapData[string(tfv1alpha1.PodPreInitDelete)] = tf.Spec.PreInitDeleteScript
+		}
+
+		if tf.Spec.PostInitDeleteScript != "" {
+			runOpts.configMapData[string(tfv1alpha1.PodPostInitDelete)] = tf.Spec.PostInitDeleteScript
+		}
+
+		if tf.Spec.PrePlanDeleteScript != "" {
+			runOpts.configMapData[string(tfv1alpha1.PodPrePlanDelete)] = tf.Spec.PrePlanDeleteScript
+		}
+
+		if tf.Spec.PostPlanDeleteScript != "" {
+			runOpts.configMapData[string(tfv1alpha1.PodPostPlanDelete)] = tf.Spec.PostPlanDeleteScript
+		}
+
+		if tf.Spec.PreApplyDeleteScript != "" {
+			runOpts.configMapData[string(tfv1alpha1.PodPreApplyDelete)] = tf.Spec.PostApplyScript
+		}
+
+		if tf.Spec.PostApplyDeleteScript != "" {
+			runOpts.configMapData[string(tfv1alpha1.PodPostApplyDelete)] = tf.Spec.PostApplyDeleteScript
+		}
 	}
 
 	// Flatten all the .tfvars and TF_VAR envs into a single file and push
-	if instance.Spec.ExportRepo != nil && !isFinalize {
-		e := instance.Spec.ExportRepo
+	if tf.Spec.ExportRepo != nil && isChanged {
+		e := tf.Spec.ExportRepo
 
 		address := e.Address
-		exportRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(instance, address, []string{})
+		exportRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(tf, address, []string{})
 		if err != nil {
-			r.Recorder.Event(instance, "Warning", "ConfigError", fmt.Errorf("Error getting git repo access options: %v", err).Error())
+			r.Recorder.Event(tf, "Warning", "ConfigError", fmt.Errorf("Error getting git repo access options: %v", err).Error())
 			return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 		}
 		err = exportRepoAccessOptions.getParsedAddress()
@@ -747,45 +1033,346 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 
 		// TODO decide what to do on errors
 		// Closing the tunnel from within this function
-		go exportRepoAccessOptions.commitTfvars(r.Client, tfvars, e.TFVarsFile, e.ConfFile, instance.Namespace, instance.Spec.CustomBackend, runOpts, reqLogger)
-	}
-
-	if isFinalize {
-		runOpts.getOrCreateEnv("DESTROY", "true")
+		go exportRepoAccessOptions.commitTfvars(ctx, r.Client, tfvars, e.TFVarsFile, e.ConfFile, tf.Namespace, tf.Spec.CustomBackend, runOpts, reqLogger)
 	}
 
 	// RUN
-	jobName, err := r.run(reqLogger, instance, runOpts)
+	err = r.run(ctx, reqLogger, tf, runOpts)
 	if err != nil {
-		reqLogger.Error(err, "Failed to run job")
-		r.Recorder.Event(instance, "Warning", "StartJobError", err.Error())
 		return err
 	}
-
-	r.Recorder.Event(instance, "Normal", "SuccessfulCreate", fmt.Sprintf("Created Job: %s", jobName))
 
 	return nil
 }
 
-func (r *ReconcileTerraform) addFinalizer(reqLogger logr.Logger, instance *tfv1alpha1.Terraform) error {
-	reqLogger.Info("Adding Finalizer for terraform")
-	instance.SetFinalizers(append(instance.GetFinalizers(), terraformFinalizer))
+func (r ReconcileTerraform) checkPersistentVolumeClaimExists(ctx context.Context, lookupKey types.NamespacedName) (*corev1.PersistentVolumeClaim, bool, error) {
+	resource := &corev1.PersistentVolumeClaim{}
 
-	// Update CR
-	err := r.Client.Update(context.TODO(), instance)
+	err := r.Client.Get(ctx, lookupKey, resource)
+	if err != nil && errors.IsNotFound(err) {
+		return resource, false, nil
+	} else if err != nil {
+		return resource, false, err
+	}
+	return resource, true, nil
+}
+
+func (r ReconcileTerraform) createPVC(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
+	kind := "PersistentVolumeClaim"
+	_, found, err := r.checkPersistentVolumeClaimExists(ctx, types.NamespacedName{
+		Name:      runOpts.name,
+		Namespace: runOpts.namespace,
+	})
 	if err != nil {
-		reqLogger.Error(err, "Failed to update terraform with finalizer")
+		return nil
+	} else if found {
+		return nil
+	}
+	resource := runOpts.generatePVC("2Gi")
+	controllerutil.SetControllerReference(tf, resource, r.Scheme)
+
+	err = r.Client.Create(ctx, resource)
+	if err != nil {
+		r.Recorder.Event(tf, "Warning", fmt.Sprintf("%sCreateError", kind), fmt.Sprintf("Could not create %s %v", kind, err))
 		return err
 	}
+	r.Recorder.Event(tf, "Normal", "SuccessfulCreate", fmt.Sprintf("Created %s: '%s'", kind, resource.Name))
+	return nil
+}
+
+func (r ReconcileTerraform) checkConfigMapExists(ctx context.Context, lookupKey types.NamespacedName) (*corev1.ConfigMap, bool, error) {
+	resource := &corev1.ConfigMap{}
+
+	err := r.Client.Get(ctx, lookupKey, resource)
+	if err != nil && errors.IsNotFound(err) {
+		return resource, false, nil
+	} else if err != nil {
+		return resource, false, err
+	}
+	return resource, true, nil
+}
+
+func (r ReconcileTerraform) deleteConfigMapIfExists(ctx context.Context, name, namespace string) error {
+	lookupKey := types.NamespacedName{
+		Name:      name,
+		Namespace: namespace,
+	}
+	resource, found, err := r.checkConfigMapExists(ctx, lookupKey)
+	if err != nil {
+		return err
+	}
+	if found {
+		err = r.Client.Delete(ctx, resource)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r ReconcileTerraform) createConfigMap(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
+	kind := "ConfigMap"
+	err := r.deleteConfigMapIfExists(ctx, runOpts.name, runOpts.namespace)
+	if err != nil {
+		return err
+	}
+
+	resource := runOpts.generateConfigMap()
+	controllerutil.SetControllerReference(tf, resource, r.Scheme)
+
+	err = r.Client.Create(ctx, resource)
+	if err != nil {
+		r.Recorder.Event(tf, "Warning", fmt.Sprintf("%sCreateError", kind), fmt.Sprintf("Could not create %s %v", kind, err))
+		return err
+	}
+	r.Recorder.Event(tf, "Normal", "SuccessfulCreate", fmt.Sprintf("Created %s: '%s'", kind, resource.Name))
+	return nil
+}
+
+func (r ReconcileTerraform) checkSecretExists(ctx context.Context, lookupKey types.NamespacedName) (*corev1.Secret, bool, error) {
+	resource := &corev1.Secret{}
+
+	err := r.Client.Get(ctx, lookupKey, resource)
+	if err != nil && errors.IsNotFound(err) {
+		return resource, false, nil
+	} else if err != nil {
+		return resource, false, err
+	}
+	return resource, true, nil
+}
+
+func (r ReconcileTerraform) deleteSecretIfExists(ctx context.Context, name, namespace string) error {
+	lookupKey := types.NamespacedName{
+		Name:      name,
+		Namespace: namespace,
+	}
+	resource, found, err := r.checkSecretExists(ctx, lookupKey)
+	if err != nil {
+		return err
+	}
+	if found {
+		err = r.Client.Delete(ctx, resource)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r ReconcileTerraform) createSecret(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
+	kind := "Secret"
+	err := r.deleteSecretIfExists(ctx, runOpts.name, runOpts.namespace)
+	if err != nil {
+		return err
+	}
+
+	resource := runOpts.generateSecret()
+	controllerutil.SetControllerReference(tf, resource, r.Scheme)
+
+	err = r.Client.Create(ctx, resource)
+	if err != nil {
+		r.Recorder.Event(tf, "Warning", fmt.Sprintf("%sCreateError", kind), fmt.Sprintf("Could not create %s %v", kind, err))
+		return err
+	}
+	r.Recorder.Event(tf, "Normal", "SuccessfulCreate", fmt.Sprintf("Created %s: '%s'", kind, resource.Name))
+	return nil
+}
+
+func (r ReconcileTerraform) checkServiceAccountExists(ctx context.Context, lookupKey types.NamespacedName) (*corev1.ServiceAccount, bool, error) {
+	resource := &corev1.ServiceAccount{}
+
+	err := r.Client.Get(ctx, lookupKey, resource)
+	if err != nil && errors.IsNotFound(err) {
+		return resource, false, nil
+	} else if err != nil {
+		return resource, false, err
+	}
+	return resource, true, nil
+}
+
+func (r ReconcileTerraform) deleteServiceAccountIfExists(ctx context.Context, name, namespace string) error {
+	lookupKey := types.NamespacedName{
+		Name:      name,
+		Namespace: namespace,
+	}
+	resource, found, err := r.checkServiceAccountExists(ctx, lookupKey)
+	if err != nil {
+		return err
+	}
+	if found {
+		err = r.Client.Delete(ctx, resource)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r ReconcileTerraform) createServiceAccount(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
+	kind := "ServiceAccount"
+	err := r.deleteServiceAccountIfExists(ctx, runOpts.serviceAccount, runOpts.namespace)
+	if err != nil {
+		return err
+	}
+
+	resource := runOpts.generateServiceAccount()
+	controllerutil.SetControllerReference(tf, resource, r.Scheme)
+
+	err = r.Client.Create(ctx, resource)
+	if err != nil {
+		r.Recorder.Event(tf, "Warning", fmt.Sprintf("%sCreateError", kind), fmt.Sprintf("Could not create %s %v", kind, err))
+		return err
+	}
+	r.Recorder.Event(tf, "Normal", "SuccessfulCreate", fmt.Sprintf("Created %s: '%s'", kind, resource.Name))
+	return nil
+}
+
+func (r ReconcileTerraform) checkRoleExists(ctx context.Context, lookupKey types.NamespacedName) (*rbacv1.Role, bool, error) {
+	resource := &rbacv1.Role{}
+	err := r.Client.Get(ctx, lookupKey, resource)
+	if err != nil && errors.IsNotFound(err) {
+		return resource, false, nil
+	} else if err != nil {
+		return resource, false, err
+	}
+	return resource, true, nil
+}
+
+func (r ReconcileTerraform) deleteRoleIfExists(ctx context.Context, name, namespace string) error {
+	lookupKey := types.NamespacedName{
+		Name:      name,
+		Namespace: namespace,
+	}
+	resource, found, err := r.checkRoleExists(ctx, lookupKey)
+	if err != nil {
+		return err
+	}
+	if found {
+		err = r.Client.Delete(ctx, resource)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r ReconcileTerraform) createRole(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
+	kind := "Role"
+	err := r.deleteRoleIfExists(ctx, runOpts.name, runOpts.namespace)
+	if err != nil {
+		return err
+	}
+
+	resource := runOpts.generateRole()
+	controllerutil.SetControllerReference(tf, resource, r.Scheme)
+
+	err = r.Client.Create(ctx, resource)
+	if err != nil {
+		r.Recorder.Event(tf, "Warning", fmt.Sprintf("%sCreateError", kind), fmt.Sprintf("Could not create %s %v", kind, err))
+		return err
+	}
+	r.Recorder.Event(tf, "Normal", "SuccessfulCreate", fmt.Sprintf("Created %s: '%s'", kind, resource.Name))
+	return nil
+}
+
+func (r ReconcileTerraform) checkRoleBindingExists(ctx context.Context, lookupKey types.NamespacedName) (*rbacv1.RoleBinding, bool, error) {
+	resource := &rbacv1.RoleBinding{}
+	err := r.Client.Get(ctx, lookupKey, resource)
+	if err != nil && errors.IsNotFound(err) {
+		return resource, false, nil
+	} else if err != nil {
+		return resource, false, err
+	}
+	return resource, true, nil
+}
+
+func (r ReconcileTerraform) deleteRoleBindingIfExists(ctx context.Context, name, namespace string) error {
+	lookupKey := types.NamespacedName{
+		Name:      name,
+		Namespace: namespace,
+	}
+	resource, found, err := r.checkRoleBindingExists(ctx, lookupKey)
+	if err != nil {
+		return err
+	}
+	if found {
+		err = r.Client.Delete(ctx, resource)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r ReconcileTerraform) createRoleBinding(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
+	kind := "RoleBinding"
+	err := r.deleteRoleBindingIfExists(ctx, runOpts.name, runOpts.namespace)
+	if err != nil {
+		return err
+	}
+
+	resource := runOpts.generateRoleBinding()
+	controllerutil.SetControllerReference(tf, resource, r.Scheme)
+
+	err = r.Client.Create(ctx, resource)
+	if err != nil {
+		r.Recorder.Event(tf, "Warning", fmt.Sprintf("%sCreateError", kind), fmt.Sprintf("Could not create %s %v", kind, err))
+		return err
+	}
+	r.Recorder.Event(tf, "Normal", "SuccessfulCreate", fmt.Sprintf("Created %s: '%s'", kind, resource.Name))
+	return nil
+}
+
+func (r ReconcileTerraform) createPod(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
+	kind := "Pod"
+
+	n := len(tf.Status.Stages)
+	podType := tf.Status.Stages[n-1].PodType
+	generation := tf.Status.Stages[n-1].Generation
+
+	tfRunnerPodTypes := []string{
+		string(tfv1alpha1.PodInit),
+		string(tfv1alpha1.PodInitDelete),
+		string(tfv1alpha1.PodPlan),
+		string(tfv1alpha1.PodPlanDelete),
+		string(tfv1alpha1.PodApply),
+		string(tfv1alpha1.PodApplyDelete),
+	}
+
+	isTFRunner := utils.ListContainsStr(tfRunnerPodTypes, string(podType))
+
+	var preScriptPodType tfv1alpha1.PodType
+	if podType == tfv1alpha1.PodInit && tf.Spec.PreInitScript != "" {
+		preScriptPodType = tfv1alpha1.PodPreInit
+	} else if podType == tfv1alpha1.PodInitDelete && tf.Spec.PreInitDeleteScript != "" {
+		preScriptPodType = tfv1alpha1.PodPreInitDelete
+	} else if podType == tfv1alpha1.PodPlan && tf.Spec.PrePlanScript != "" {
+		preScriptPodType = tfv1alpha1.PodPrePlan
+	} else if podType == tfv1alpha1.PodPlanDelete && tf.Spec.PrePlanDeleteScript != "" {
+		preScriptPodType = tfv1alpha1.PodPrePlanDelete
+	} else if podType == tfv1alpha1.PodApply && tf.Spec.PreApplyScript != "" {
+		preScriptPodType = tfv1alpha1.PodPreApply
+	} else if podType == tfv1alpha1.PodApplyDelete && tf.Spec.PreApplyDeleteScript != "" {
+		preScriptPodType = tfv1alpha1.PodPreApplyDelete
+	}
+
+	resource := runOpts.generatePod(podType, preScriptPodType, isTFRunner, generation)
+	controllerutil.SetControllerReference(tf, resource, r.Scheme)
+
+	err := r.Client.Create(ctx, resource)
+	if err != nil {
+		r.Recorder.Event(tf, "Warning", fmt.Sprintf("%sCreateError", kind), fmt.Sprintf("Could not create %s %v", kind, err))
+		return err
+	}
+	r.Recorder.Event(tf, "Normal", "SuccessfulCreate", fmt.Sprintf("Created %s: '%s'", kind, resource.Name))
 	return nil
 }
 
 func (r RunOptions) generateConfigMap() *corev1.ConfigMap {
 
-	nameTrunc := utils.TruncateResourceName(r.name, 246) + "-tfvars"
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      nameTrunc,
+			Name:      r.name,
 			Namespace: r.namespace,
 		},
 		Data: r.configMapData,
@@ -813,26 +1400,6 @@ func (r RunOptions) generateServiceAccount() *corev1.ServiceAccount {
 		},
 	}
 	return sa
-}
-
-func (r RunOptions) generateActionConfigMap() *corev1.ConfigMap {
-	data := make(map[string]string)
-
-	if r.applyAction {
-		data["action"] = "apply"
-	} else {
-		data["action"] = "plan-only"
-	}
-
-	nameTrunc := utils.TruncateResourceName(r.name, 246) + "-action"
-	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      nameTrunc,
-			Namespace: r.namespace,
-		},
-		Data: data,
-	}
-	return cm
 }
 
 func (r RunOptions) generateRole() *rbacv1.Role {
@@ -911,164 +1478,477 @@ func (r RunOptions) generateRoleBinding() *rbacv1.RoleBinding {
 	return rb
 }
 
-func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job {
-	// reqLogger := log.WithValues("function", "run")
-	// reqLogger.Info(fmt.Sprintf("Running job with this setup: %+v", r))
+// func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job {
+// 	// reqLogger := log.WithValues("function", "run")
+// 	// reqLogger.Info(fmt.Sprintf("Running job with this setup: %+v", r))
 
-	// TF Module
-	if r.mainModule == "" {
-		r.mainModule = "main_module"
+// 	// TF Module
+// 	if r.mainModule == "" {
+// 		r.mainModule = "main_module"
+// 	}
+// 	envs := r.envVars
+// 	envs = append(envs, []corev1.EnvVar{
+// 		{
+// 			Name:  "TFOPS_MAIN_MODULE",
+// 			Value: r.mainModule,
+// 		},
+// 		{
+// 			Name:  "NAMESPACE",
+// 			Value: r.namespace,
+// 		},
+// 	}...)
+// 	tfModules := []corev1.Volume{}
+// 	// Check if stack is in a subdir
+
+// 	if r.stack.repo == "" {
+// 		// TODO This is an error and should not be allowed
+// 		//		Find out where this is not checked and error out
+// 		//		and let the user know the repo is missing (maybe check repo
+// 		// 		validitiy?)
+// 	}
+// 	if r.stack.repo != "" {
+// 		envs = append(envs, []corev1.EnvVar{
+// 			{
+// 				Name:  "STACK_REPO",
+// 				Value: r.stack.repo,
+// 			},
+// 			{
+// 				Name:  "STACK_REPO_HASH",
+// 				Value: r.stack.hash,
+// 			},
+// 		}...)
+// 		if r.tokenSecret != nil {
+// 			if r.tokenSecret.Name != "" {
+// 				envs = append(envs, []corev1.EnvVar{
+// 					{
+// 						Name: "GIT_PASSWORD",
+// 						ValueFrom: &corev1.EnvVarSource{
+// 							SecretKeyRef: &corev1.SecretKeySelector{
+// 								LocalObjectReference: corev1.LocalObjectReference{
+// 									Name: r.tokenSecret.Name,
+// 								},
+// 								Key: r.tokenSecret.Key,
+// 							},
+// 						},
+// 					},
+// 				}...)
+// 			}
+// 		}
+
+// 		// r.tokenSecret.Name
+// 		// if r.token != "" {
+
+// 		// }
+// 		if len(r.stack.subdirs) > 0 {
+// 			envs = append(envs, []corev1.EnvVar{
+// 				{
+// 					Name:  "STACK_REPO_SUBDIR",
+// 					Value: r.stack.subdirs[0],
+// 				},
+// 			}...)
+// 		}
+// 	} else {
+// 		for i, v := range r.moduleConfigMaps {
+// 			tfModules = append(tfModules, []corev1.Volume{
+// 				{
+// 					Name: v,
+// 					VolumeSource: corev1.VolumeSource{
+// 						ConfigMap: &corev1.ConfigMapVolumeSource{
+// 							LocalObjectReference: corev1.LocalObjectReference{
+// 								Name: v,
+// 							},
+// 						},
+// 					},
+// 				},
+// 			}...)
+
+// 			envs = append(envs, []corev1.EnvVar{
+// 				{
+// 					Name:  "TFOPS_MODULE" + strconv.Itoa(i),
+// 					Value: v,
+// 				},
+// 			}...)
+// 		}
+// 	}
+
+// 	// Check if is new resource
+// 	if r.isNewResource {
+// 		envs = append(envs, []corev1.EnvVar{
+// 			{
+// 				Name:  "IS_NEW_RESOURCE",
+// 				Value: "true",
+// 			},
+// 		}...)
+// 	}
+
+// 	// This resource is used to create a volumeMount which have 63 char limits.
+// 	// Truncate the instance.Name enough to fit "-tfvars" wich will be the
+// 	// configmapName and volumeMount name.
+// 	tfvarsConfigMapVolumeName := utils.TruncateResourceName(r.name, 56) + "-tfvars"
+// 	tfVars := []corev1.Volume{}
+// 	tfVars = append(tfVars, []corev1.Volume{
+// 		{
+// 			Name: tfvarsConfigMapVolumeName,
+// 			VolumeSource: corev1.VolumeSource{
+// 				ConfigMap: &corev1.ConfigMapVolumeSource{
+// 					LocalObjectReference: corev1.LocalObjectReference{
+// 						Name: tfvarsConfigMap.Name,
+// 					},
+// 				},
+// 			},
+// 		},
+// 	}...)
+
+// 	envs = append(envs, []corev1.EnvVar{
+// 		{
+// 			Name:  "TFOPS_VARFILE_FLAG",
+// 			Value: "-var-file /tfops/" + tfvarsConfigMapVolumeName + "/tfvars",
+// 		},
+// 		{
+// 			Name:  "TFOPS_CONFIGMAP_PATH",
+// 			Value: "/tfops/" + tfvarsConfigMapVolumeName,
+// 		},
+// 	}...)
+
+// 	volumes := append(tfModules, tfVars...)
+
+// 	volumeMounts := []corev1.VolumeMount{}
+// 	for _, v := range volumes {
+// 		// setting up volumeMounts
+// 		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
+// 			{
+// 				Name:      v.Name,
+// 				MountPath: "/tfops/" + v.Name,
+// 			},
+// 		}...)
+// 	}
+
+// 	if r.sshConfig != "" {
+// 		mode := int32(0600)
+// 		volumes = append(volumes, []corev1.Volume{
+// 			{
+// 				Name: "ssh-key",
+// 				VolumeSource: corev1.VolumeSource{
+// 					Secret: &corev1.SecretVolumeSource{
+// 						SecretName:  r.sshConfig,
+// 						DefaultMode: &mode,
+// 					},
+// 				},
+// 			},
+// 		}...)
+// 		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
+// 			{
+// 				Name:      "ssh-key",
+// 				MountPath: "/root/.ssh/",
+// 			},
+// 		}...)
+// 	}
+
+// 	annotations := make(map[string]string)
+// 	envFrom := []corev1.EnvFromSource{}
+
+// 	for _, c := range r.credentials {
+// 		if c.AWSCredentials.KIAM != "" {
+// 			annotations["iam.amazonaws.com/role"] = c.AWSCredentials.KIAM
+// 		}
+// 	}
+
+// 	for _, c := range r.credentials {
+// 		if (tfv1alpha1.SecretNameRef{}) != c.SecretNameRef {
+// 			envFrom = append(envFrom, []corev1.EnvFromSource{
+// 				{
+// 					SecretRef: &corev1.SecretEnvSource{
+// 						LocalObjectReference: corev1.LocalObjectReference{
+// 							Name: c.SecretNameRef.Name,
+// 						},
+// 					},
+// 				},
+// 			}...)
+// 		}
+// 	}
+
+// 	// Create a manual selector for jobs (lets job-names be more than 63 chars)
+// 	manualSelector := true
+
+// 	// Custom UUID for label purposes
+// 	uid := uuid.NewUUID()
+
+// 	// The job-name label must be <64 chars
+// 	labels := make(map[string]string)
+// 	labels["tf-job"] = string(uid)
+// 	labels["job-name"] = r.jobNameLabel
+
+// 	// Schedule a job that will execute the terraform plan
+// 	job := &batchv1.Job{
+// 		ObjectMeta: metav1.ObjectMeta{
+// 			Name:      r.name,
+// 			Namespace: r.namespace,
+// 		},
+// 		Spec: batchv1.JobSpec{
+// 			ManualSelector: &manualSelector,
+// 			Selector: &metav1.LabelSelector{
+// 				MatchLabels: labels,
+// 			},
+// 			Template: corev1.PodTemplateSpec{
+// 				ObjectMeta: metav1.ObjectMeta{
+// 					Annotations: annotations,
+// 					Labels:      labels,
+// 				},
+// 				Spec: corev1.PodSpec{
+// 					ServiceAccountName: r.serviceAccount,
+// 					RestartPolicy:      "OnFailure",
+// 					Containers: []corev1.Container{
+// 						{
+// 							Name: "tf",
+// 							// TODO Version docker images more specifically than static versions
+// 							Image:           r.terraformRunner + ":" + r.terraformVersion,
+// 							ImagePullPolicy: r.terraformRunnerPullPolicy,
+// 							EnvFrom:         envFrom,
+// 							Env: append(envs, []corev1.EnvVar{
+// 								{
+// 									Name:  "INSTANCE_NAME",
+// 									Value: r.name,
+// 								},
+// 							}...),
+// 							VolumeMounts: volumeMounts,
+// 						},
+// 					},
+// 					Volumes: volumes,
+// 				},
+// 			},
+// 		},
+// 	}
+
+// 	return job
+// }
+
+func (r RunOptions) generatePVC(size string) *corev1.PersistentVolumeClaim {
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.name,
+			Namespace: r.namespace,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{
+				corev1.ReadWriteOnce,
+			},
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(size),
+				},
+			},
+		},
 	}
+}
+
+func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, isTFRunner bool, generation int64) *corev1.Pod {
+	pod := &corev1.Pod{}
+	id := r.name
+	generateName := id + "-" + string(podType) + "-"
+
 	envs := r.envVars
 	envs = append(envs, []corev1.EnvVar{
 		{
-			Name:  "TFOPS_MAIN_MODULE",
-			Value: r.mainModule,
+			Name:  "TFO_RUNNER",
+			Value: id,
 		},
 		{
-			Name:  "NAMESPACE",
+			Name:  "TFO_NAMESPACE",
 			Value: r.namespace,
 		},
-	}...)
-	tfModules := []corev1.Volume{}
-	// Check if stack is in a subdir
-	if r.stack.repo != "" {
-		envs = append(envs, []corev1.EnvVar{
-			{
-				Name:  "STACK_REPO",
-				Value: r.stack.repo,
-			},
-			{
-				Name:  "STACK_REPO_HASH",
-				Value: r.stack.hash,
-			},
-		}...)
-		if r.tokenSecret != nil {
-			if r.tokenSecret.Name != "" {
-				envs = append(envs, []corev1.EnvVar{
-					{
-						Name: "GIT_PASSWORD",
-						ValueFrom: &corev1.EnvVarSource{
-							SecretKeyRef: &corev1.SecretKeySelector{
-								LocalObjectReference: corev1.LocalObjectReference{
-									Name: r.tokenSecret.Name,
-								},
-								Key: r.tokenSecret.Key,
-							},
-						},
-					},
-				}...)
-			}
-		}
-
-		// r.tokenSecret.Name
-		// if r.token != "" {
-
-		// }
-		if len(r.stack.subdirs) > 0 {
-			envs = append(envs, []corev1.EnvVar{
-				{
-					Name:  "STACK_REPO_SUBDIR",
-					Value: r.stack.subdirs[0],
-				},
-			}...)
-		}
-	} else {
-		for i, v := range r.moduleConfigMaps {
-			tfModules = append(tfModules, []corev1.Volume{
-				{
-					Name: v,
-					VolumeSource: corev1.VolumeSource{
-						ConfigMap: &corev1.ConfigMapVolumeSource{
-							LocalObjectReference: corev1.LocalObjectReference{
-								Name: v,
-							},
-						},
-					},
-				},
-			}...)
-
-			envs = append(envs, []corev1.EnvVar{
-				{
-					Name:  "TFOPS_MODULE" + strconv.Itoa(i),
-					Value: v,
-				},
-			}...)
-		}
-	}
-
-	// Check if is new resource
-	if r.isNewResource {
-		envs = append(envs, []corev1.EnvVar{
-			{
-				Name:  "IS_NEW_RESOURCE",
-				Value: "true",
-			},
-		}...)
-	}
-
-	// This resource is used to create a volumeMount which have 63 char limits.
-	// Truncate the instance.Name enough to fit "-tfvars" wich will be the
-	// configmapName and volumeMount name.
-	tfvarsConfigMapVolumeName := utils.TruncateResourceName(r.name, 56) + "-tfvars"
-	tfVars := []corev1.Volume{}
-	tfVars = append(tfVars, []corev1.Volume{
 		{
-			Name: tfvarsConfigMapVolumeName,
+			Name:  "TFO_GENERATION",
+			Value: fmt.Sprintf("%d", generation),
+		},
+		{
+			Name:  "TFO_MAIN_MODULE",
+			Value: "/home/tfo-runner/main",
+		},
+	}...)
+
+	volumes := []corev1.Volume{
+		{
+			Name: "tfrun",
+			VolumeSource: corev1.VolumeSource{
+				//
+				// TODO add an option to the tf to use host or pvc
+				// 		for the plan.
+				//
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: id,
+				},
+				//
+				// TODO if host is used, develop a cleanup plan so
+				//		so the volume does not fill up with old data
+				//
+				// TODO if host is used, affinity rules must be placed
+				// 		that will ensure all the pods use the same host
+				//
+				// HostPath: &corev1.HostPathVolumeSource{
+				// 	Path: "/mnt",
+				// },
+			},
+		},
+	}
+	volumeMounts := []corev1.VolumeMount{
+		{
+			Name:      "tfrun",
+			MountPath: "/home/tfo-runner",
+		},
+	}
+	envs = append(envs, corev1.EnvVar{
+		Name:  "TFO_ROOT_PATH",
+		Value: "/home/tfo-runner",
+	})
+
+	// Check if stack is in a subdir
+
+	// if r.stack.repo == "" {
+	// 	// TODO This is an error and should not be allowed
+	// 	//		Find out where this is not checked and error out
+	// 	//		and let the user know the repo is missing (maybe check repo
+	// 	// 		validitiy?)
+	// }
+
+	ref := r.stack.hash
+	if ref == "" {
+		ref = "master"
+	}
+	envs = append(envs, []corev1.EnvVar{
+		{
+			Name:  "TFO_MAIN_MODULE_REPO",
+			Value: r.stack.repo,
+		},
+		{
+			Name:  "TFO_MAIN_MODULE_REPO_REF",
+			Value: ref,
+		},
+	}...)
+
+	// r.tokenSecret.Name
+	// if r.token != "" {
+
+	// }
+	if len(r.stack.subdirs) > 0 {
+		value := r.stack.subdirs[0]
+		if value == "" {
+			value = "."
+		}
+		envs = append(envs, []corev1.EnvVar{
+			{
+				Name:  "TFO_MAIN_MODULE_REPO_SUBDIR",
+				Value: value,
+			},
+		}...)
+	} else {
+		// TODO maybe set a default in r.stack.subdirs[0] so we can get rid
+		//		of this if statement
+		envs = append(envs, []corev1.EnvVar{
+			{
+				Name:  "TFO_MAIN_MODULE_REPO_SUBDIR",
+				Value: ".",
+			},
+		}...)
+	}
+
+	downloadsVol := "downloads"
+	downloadsPath := "/tmp/downloads"
+	volumes = append(volumes, []corev1.Volume{
+		{
+			Name: downloadsVol,
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{
-						Name: tfvarsConfigMap.Name,
+						Name: id,
 					},
 				},
 			},
 		},
 	}...)
-
+	volumeMounts = append(volumeMounts, []corev1.VolumeMount{
+		{
+			Name:      downloadsVol,
+			MountPath: downloadsPath,
+		},
+	}...)
 	envs = append(envs, []corev1.EnvVar{
 		{
-			Name:  "TFOPS_VARFILE_FLAG",
-			Value: "-var-file /tfops/" + tfvarsConfigMapVolumeName + "/tfvars",
-		},
-		{
-			Name:  "TFOPS_CONFIGMAP_PATH",
-			Value: "/tfops/" + tfvarsConfigMapVolumeName,
+			Name:  "TFO_DOWNLOADS",
+			Value: downloadsPath,
 		},
 	}...)
 
-	volumes := append(tfModules, tfVars...)
-
-	volumeMounts := []corev1.VolumeMount{}
-	for _, v := range volumes {
-		// setting up volumeMounts
-		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
-			{
-				Name:      v.Name,
-				MountPath: "/tfops/" + v.Name,
-			},
-		}...)
-	}
-
-	if r.sshConfig != "" {
-		mode := int32(0600)
-		volumes = append(volumes, []corev1.Volume{
-			{
-				Name: "ssh-key",
-				VolumeSource: corev1.VolumeSource{
-					Secret: &corev1.SecretVolumeSource{
-						SecretName:  r.sshConfig,
-						DefaultMode: &mode,
+	optional := true
+	xmode := int32(0775)
+	volumes = append(volumes, corev1.Volume{
+		Name: "gitaskpass",
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: id,
+				Optional:   &optional,
+				Items: []corev1.KeyToPath{
+					{
+						Key:  "gitAskpass",
+						Path: "GIT_ASKPASS",
+						Mode: &xmode,
 					},
 				},
 			},
-		}...)
-		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
-			{
-				Name:      "ssh-key",
-				MountPath: "/root/.ssh/",
-			},
-		}...)
+		},
+	})
+	volumeMounts = append(volumeMounts, []corev1.VolumeMount{
+		{
+			Name:      "gitaskpass",
+			MountPath: "/git/askpass",
+		},
+	}...)
+	envs = append(envs, []corev1.EnvVar{
+		{
+			Name:  "GIT_ASKPASS",
+			Value: "/git/askpass/GIT_ASKPASS",
+		},
+	}...)
+
+	sshMountName := "ssh"
+	sshMountPath := "/tmp/ssh"
+	mode := int32(0775)
+	sshConfigItems := []corev1.KeyToPath{}
+	keysToIgnore := []string{"gitAskpass"}
+	for key := range r.secretData {
+		if utils.ListContainsStr(keysToIgnore, key) {
+			continue
+		}
+		sshConfigItems = append(sshConfigItems, corev1.KeyToPath{
+			Key:  key,
+			Path: key,
+			Mode: &mode,
+		})
 	}
+	volumes = append(volumes, []corev1.Volume{
+		{
+			Name: sshMountName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  id,
+					DefaultMode: &mode,
+					Optional:    &optional,
+					Items:       sshConfigItems,
+				},
+			},
+		},
+	}...)
+	volumeMounts = append(volumeMounts, []corev1.VolumeMount{
+		{
+			Name:      sshMountName,
+			MountPath: sshMountPath,
+		},
+	}...)
+	envs = append(envs, []corev1.EnvVar{
+		{
+			Name:  "TFO_SSH",
+			Value: sshMountPath,
+		},
+	}...)
 
 	annotations := make(map[string]string)
 	envFrom := []corev1.EnvFromSource{}
@@ -1093,59 +1973,97 @@ func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job 
 		}
 	}
 
-	// Create a manual selector for jobs (lets job-names be more than 63 chars)
-	manualSelector := true
-
-	// Custom UUID for label purposes
-	uid := uuid.NewUUID()
-
-	// The job-name label must be <64 chars
 	labels := make(map[string]string)
-	labels["tf-job"] = string(uid)
-	labels["job-name"] = r.jobNameLabel
+	labels["tfGeneration"] = fmt.Sprintf("%d", generation)
 
 	// Schedule a job that will execute the terraform plan
-	job := &batchv1.Job{
+	initContainers := []corev1.Container{}
+	containers := []corev1.Container{}
+
+	// Make sure to use the same uid for containers so the dir in the
+	// PersistentVolume have the correct permissions for the user
+	user := int64(1000)
+	securityContext := &corev1.SecurityContext{
+		RunAsUser: &user,
+	}
+
+	if isTFRunner {
+		envs = append(envs, corev1.EnvVar{
+			Name:  "TFO_RUNNER",
+			Value: string(podType),
+		})
+		containers = append(containers, corev1.Container{
+			SecurityContext: securityContext,
+			Name:            "tf",
+			Image:           r.terraformRunner + ":" + r.terraformVersion,
+			ImagePullPolicy: r.terraformRunnerPullPolicy,
+			EnvFrom:         envFrom,
+			Env:             envs,
+			VolumeMounts:    volumeMounts,
+		})
+
+		if podType == tfv1alpha1.PodInit {
+			// setup once per generation
+
+			initContainers = append(initContainers, corev1.Container{
+				Name:            "tfo-init",
+				SecurityContext: securityContext,
+				Image:           r.setupRunner + ":" + r.setupRunnerVersion,
+				ImagePullPolicy: corev1.PullIfNotPresent,
+				EnvFrom:         envFrom,
+				Env:             envs,
+				VolumeMounts:    volumeMounts,
+			})
+		}
+
+		if preScriptPodType != "" {
+			envs = append(envs, corev1.EnvVar{
+				Name:  "TFO_SCRIPT",
+				Value: string(preScriptPodType),
+			})
+			initContainers = append(initContainers, corev1.Container{
+				SecurityContext: securityContext,
+				Name:            "pre-script",
+				Image:           r.scriptRunner + ":" + r.scriptRunnerVersion,
+				ImagePullPolicy: r.scriptRunnerPullPolicy,
+				EnvFrom:         envFrom,
+				Env:             envs,
+				VolumeMounts:    volumeMounts,
+			})
+		}
+
+	} else {
+		envs = append(envs, corev1.EnvVar{
+			Name:  "TFO_SCRIPT",
+			Value: string(podType),
+		})
+		containers = append(containers, corev1.Container{
+			SecurityContext: securityContext,
+			Name:            "script",
+			Image:           r.scriptRunner + ":" + r.scriptRunnerVersion,
+			ImagePullPolicy: r.scriptRunnerPullPolicy,
+			EnvFrom:         envFrom,
+			Env:             envs,
+			VolumeMounts:    volumeMounts,
+		})
+	}
+
+	pod = &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.name,
-			Namespace: r.namespace,
+			GenerateName: generateName,
+			Namespace:    r.namespace,
+			Labels:       labels,
 		},
-		Spec: batchv1.JobSpec{
-			ManualSelector: &manualSelector,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: labels,
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Annotations: annotations,
-					Labels:      labels,
-				},
-				Spec: corev1.PodSpec{
-					ServiceAccountName: r.serviceAccount,
-					RestartPolicy:      "OnFailure",
-					Containers: []corev1.Container{
-						{
-							Name: "tf",
-							// TODO Version docker images more specifically than static versions
-							Image:           r.terraformRunner + ":" + r.terraformVersion,
-							ImagePullPolicy: r.terraformRunnerPullPolicy,
-							EnvFrom:         envFrom,
-							Env: append(envs, []corev1.EnvVar{
-								{
-									Name:  "INSTANCE_NAME",
-									Value: r.name,
-								},
-							}...),
-							VolumeMounts: volumeMounts,
-						},
-					},
-					Volumes: volumes,
-				},
-			},
+		Spec: corev1.PodSpec{
+			ServiceAccountName: r.serviceAccount,
+			RestartPolicy:      corev1.RestartPolicyNever,
+			InitContainers:     initContainers,
+			Containers:         containers,
+			Volumes:            volumes,
 		},
 	}
 
-	return job
+	return pod
 }
 
 // getOrCreateEnv will check if an env exists. If it does not, it will be
@@ -1162,98 +2080,193 @@ func (r *RunOptions) getOrCreateEnv(name, value string) {
 	})
 }
 
-func (r ReconcileTerraform) run(reqLogger logr.Logger, instance *tfv1alpha1.Terraform, runOpts RunOptions) (jobName string, err error) {
-	tfvarsConfigMap := runOpts.generateConfigMap()
-	secret := generateSecretObject(runOpts.sshConfig, instance.Namespace, runOpts.sshConfigData)
-	var serviceAccount *corev1.ServiceAccount
-	serviceAccountName := instance.Spec.ServiceAccount
-	if serviceAccountName == "" {
-		serviceAccount = runOpts.generateServiceAccount()
-	}
-	roleBinding := runOpts.generateRoleBinding()
-	role := runOpts.generateRole()
-	configMap := runOpts.generateActionConfigMap()
-	job := runOpts.generateJob(tfvarsConfigMap)
+func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *tfv1alpha1.Terraform, runOpts RunOptions) (err error) {
 
-	controllerutil.SetControllerReference(instance, tfvarsConfigMap, r.Scheme)
-	controllerutil.SetControllerReference(instance, secret, r.Scheme)
-	controllerutil.SetControllerReference(instance, roleBinding, r.Scheme)
-	controllerutil.SetControllerReference(instance, role, r.Scheme)
-	controllerutil.SetControllerReference(instance, configMap, r.Scheme)
-	controllerutil.SetControllerReference(instance, job, r.Scheme)
+	n := len(tf.Status.Stages)
+	isNewGeneration := tf.Status.Stages[n-1].Reason == "GENERATION_CHANGE"
+	isFirstInstall := tf.Status.Stages[n-1].Reason == "TF_RESOURCE_CREATED"
 
-	if serviceAccount != nil {
-		controllerutil.SetControllerReference(instance, serviceAccount, r.Scheme)
-
-		err = r.Client.Create(context.TODO(), serviceAccount)
-		if err != nil && errors.IsNotFound(err) {
-			return "", err
-		} else if err != nil {
-			reqLogger.Info(err.Error())
+	if isFirstInstall || isNewGeneration {
+		if isFirstInstall {
+			if err := r.createPVC(ctx, tf, runOpts); err != nil {
+				return err
+			}
 		}
-	}
-
-	err = r.Client.Create(context.TODO(), role)
-	if err != nil && errors.IsNotFound(err) {
-		return "", err
-	} else if err != nil {
-		reqLogger.Info(err.Error())
-	}
-
-	err = r.Client.Create(context.TODO(), roleBinding)
-	if err != nil && errors.IsNotFound(err) {
-		return "", err
-	} else if err != nil {
-		reqLogger.Info(err.Error())
-	}
-
-	err = r.Client.Create(context.TODO(), tfvarsConfigMap)
-	if err != nil && errors.IsNotFound(err) {
-		r.Recorder.Event(instance, "Warning", "ConfigMapCreateError", fmt.Errorf("Could not create configmap %v", err).Error())
-		return "", err
-	} else if err != nil {
-		reqLogger.V(1).Info(fmt.Sprintf("ConfigMap %s will be updated", tfvarsConfigMap.Name))
-		updateErr := r.Client.Update(context.TODO(), tfvarsConfigMap)
-		if updateErr != nil {
-			r.Recorder.Event(instance, "Warning", "ConfigMapUpdateError", fmt.Errorf("Could not update configmap %v", err).Error())
-			return "", updateErr
+		if err := r.createSecret(ctx, tf, runOpts); err != nil {
+			return err
 		}
-	}
 
-	err = r.Client.Create(context.TODO(), configMap)
-	if err != nil && errors.IsNotFound(err) {
-		return "", err
-	} else if err != nil {
-		reqLogger.Info(fmt.Sprintf("ConfigMap %s already exists", configMap.Name))
-		updateErr := r.Client.Update(context.TODO(), configMap)
-		if updateErr != nil && errors.IsNotFound(updateErr) {
-			return "", updateErr
-		} else if updateErr != nil {
-			reqLogger.Info(err.Error())
+		if err := r.createConfigMap(ctx, tf, runOpts); err != nil {
+			return err
 		}
-	}
 
-	err = r.Client.Create(context.TODO(), secret)
-	if err != nil && errors.IsNotFound(err) {
-		return "", err
-	} else if err != nil {
-		reqLogger.Info(fmt.Sprintf("Secret %s already exists", secret.Name))
-		updateErr := r.Client.Update(context.TODO(), secret)
-		if updateErr != nil && errors.IsNotFound(updateErr) {
-			return "", updateErr
-		} else if updateErr != nil {
-			reqLogger.Info(err.Error())
+		if err := r.createRoleBinding(ctx, tf, runOpts); err != nil {
+			return err
 		}
+
+		if err := r.createRole(ctx, tf, runOpts); err != nil {
+			return err
+		}
+
+		if tf.Spec.ServiceAccount == "" {
+			// since sa is not defined in the resource spec, it must be created
+			if err := r.createServiceAccount(ctx, tf, runOpts); err != nil {
+				return err
+			}
+		}
+
+	} else {
+		// check resources exists
+		lookupKey := types.NamespacedName{
+			Name:      runOpts.name,
+			Namespace: runOpts.namespace,
+		}
+
+		if _, found, err := r.checkPersistentVolumeClaimExists(ctx, lookupKey); err != nil {
+			return err
+		} else if !found {
+			return fmt.Errorf("could not find PersistentVolumeClaim '%s'", lookupKey)
+		}
+
+		if _, found, err := r.checkConfigMapExists(ctx, lookupKey); err != nil {
+			return err
+		} else if !found {
+			return fmt.Errorf("could not find ConfigMap '%s'", lookupKey)
+		}
+
+		if _, found, err := r.checkSecretExists(ctx, lookupKey); err != nil {
+			return err
+		} else if !found {
+			return fmt.Errorf("could not find Secret '%s'", lookupKey)
+		}
+
+		if _, found, err := r.checkRoleBindingExists(ctx, lookupKey); err != nil {
+			return err
+		} else if !found {
+			return fmt.Errorf("could not find RoleBinding '%s'", lookupKey)
+		}
+
+		if _, found, err := r.checkRoleExists(ctx, lookupKey); err != nil {
+			return err
+		} else if !found {
+			return fmt.Errorf("could not find Role '%s'", lookupKey)
+		}
+
+		serviceAccountLookupKey := types.NamespacedName{
+			Name:      runOpts.serviceAccount,
+			Namespace: runOpts.namespace,
+		}
+		if _, found, err := r.checkServiceAccountExists(ctx, serviceAccountLookupKey); err != nil {
+			return err
+		} else if !found {
+			return fmt.Errorf("could not find ServiceAccount '%s'", serviceAccountLookupKey)
+		}
+
 	}
 
-	err = r.Client.Create(context.TODO(), job)
-	if err != nil && errors.IsNotFound(err) {
-		return "", err
-	} else if err != nil {
-		reqLogger.Info(err.Error())
+	if err := r.createPod(ctx, tf, runOpts); err != nil {
+		return err
 	}
 
-	return job.Name, nil
+	// generateName := id + "-" + string(podType) + "-"
+	// pod := runOpts.generatePod(podType, preScriptPodType, isTFRunner, id, generateName, generation)
+	// controllerutil.SetControllerReference(tf, pod, r.Scheme)
+
+	//
+	// TODO recreate resources for new inits podTypes
+	//
+	// createResources := false
+	// if podType == tfv1alpha1.PodInit || podType == tfv1alpha1.PodInitDelete {
+	// 	createResources = true
+	// }
+	// _ = createResources
+
+	// if serviceAccount != nil {
+	// 	controllerutil.SetControllerReference(tf, serviceAccount, r.Scheme)
+
+	// 	err = r.Client.Create(ctx, serviceAccount)
+	// 	if err != nil && errors.IsNotFound(err) {
+	// 		return "", err
+	// 	} else if err != nil {
+	// 		reqLogger.Info(err.Error())
+	// 	}
+	// }
+
+	// err = r.Client.Create(ctx, role)
+	// if err != nil && errors.IsNotFound(err) {
+	// 	return "", err
+	// } else if err != nil {
+	// 	reqLogger.Info(err.Error())
+	// }
+
+	// err = r.Client.Create(ctx, roleBinding)
+	// if err != nil && errors.IsNotFound(err) {
+	// 	return "", err
+	// } else if err != nil {
+	// 	reqLogger.Info(err.Error())
+	// }
+
+	// err = r.Client.Create(ctx, secret)
+	// if err != nil && errors.IsNotFound(err) {
+	// 	return "", err
+	// } else if err != nil {
+	// 	reqLogger.Info(fmt.Sprintf("Secret %s already exists", secret.Name))
+	// 	updateErr := r.Client.Update(ctx, secret)
+	// 	if updateErr != nil && errors.IsNotFound(updateErr) {
+	// 		return "", updateErr
+	// 	} else if updateErr != nil {
+	// 		reqLogger.Info(err.Error())
+	// 	}
+	// }
+
+	// err = r.Client.Create(ctx, job)
+	// if err != nil && errors.IsNotFound(err) {
+	// 	return "", err
+	// } else if err != nil {
+	// 	reqLogger.Info(err.Error())
+	// }
+	// return job.Name, nil
+
+	// err = r.Client.Create(ctx, pod)
+	// if err != nil && errors.IsNotFound(err) {
+	// 	return "", err
+	// } else if err != nil {
+	// 	reqLogger.Info(err.Error())
+	// }
+
+	return nil
+}
+
+func (r ReconcileTerraform) createGitAskpass(ctx context.Context, tokenSecret tfv1alpha1.TokenSecretRef) ([]byte, error) {
+	gitAskpass := []byte{}
+	secret, err := r.loadSecret(ctx, tokenSecret.Name, tokenSecret.Namespace)
+	if err != nil {
+		return []byte{}, err
+	}
+	if key, ok := secret.Data[tokenSecret.Key]; !ok {
+		return []byte{}, fmt.Errorf("secret '%s' did not contain '%s'", secret.Name, key)
+	}
+	s := heredoc.Docf(`
+		#!/bin/sh
+		exec echo "%s"
+	`, secret.Data[tokenSecret.Key])
+	gitAskpass = []byte(s)
+	return gitAskpass, nil
+
+}
+
+func (r ReconcileTerraform) loadSecret(ctx context.Context, name, namespace string) (*corev1.Secret, error) {
+	if namespace == "" {
+		namespace = "default"
+	}
+	lookupKey := types.NamespacedName{Name: name, Namespace: namespace}
+	fmt.Println(lookupKey)
+	secret := &corev1.Secret{}
+	err := r.Client.Get(ctx, lookupKey, secret)
+	if err != nil {
+		return secret, err
+	}
+	return secret, nil
 }
 
 func newGitRepoAccessOptionsFromSpec(instance *tfv1alpha1.Terraform, address string, extras []string) (GitRepoAccessOptions, error) {
@@ -1534,17 +2547,17 @@ func tarBinaryData(fullpath, filename string) (map[string][]byte, error) {
 	return binaryData, nil
 }
 
-func readConfigMap(k8sclient client.Client, name, namespace string) (*corev1.ConfigMap, error) {
-	configMap := &corev1.ConfigMap{}
-	namespacedName := types.NamespacedName{Namespace: namespace, Name: name}
-	err := k8sclient.Get(context.TODO(), namespacedName, configMap)
-	// configMap, err := c.clientset.CoreV1().ConfigMaps(namespace).Get(name, metav1.GetOptions{})
-	if err != nil {
-		return &corev1.ConfigMap{}, fmt.Errorf("error reading configmap: %v", err)
-	}
+// func readConfigMap(k8sclient client.Client, name, namespace string) (*corev1.ConfigMap, error) {
+// 	configMap := &corev1.ConfigMap{}
+// 	namespacedName := types.NamespacedName{Namespace: namespace, Name: name}
+// 	err := k8sclient.Get(ctx, namespacedName, configMap)
+// 	// configMap, err := c.clientset.CoreV1().ConfigMaps(namespace).Get(name, metav1.GetOptions{})
+// 	if err != nil {
+// 		return &corev1.ConfigMap{}, fmt.Errorf("error reading configmap: %v", err)
+// 	}
 
-	return configMap, nil
-}
+// 	return configMap, nil
+// }
 
 // func (c *k8sClient) createConfigMap(name, namespace string, binaryData map[string][]byte, data map[string]string) error {
 
@@ -1570,24 +2583,23 @@ func readConfigMap(k8sclient client.Client, name, namespace string) (*corev1.Con
 // 	return nil
 // }
 
-func generateSecretObject(name, namespace string, data map[string][]byte) *corev1.Secret {
-	secretType := corev1.SecretType("opaque")
+func (r RunOptions) generateSecret() *corev1.Secret {
 	secretObject := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
+			Name:      r.name,
+			Namespace: r.namespace,
 		},
-		Data: data,
-		Type: secretType,
+		Data: r.secretData,
+		Type: corev1.SecretTypeOpaque,
 	}
 	return secretObject
 }
 
-func loadPassword(k8sclient client.Client, key, name, namespace string) (string, error) {
+func loadPassword(ctx context.Context, k8sclient client.Client, key, name, namespace string) (string, error) {
 
 	secret := &corev1.Secret{}
 	namespacedName := types.NamespacedName{Namespace: namespace, Name: name}
-	err := k8sclient.Get(context.TODO(), namespacedName, secret)
+	err := k8sclient.Get(ctx, namespacedName, secret)
 	// secret, err := c.clientset.CoreV1().Secrets(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("Could not get secret: %v", err)
@@ -1608,11 +2620,11 @@ func loadPassword(k8sclient client.Client, key, name, namespace string) (string,
 
 }
 
-func loadPrivateKey(k8sclient client.Client, key, name, namespace string) (*os.File, error) {
+func loadPrivateKey(ctx context.Context, k8sclient client.Client, key, name, namespace string) (*os.File, error) {
 
 	secret := &corev1.Secret{}
 	namespacedName := types.NamespacedName{Namespace: namespace, Name: name}
-	err := k8sclient.Get(context.TODO(), namespacedName, secret)
+	err := k8sclient.Get(ctx, namespacedName, secret)
 	if err != nil {
 		return nil, fmt.Errorf("Could not get id_rsa secret: %v", err)
 	}
@@ -1748,7 +2760,7 @@ func untar(tarball, target string) error {
 	return nil
 }
 
-func (d *GitRepoAccessOptions) download(k8sclient client.Client, namespace string) error {
+func (d *GitRepoAccessOptions) download(ctx context.Context, k8sclient client.Client, namespace string) error {
 	// This function only supports git modules. There's no explicit check
 	// for this yet.
 	// TODO document available options for sources
@@ -1757,7 +2769,7 @@ func (d *GitRepoAccessOptions) download(k8sclient client.Client, namespace strin
 
 	var gitRepo gitclient.GitRepo
 	if d.protocol == "ssh" {
-		filename, err := d.getGitSSHKey(k8sclient, namespace, d.protocol, reqLogger)
+		filename, err := d.getGitSSHKey(ctx, k8sclient, namespace, d.protocol, reqLogger)
 		if err != nil {
 			return fmt.Errorf("Download failed for '%s': %v", d.repo, err)
 		}
@@ -1769,7 +2781,7 @@ func (d *GitRepoAccessOptions) download(k8sclient client.Client, namespace strin
 	} else {
 		// TODO find out and support any other protocols
 		// Just assume http is the only other protocol for now
-		token, err := d.getGitToken(k8sclient, namespace, d.protocol, reqLogger)
+		token, err := d.getGitToken(ctx, k8sclient, namespace, d.protocol, reqLogger)
 		if err != nil {
 			// Maybe we don't need to exit if no creds are used here
 			reqLogger.Info(fmt.Sprintf("%v", err))
@@ -1792,8 +2804,8 @@ func (d *GitRepoAccessOptions) download(k8sclient client.Client, namespace strin
 	return nil
 }
 
-func (d *GitRepoAccessOptions) startHTTPSProxy(k8sclient client.Client, namespace string, reqLogger logr.Logger) error {
-	proxyAuthMethod, err := d.getProxyAuthMethod(k8sclient, namespace)
+func (d *GitRepoAccessOptions) startHTTPSProxy(ctx context.Context, k8sclient client.Client, namespace string, reqLogger logr.Logger) error {
+	proxyAuthMethod, err := d.getProxyAuthMethod(ctx, k8sclient, namespace)
 	if err != nil {
 		return fmt.Errorf("Error getting proxyAuthMethod: %v", err)
 	}
@@ -1836,11 +2848,11 @@ func (d *GitRepoAccessOptions) startHTTPSProxy(k8sclient client.Client, namespac
 	return nil
 }
 
-func (d *GitRepoAccessOptions) startSSHProxy(k8sclient client.Client, namespace string, reqLogger logr.Logger) error {
+func (d *GitRepoAccessOptions) startSSHProxy(ctx context.Context, k8sclient client.Client, namespace string, reqLogger logr.Logger) error {
 	uri := d.uri
 
 	reqLogger.V(1).Info(fmt.Sprintf("Setting up ssh proxy for %s with job: %+v", namespace, d))
-	port, tunnel, err := d.setupSSHProxy(k8sclient, namespace)
+	port, tunnel, err := d.setupSSHProxy(ctx, k8sclient, namespace)
 	if err != nil {
 		return err
 	}
@@ -1860,10 +2872,10 @@ func (d *GitRepoAccessOptions) startSSHProxy(k8sclient client.Client, namespace 
 
 }
 
-func (d *GitRepoAccessOptions) setupSSHProxy(k8sclient client.Client, namespace string) (string, *sshtunnel.SSHTunnel, error) {
+func (d *GitRepoAccessOptions) setupSSHProxy(ctx context.Context, k8sclient client.Client, namespace string) (string, *sshtunnel.SSHTunnel, error) {
 	var port string
 	var tunnel *sshtunnel.SSHTunnel
-	proxyAuthMethod, err := d.getProxyAuthMethod(k8sclient, namespace)
+	proxyAuthMethod, err := d.getProxyAuthMethod(ctx, k8sclient, namespace)
 	if err != nil {
 		return port, tunnel, fmt.Errorf("Error getting proxyAuthMethod: %v", err)
 	}
@@ -1971,7 +2983,7 @@ func (d *GitRepoAccessOptions) getParsedAddress() error {
 	return nil
 }
 
-func (d GitRepoAccessOptions) getProxyAuthMethod(k8sclient client.Client, namespace string) (ssh.AuthMethod, error) {
+func (d GitRepoAccessOptions) getProxyAuthMethod(ctx context.Context, k8sclient client.Client, namespace string) (ssh.AuthMethod, error) {
 	var proxyAuthMethod ssh.AuthMethod
 
 	name := d.SSHProxy.SSHKeySecretRef.Name
@@ -1984,7 +2996,7 @@ func (d GitRepoAccessOptions) getProxyAuthMethod(k8sclient client.Client, namesp
 		ns = namespace
 	}
 
-	sshKey, err := loadPrivateKey(k8sclient, key, name, ns)
+	sshKey, err := loadPrivateKey(ctx, k8sclient, key, name, ns)
 	if err != nil {
 		return proxyAuthMethod, fmt.Errorf("unable to get privkey: %v", err)
 	}
@@ -1995,7 +3007,7 @@ func (d GitRepoAccessOptions) getProxyAuthMethod(k8sclient client.Client, namesp
 	return proxyAuthMethod, nil
 }
 
-func (d *GitRepoAccessOptions) getGitSSHKey(k8sclient client.Client, namespace, protocol string, reqLogger logr.Logger) (string, error) {
+func (d *GitRepoAccessOptions) getGitSSHKey(ctx context.Context, k8sclient client.Client, namespace, protocol string, reqLogger logr.Logger) (string, error) {
 	var filename string
 	for _, m := range d.SCMAuthMethods {
 		if m.Host == d.ParsedAddress.host && m.Git.SSH != nil {
@@ -2009,7 +3021,7 @@ func (d *GitRepoAccessOptions) getGitSSHKey(k8sclient client.Client, namespace, 
 			if ns == "" {
 				ns = namespace
 			}
-			sshKey, err := loadPrivateKey(k8sclient, key, name, ns)
+			sshKey, err := loadPrivateKey(ctx, k8sclient, key, name, ns)
 			if err != nil {
 				return filename, err
 			}
@@ -2023,7 +3035,7 @@ func (d *GitRepoAccessOptions) getGitSSHKey(k8sclient client.Client, namespace, 
 	return filename, nil
 }
 
-func (d *GitRepoAccessOptions) getGitToken(k8sclient client.Client, namespace, protocol string, reqLogger logr.Logger) (string, error) {
+func (d *GitRepoAccessOptions) getGitToken(ctx context.Context, k8sclient client.Client, namespace, protocol string, reqLogger logr.Logger) (string, error) {
 	var token string
 	var err error
 	for _, m := range d.SCMAuthMethods {
@@ -2038,7 +3050,7 @@ func (d *GitRepoAccessOptions) getGitToken(k8sclient client.Client, namespace, p
 			if ns == "" {
 				ns = namespace
 			}
-			token, err = loadPassword(k8sclient, key, name, ns)
+			token, err = loadPassword(ctx, k8sclient, key, name, ns)
 			if err != nil {
 				return token, fmt.Errorf("unable to get token: %v", err)
 			}
@@ -2050,19 +3062,19 @@ func (d *GitRepoAccessOptions) getGitToken(k8sclient client.Client, namespace, p
 	return token, nil
 }
 
-func (d GitRepoAccessOptions) commitTfvars(k8sclient client.Client, tfvars, tfvarsFile, confFile, namespace, customBackend string, runOpts RunOptions, reqLogger logr.Logger) {
+func (d GitRepoAccessOptions) commitTfvars(ctx context.Context, k8sclient client.Client, tfvars, tfvarsFile, confFile, namespace, customBackend string, runOpts RunOptions, reqLogger logr.Logger) {
 	filesToCommit := []string{}
 
 	reqLogger.V(1).Info("Setting up download options for export")
 	if (tfv1alpha1.ProxyOpts{}) != d.SSHProxy {
 		if strings.Contains(d.protocol, "http") {
-			err := d.startHTTPSProxy(k8sclient, namespace, reqLogger)
+			err := d.startHTTPSProxy(ctx, k8sclient, namespace, reqLogger)
 			if err != nil {
 				reqLogger.Error(err, "failed to start ssh proxy")
 				return
 			}
 		} else if d.protocol == "ssh" {
-			err := d.startSSHProxy(k8sclient, namespace, reqLogger)
+			err := d.startSSHProxy(ctx, k8sclient, namespace, reqLogger)
 			if err != nil {
 				reqLogger.Error(err, "failed to start ssh proxy")
 				return
@@ -2070,7 +3082,7 @@ func (d GitRepoAccessOptions) commitTfvars(k8sclient client.Client, tfvars, tfva
 			defer d.TunnelClose(reqLogger.WithValues("Spec", "exportRepo"))
 		}
 	}
-	err := d.download(k8sclient, namespace)
+	err := d.download(ctx, k8sclient, namespace)
 	if err != nil {
 		errString := fmt.Sprintf("Could not download repo %v", err)
 		reqLogger.Info(errString)

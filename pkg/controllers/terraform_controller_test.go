@@ -95,7 +95,7 @@ var _ = Describe("Terraform controller", func() {
 					return "", err
 				}
 
-				return createdTerraform.Status.Phase, nil
+				return string(createdTerraform.Status.Phase), nil
 			}, timeout, interval).Should(Equal("running"))
 
 			By("By checking that the Terraform phase updates when job changes to succeeded")
@@ -110,7 +110,7 @@ var _ = Describe("Terraform controller", func() {
 					return "", err
 				}
 
-				return createdTerraform.Status.Phase, nil
+				return string(createdTerraform.Status.Phase), nil
 			}, timeout, interval).Should(Equal("stopped"))
 
 		})

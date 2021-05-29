@@ -33,18 +33,24 @@ type TerraformSpec struct {
 
 	// TerraformVersion helps the operator decide which image tag to pull for
 	// the terraform runner. Defaults to "0.11.14"
-	TerraformVersion string `json:"terraformVersion,omitempty"`
+	TerraformVersion    string `json:"terraformVersion,omitempty"`
+	ScriptRunnerVersion string `json:"scriptRunnerVersion,omitempty"`
+	SetupRunnerVersion  string `json:"setupRunnerVersion,omitempty"`
 
 	// TerraformRunner gives the user the ability to inject their own container
 	// image to execute terraform. This is very helpful for users who need to
 	// have a certain toolset installed on their images, or who can't pull
 	// public images, such as the default image "isaaguilar/tfops".
 	TerraformRunner string `json:"terraformRunner,omitempty"`
+	ScriptRunner    string `json:"scriptRunner,omitempty"`
+	SetupRunner     string `json:"setupRunner,omitempty"`
 
 	// TerraformRunnerPullPolicy describes a policy for if/when to pull the
 	// TerraformRunner image. Acceptable values are "Always", "Never", or
 	// "IfNotPresent".
 	TerraformRunnerPullPolicy corev1.PullPolicy `json:"terraformRunnerPullPolicy,omitempty"`
+	ScriptRunnerPullPolicy    corev1.PullPolicy `json:"scriptRunnerPullPolicy,omitempty"`
+	SetupRunnerPullPolicy     corev1.PullPolicy `json:"setupRunnerPullPolicy,omitempty"`
 
 	// TerraformModule is the terraform module scm address. Currently supports
 	// git protocol over SSH or HTTPS
@@ -90,7 +96,7 @@ type TerraformSpec struct {
 	// ExportRepo allows the user to define
 	ExportRepo *ExportRepo `json:"exportRepo,omitempty"`
 
-	// PrerunScript lets the user define a script that will run before
+	// PreInitScript lets the user define a script that will run before
 	// terraform commands are executed on the terraform-execution pod. The pod
 	// will have already set up cloudProfile (eg cloud credentials) so the
 	// script can make use of it.
@@ -98,9 +104,15 @@ type TerraformSpec struct {
 	// Setting this field will create a key in the tfvars configmap called
 	// "prerun.sh". This means the user can also pass in a prerun.sh file via
 	// config "Sources".
-	PrerunScript string `json:"prerunScript,omitempty"`
+	PreInitScript  string `json:"preInitScript,omitempty"`
+	PostInitScript string `json:"postInitScript,omitempty"`
 
-	// PostrunScript lets the user define a script that will run after
+	PrePlanScript  string `json:"prePlanScript,omitempty"`
+	PostPlanScript string `json:"postPlanScript,omitempty"`
+
+	PreApplyScript string `json:"preApplyScript,omitempty"`
+
+	// PostApplyScript lets the user define a script that will run after
 	// terraform commands are executed on the terraform-execution pod. The pod
 	// will have already set up cloudProfile (eg cloud credentials) so the
 	// script can make use of it.
@@ -108,7 +120,14 @@ type TerraformSpec struct {
 	// Setting this field will create a key in the tfvars configmap called
 	// "postrun.sh". This means the user can alternatively pass in a
 	// posterun.sh file via config "Sources".
-	PostrunScript string `json:"postrunScript,omitempty"`
+	PostApplyScript string `json:"postApplyScript,omitempty"`
+
+	PreInitDeleteScript   string `json:"preInitDeleteScript,omitempty"`
+	PostInitDeleteScript  string `json:"postInitDeleteScript,omitempty"`
+	PrePlanDeleteScript   string `json:"prePlanDeleteScript,omitempty"`
+	PostPlanDeleteScript  string `json:"postPlanDeleteScript,omitempty"`
+	PreApplyDeleteScript  string `json:"preApplyDeleteScript,omitempty"`
+	PostApplyDeleteScript string `json:"postApplyDeleteScript,omitempty"`
 
 	// SSHTunnel can be defined for pulling from scm sources that cannot be
 	// accessed by the network the operator/runner runs in. An example is
@@ -317,9 +336,77 @@ type TerraformStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
 	// Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html
-	Phase          string `json:"phase"`
-	LastGeneration int64  `json:"lastGeneration"`
+	PodNamePrefix           string      `json:"podNamePrefix"`
+	Phase                   StatusPhase `json:"phase"`
+	LastCompletedGeneration int64       `json:"lastCompletedGeneration"`
+	Stages                  []Stage     `json:"stages"`
 }
+
+type Stage struct {
+	Generation int64      `json:"generation"`
+	State      StageState `json:"state"`
+	PodType    PodType    `json:"podType"`
+
+	// Interruptible is set to false when the pod should not be terminated
+	// such as when doing a terraform apply
+	Interruptible Interruptible `json:"interruptible"`
+	Reason        string        `json:"reason"`
+	StartTime     metav1.Time   `json:"startTime,omitempty"`
+	StopTime      metav1.Time   `json:"stopTime,omitempty"`
+}
+
+type StatusPhase string
+
+const (
+	PhaseInitializing StatusPhase = "initializing"
+	PhaseCompleted    StatusPhase = "completed"
+	PhaseRunning      StatusPhase = "running"
+	PhaseInitDelete   StatusPhase = "initializing-delete"
+	PhaseDeleting     StatusPhase = "deleting"
+	PhaseDeleted      StatusPhase = "deleted"
+)
+
+type PodType string
+
+const (
+	PodPreInitDelete   PodType = "init0-delete"
+	PodInitDelete      PodType = "init-delete"
+	PodPostInitDelete  PodType = "init1-delete"
+	PodPrePlanDelete   PodType = "plan0-delete"
+	PodPlanDelete      PodType = "plan-delete"
+	PodPostPlanDelete  PodType = "plan1-delete"
+	PodPreApplyDelete  PodType = "apply0-delete"
+	PodApplyDelete     PodType = "apply-delete"
+	PodPostApplyDelete PodType = "post-delete"
+
+	PodPreInit   PodType = "init0"
+	PodInit      PodType = "init"
+	PodPostInit  PodType = "init1"
+	PodPrePlan   PodType = "plan0"
+	PodPlan      PodType = "plan"
+	PodPostPlan  PodType = "plan1"
+	PodPreApply  PodType = "apply0"
+	PodApply     PodType = "apply"
+	PodPostApply PodType = "post"
+	PodNil       PodType = ""
+)
+
+type StageState string
+
+const (
+	StateInitializing StageState = "initializing"
+	StateComplete     StageState = "complete"
+	StateFailed       StageState = "failed"
+	StateInProgress   StageState = "in-progress"
+	StateUnknown      StageState = "unknown"
+)
+
+type Interruptible bool
+
+const (
+	CanNotBeInterrupt Interruptible = false
+	CanBeInterrupt    Interruptible = true
+)
 
 func init() {
 	SchemeBuilder.Register(&Terraform{}, &TerraformList{})

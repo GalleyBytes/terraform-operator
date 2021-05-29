@@ -274,9 +274,24 @@ func schema_pkg_apis_tf_v1alpha1_TerraformStatus(ref common.ReferenceCallback) c
 							Format:  "int64",
 						},
 					},
+					"stages": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Stage"),
+									},
+								},
+							},
+						},
+					},
 				},
-				Required: []string{"phase", "lastGeneration"},
+				Required: []string{"phase", "lastGeneration", "stages"},
 			},
 		},
+		Dependencies: []string{
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Stage"},
 	}
 }

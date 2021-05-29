@@ -253,21 +253,41 @@ spec:
               description: IgnoreDelete will bypass the finalization process and remove
                 the tf resource without running any delete jobs.
               type: boolean
-            postrunScript:
-              description: "PostrunScript lets the user define a script that will
+            postApplyDeleteScript:
+              type: string
+            postApplyScript:
+              description: "PostApplyScript lets the user define a script that will
                 run after terraform commands are executed on the terraform-execution
                 pod. The pod will have already set up cloudProfile (eg cloud credentials)
                 so the script can make use of it. \n Setting this field will create
                 a key in the tfvars configmap called \"postrun.sh\". This means the
                 user can alternatively pass in a posterun.sh file via config \"Sources\"."
               type: string
-            prerunScript:
-              description: "PrerunScript lets the user define a script that will run
-                before terraform commands are executed on the terraform-execution
+            postInitDeleteScript:
+              type: string
+            postInitScript:
+              type: string
+            postPlanDeleteScript:
+              type: string
+            postPlanScript:
+              type: string
+            preApplyDeleteScript:
+              type: string
+            preApplyScript:
+              type: string
+            preInitDeleteScript:
+              type: string
+            preInitScript:
+              description: "PreInitScript lets the user define a script that will
+                run before terraform commands are executed on the terraform-execution
                 pod. The pod will have already set up cloudProfile (eg cloud credentials)
                 so the script can make use of it. \n Setting this field will create
                 a key in the tfvars configmap called \"prerun.sh\". This means the
                 user can also pass in a prerun.sh file via config \"Sources\"."
+              type: string
+            prePlanDeleteScript:
+              type: string
+            prePlanScript:
               type: string
             reconcile:
               description: Reconcile are the settings used for auto-reconciliation
@@ -355,10 +375,26 @@ spec:
                 - host
                 type: object
               type: array
+            scriptRunner:
+              type: string
+            scriptRunnerPullPolicy:
+              description: PullPolicy describes a policy for if/when to pull a container
+                image
+              type: string
+            scriptRunnerVersion:
+              type: string
             serviceAccount:
               description: ServiceAccount use a specific kubernetes ServiceAccount
                 for running the create + destroy pods. If not specified we create
                 a new ServiceAccount per Terraform
+              type: string
+            setupRunner:
+              type: string
+            setupRunnerPullPolicy:
+              description: PullPolicy describes a policy for if/when to pull a container
+                image
+              type: string
+            setupRunnerVersion:
               type: string
             sources:
               items:
@@ -452,18 +488,52 @@ spec:
         status:
           description: TerraformStatus defines the observed state of Terraform
           properties:
-            lastGeneration:
+            lastCompletedGeneration:
               format: int64
               type: integer
             phase:
+              type: string
+            podNamePrefix:
               description: 'INSERT ADDITIONAL STATUS FIELD - define observed state
                 of cluster Important: Run "operator-sdk generate k8s" to regenerate
                 code after modifying this file Add custom validation using kubebuilder
                 tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html'
               type: string
+            stages:
+              items:
+                properties:
+                  generation:
+                    format: int64
+                    type: integer
+                  interruptible:
+                    description: Interruptible is set to false when the pod should
+                      not be terminated such as when doing a terraform apply
+                    type: boolean
+                  podType:
+                    type: string
+                  reason:
+                    type: string
+                  startTime:
+                    format: date-time
+                    type: string
+                  state:
+                    type: string
+                  stopTime:
+                    format: date-time
+                    type: string
+                required:
+                - generation
+                - interruptible
+                - podType
+                - reason
+                - state
+                type: object
+              type: array
           required:
-          - lastGeneration
+          - lastCompletedGeneration
           - phase
+          - podNamePrefix
+          - stages
           type: object
       type: object
   version: v1alpha1

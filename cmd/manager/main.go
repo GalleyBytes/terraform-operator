@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 
@@ -9,11 +10,12 @@ import (
 
 	"github.com/isaaguilar/terraform-operator/pkg/apis"
 	"github.com/isaaguilar/terraform-operator/pkg/controllers"
-
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
@@ -70,6 +72,12 @@ func main() {
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
+	cache := mgr.GetCache()
+	if err := cache.IndexField(context.TODO(), &corev1.Pod{}, "metadata.generateName", func(obj client.Object) []string {
+		return []string{obj.(*corev1.Pod).ObjectMeta.GenerateName}
+	}); err != nil {
+		panic(err)
+	}
 
 	if err := mgr.AddHealthzCheck("health", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
