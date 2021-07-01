@@ -2009,7 +2009,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 				Name:            "tfo-init",
 				SecurityContext: securityContext,
 				Image:           r.setupRunner + ":" + r.setupRunnerVersion,
-				ImagePullPolicy: corev1.PullIfNotPresent,
+				ImagePullPolicy: r.setupRunnerPullPolicy,
 				EnvFrom:         envFrom,
 				Env:             envs,
 				VolumeMounts:    volumeMounts,

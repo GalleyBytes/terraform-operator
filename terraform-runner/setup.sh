@@ -12,8 +12,10 @@ cp -r "$TFO_MAIN_MODULE_REPO_SUBDIR" "$TFO_MAIN_MODULE"
 # Do not overwrite configmap
 false |  cp -iLr "$TFO_DOWNLOADS"/* "$TFO_MAIN_MODULE" 2>/dev/null
 mkdir -p "$TFO_ROOT_PATH"/.ssh/
-cp -Lr "$TFO_SSH"/* "$TFO_ROOT_PATH"/.ssh/
-chmod -R 0600 "$TFO_ROOT_PATH"/.ssh/*
+if stat "$TFO_SSH"/* >/dev/null 2>/dev/null; then
+  cp -Lr "$TFO_SSH"/* "$TFO_ROOT_PATH"/.ssh/
+  chmod -R 0600 "$TFO_ROOT_PATH"/.ssh/*
+fi
 
 cd "$TFO_MAIN_MODULE"
 

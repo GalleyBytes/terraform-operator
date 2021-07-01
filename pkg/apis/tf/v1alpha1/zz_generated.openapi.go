@@ -96,6 +96,18 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 							Format:      "",
 						},
 					},
+					"scriptRunnerVersion": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"setupRunnerVersion": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
 					"terraformRunner": {
 						SchemaProps: spec.SchemaProps{
 							Description: "TerraformRunner gives the user the ability to inject their own container image to execute terraform. This is very helpful for users who need to have a certain toolset installed on their images, or who can't pull public images, such as the default image \"isaaguilar/tfops\".",
@@ -103,11 +115,35 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 							Format:      "",
 						},
 					},
+					"scriptRunner": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"setupRunner": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
 					"terraformRunnerPullPolicy": {
 						SchemaProps: spec.SchemaProps{
 							Description: "TerraformRunnerPullPolicy describes a policy for if/when to pull the TerraformRunner image. Acceptable values are \"Always\", \"Never\", or \"IfNotPresent\".",
 							Type:        []string{"string"},
 							Format:      "",
+						},
+					},
+					"scriptRunnerPullPolicy": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"setupRunnerPullPolicy": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
 						},
 					},
 					"terraformModule": {
@@ -209,18 +245,78 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ExportRepo"),
 						},
 					},
-					"prerunScript": {
+					"preInitScript": {
 						SchemaProps: spec.SchemaProps{
-							Description: "PrerunScript lets the user define a script that will run before terraform commands are executed on the terraform-execution pod. The pod will have already set up cloudProfile (eg cloud credentials) so the script can make use of it.\n\nSetting this field will create a key in the tfvars configmap called \"prerun.sh\". This means the user can also pass in a prerun.sh file via config \"Sources\".",
+							Description: "PreInitScript lets the user define a script that will run before terraform commands are executed on the terraform-execution pod. The pod will have already set up cloudProfile (eg cloud credentials) so the script can make use of it.\n\nSetting this field will create a key in the tfvars configmap called \"prerun.sh\". This means the user can also pass in a prerun.sh file via config \"Sources\".",
 							Type:        []string{"string"},
 							Format:      "",
 						},
 					},
-					"postrunScript": {
+					"postInitScript": {
 						SchemaProps: spec.SchemaProps{
-							Description: "PostrunScript lets the user define a script that will run after terraform commands are executed on the terraform-execution pod. The pod will have already set up cloudProfile (eg cloud credentials) so the script can make use of it.\n\nSetting this field will create a key in the tfvars configmap called \"postrun.sh\". This means the user can alternatively pass in a posterun.sh file via config \"Sources\".",
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"prePlanScript": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"postPlanScript": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"preApplyScript": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"postApplyScript": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PostApplyScript lets the user define a script that will run after terraform commands are executed on the terraform-execution pod. The pod will have already set up cloudProfile (eg cloud credentials) so the script can make use of it.\n\nSetting this field will create a key in the tfvars configmap called \"postrun.sh\". This means the user can alternatively pass in a posterun.sh file via config \"Sources\".",
 							Type:        []string{"string"},
 							Format:      "",
+						},
+					},
+					"preInitDeleteScript": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"postInitDeleteScript": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"prePlanDeleteScript": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"postPlanDeleteScript": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"preApplyDeleteScript": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"postApplyDeleteScript": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
 						},
 					},
 					"sshTunnel": {
@@ -259,7 +355,7 @@ func schema_pkg_apis_tf_v1alpha1_TerraformStatus(ref common.ReferenceCallback) c
 				Description: "TerraformStatus defines the observed state of Terraform",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
-					"phase": {
+					"podNamePrefix": {
 						SchemaProps: spec.SchemaProps{
 							Description: "INSERT ADDITIONAL STATUS FIELD - define observed state of cluster Important: Run \"operator-sdk generate k8s\" to regenerate code after modifying this file Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html",
 							Default:     "",
@@ -267,7 +363,14 @@ func schema_pkg_apis_tf_v1alpha1_TerraformStatus(ref common.ReferenceCallback) c
 							Format:      "",
 						},
 					},
-					"lastGeneration": {
+					"phase": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"lastCompletedGeneration": {
 						SchemaProps: spec.SchemaProps{
 							Default: 0,
 							Type:    []string{"integer"},
@@ -288,7 +391,7 @@ func schema_pkg_apis_tf_v1alpha1_TerraformStatus(ref common.ReferenceCallback) c
 						},
 					},
 				},
-				Required: []string{"phase", "lastGeneration", "stages"},
+				Required: []string{"podNamePrefix", "phase", "lastCompletedGeneration", "stages"},
 			},
 		},
 		Dependencies: []string{
