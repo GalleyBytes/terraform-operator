@@ -1776,6 +1776,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 				//
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 					ClaimName: id,
+					ReadOnly:  false,
 				},
 				//
 				// TODO if host is used, develop a cleanup plan so
@@ -1794,6 +1795,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		{
 			Name:      "tfrun",
 			MountPath: "/home/tfo-runner",
+			ReadOnly:  false,
 		},
 	}
 	envs = append(envs, corev1.EnvVar{
@@ -1983,10 +1985,13 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 	// Make sure to use the same uid for containers so the dir in the
 	// PersistentVolume have the correct permissions for the user
 	user := int64(1000)
+	group := int64(1000)
+	runAsNonRoot := true
 	securityContext := &corev1.SecurityContext{
-		RunAsUser: &user,
+		RunAsUser:    &user,
+		RunAsGroup:   &group,
+		RunAsNonRoot: &runAsNonRoot,
 	}
-
 	if isTFRunner {
 		envs = append(envs, corev1.EnvVar{
 			Name:  "TFO_RUNNER",
@@ -2047,7 +2052,9 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 			VolumeMounts:    volumeMounts,
 		})
 	}
-
+	podSecurityContext := corev1.PodSecurityContext{
+		FSGroup: &user,
+	}
 	pod = &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: generateName,
@@ -2055,6 +2062,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 			Labels:       labels,
 		},
 		Spec: corev1.PodSpec{
+			SecurityContext:    &podSecurityContext,
 			ServiceAccountName: r.serviceAccount,
 			RestartPolicy:      corev1.RestartPolicyNever,
 			InitContainers:     initContainers,
