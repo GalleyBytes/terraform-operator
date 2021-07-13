@@ -141,9 +141,9 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	// TODO Read the tfstate and decide IF_NEW_RESOURCE based on that
 	// applyAction := false
 	name := tf.Status.PodNamePrefix
-	terraformRunner := "isaaguilar/tf-runner-alphav1"
+	terraformRunner := "isaaguilar/tf-runner-alphav2"
 	terraformRunnerPullPolicy := corev1.PullIfNotPresent
-	terraformVersion := "0.13.7"
+	terraformVersion := "1.0.2"
 
 	scriptRunner := "isaaguilar/script-runner-alphav1"
 	scriptRunnerPullPolicy := corev1.PullIfNotPresent
