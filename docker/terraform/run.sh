@@ -1,26 +1,38 @@
 #!/bin/bash -e
 ##
-## TODO - When the $INSTANCE_NAME approaches 253 characters, this script should 
+## TODO - When the $INSTANCE_NAME approaches 253 characters, this script should
 ##        truncate accordingly to make sure that any secrets/configmaps that
 ##        get saved here don't get blocked by the K8S API due to names being
-##        too long. 
+##        too long.
 ##
+version_gt_or_eq () {
+  if [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$1" ]; then
+    return 0
+  else
+    return 1
+  fi
+}
+terraform_version=$(terraform version | head -n1 |sed "s/^.*v//")
 # Let the finalizer or manual destroy by passing in $DESTROY="true"
 # Terraforms will be applyed only then $APPLY="true"
 function run_terraform {
-    # options: 
+    # options:
     #   destroy=true|false
     declare $@
 
     if [ "$destroy" = "true" ];then
         destroy_when_true='-destroy'
-    fi  
+    fi
+    module=""
+    if ! version_gt_or_eq "0.15.0" "$terraform_version"; then
+    module="."
+    fi
 
-    terraform init .
+    terraform init $module
     if [ $? -gt 0 ];then return 1;fi
 
-    terraform plan $TFOPS_VARFILE_FLAG $destroy_when_true -out plan.out . 2>&1| tee $TMP
-    if [ ${PIPESTATUS[0]} -gt 0 ];then 
+    terraform plan $TFOPS_VARFILE_FLAG $destroy_when_true -out plan.out $module 2>&1| tee $TMP
+    if [ ${PIPESTATUS[0]} -gt 0 ];then
         set +x
         save_plan
         set -x
@@ -51,10 +63,10 @@ function run_terraform {
     set -x
     terraform apply plan.out
     if [ $? -gt 0 ];then return 1;fi
-    
+
     set +x
     # Replan to see what tf thinks should happen next.
-    terraform plan $TFOPS_VARFILE_FLAG $destroy_when_true . 2>&1| tee $TMP
+    terraform plan $TFOPS_VARFILE_FLAG $destroy_when_true $module 2>&1| tee $TMP
 }
 
 function save_plan {
@@ -109,7 +121,7 @@ EOF_HERE
     chmod +x .get_assumed_credentials.py
     eval `./.get_assumed_credentials.py`
     rm .get_assumed_credentials.py
-    
+
     unset AWS_ROLE_ARN
     unset AWS_WEB_IDENTITY_TOKEN_FILE
 fi
@@ -123,7 +135,7 @@ exec echo "$GIT_PASSWORD"
 EOF
     chmod +x $ASKPASS
     export GIT_ASKPASS=$ASKPASS
-fi 
+fi
 
 # Troubleshooting lines
 # env
@@ -175,7 +187,7 @@ fi
 
 # Run the prerun script
 if stat prerun.sh >/dev/null 2>/dev/null; then
-    # prerun.sh needs exec privileges 
+    # prerun.sh needs exec privileges
     chmod +x prerun.sh
     ./prerun.sh
 fi
@@ -212,7 +224,7 @@ save_plan
 
 # Run the postrun script
 if stat postrun.sh >/dev/null 2>/dev/null; then
-    # postrun.sh needs exec privileges 
+    # postrun.sh needs exec privileges
     chmod +x postrun.sh
     ./postrun.sh
 fi
