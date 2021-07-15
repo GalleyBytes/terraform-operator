@@ -27,7 +27,6 @@ for TF_IMAGE in ${AVAILABLE_HASHICORP_TERRAFORM_IMAGES[@]};do
 
     echo "building $DOCKER_REPO/tfops:$TF_IMAGE"
     export TF_IMAGE
-    envsubst < docker/terraform/terraform.Dockerfile > ".builds/terraform-$TF_IMAGE.Dockerfile"
-    docker build -t "$DOCKER_REPO/tfops:$TF_IMAGE" -f ".builds/terraform-$TF_IMAGE.Dockerfile" docker/terraform/
+    docker build -t "$DOCKER_REPO/tfops:$TF_IMAGE" --build-arg TF_IMAGE=${TF_IMAGE} docker/terraform/
 
 done
