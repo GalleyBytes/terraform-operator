@@ -158,7 +158,8 @@ if [ "$STACK_REPO" != "" ];then
     if [ "$STACK_REPO_SUBDIR" != "" ];then
         pwd
         ls -lah
-        cp -r $STACK_REPO_SUBDIR /$TFOPS_MAIN_MODULE
+        mkdir -p /$TFOPS_MAIN_MODULE
+        cp -r $STACK_REPO_SUBDIR/* /$TFOPS_MAIN_MODULE
     else
         mv $MAIN_MODULE_TMP/stack /$TFOPS_MAIN_MODULE
     fi
