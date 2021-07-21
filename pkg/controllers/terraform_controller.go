@@ -103,7 +103,6 @@ type GitRepoAccessOptions struct {
 }
 
 type RunOptions struct {
-	mainModule                string
 	moduleConfigMaps          []string
 	namespace                 string
 	name                      string
@@ -645,7 +644,6 @@ func (r *ReconcileTerraform) setupAndRun(reqLogger logr.Logger, instance *tfv1al
 		break
 	}
 
-	runOpts.mainModule = stackRepoAccessOptions.hash
 	//
 	//
 	// Download the tfvar configs (and optionally save to external repo)
@@ -915,15 +913,11 @@ func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job 
 	// reqLogger := log.WithValues("function", "run")
 	// reqLogger.Info(fmt.Sprintf("Running job with this setup: %+v", r))
 
-	// TF Module
-	if r.mainModule == "" {
-		r.mainModule = "main_module"
-	}
 	envs := r.envVars
 	envs = append(envs, []corev1.EnvVar{
 		{
 			Name:  "TFOPS_MAIN_MODULE",
-			Value: r.mainModule,
+			Value: "main_module",
 		},
 		{
 			Name:  "NAMESPACE",
