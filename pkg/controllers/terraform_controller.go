@@ -135,6 +135,7 @@ type RunOptions struct {
 	setupRunner               string
 	setupRunnerPullPolicy     corev1.PullPolicy
 	setupRunnerVersion        string
+	runnerAnnotations         map[string]string
 }
 
 func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
@@ -152,6 +153,8 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	setupRunner := "isaaguilar/setup-runner-alphav1"
 	setupRunnerPullPolicy := corev1.PullIfNotPresent
 	setupRunnerVersion := "1.0.0"
+
+	runnerAnnotations := tf.Spec.RunnerAnnotations
 
 	// sshConfig := utils.TruncateResourceName(tf.Name, 242) + "-ssh-config"
 	serviceAccount := tf.Spec.ServiceAccount
@@ -200,6 +203,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 		terraformVersion:          terraformVersion,
 		terraformRunner:           terraformRunner,
 		terraformRunnerPullPolicy: terraformRunnerPullPolicy,
+		runnerAnnotations:         runnerAnnotations,
 		serviceAccount:            serviceAccount,
 		configMapData:             make(map[string]string),
 		secretData:                make(map[string][]byte),
@@ -1952,7 +1956,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		},
 	}...)
 
-	annotations := make(map[string]string)
+	annotations := r.runnerAnnotations
 	envFrom := []corev1.EnvFromSource{}
 
 	for _, c := range r.credentials {
@@ -2060,6 +2064,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 			GenerateName: generateName,
 			Namespace:    r.namespace,
 			Labels:       labels,
+			Annotations:  annotations,
 		},
 		Spec: corev1.PodSpec{
 			SecurityContext:    &podSecurityContext,
