@@ -31,6 +31,9 @@ type TerraformSpec struct {
 	// Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
 	// Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html
 
+	// RunnerAnnotations are annotations that will be added to all runner pods.
+	RunnerAnnotations map[string]string `json:"runnerAnnotations,omitempty"`
+
 	// TerraformVersion helps the operator decide which image tag to pull for
 	// the terraform runner. Defaults to "0.11.14"
 	TerraformVersion    string `json:"terraformVersion,omitempty"`

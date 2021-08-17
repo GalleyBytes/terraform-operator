@@ -304,6 +304,12 @@ spec:
               required:
               - enable
               type: object
+            runnerAnnotations:
+              additionalProperties:
+                type: string
+              description: RunnerAnnotations are annotations that will be added to
+                all runner pods.
+              type: object
             scmAuthMethods:
               description: SCMAuthMethods define multiple SCMs that require tokens/keys
               items:
