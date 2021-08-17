@@ -121,6 +121,7 @@ type RunOptions struct {
 	terraformVersion          string
 	serviceAccount            string
 	configMapData             map[string]string
+	runnerAnnotations         map[string]string
 }
 
 func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
@@ -133,6 +134,7 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 	terraformRunnerPullPolicy := corev1.PullAlways
 	terraformVersion := "0.11.14"
 	sshConfig := utils.TruncateResourceName(instance.Name, 242) + "-ssh-config"
+	runnerAnnotations := instance.Spec.RunnerAnnotations
 	serviceAccount := instance.Spec.ServiceAccount
 	if serviceAccount == "" {
 		// By prefixing the service account with "tf-", IRSA roles can use wildcard
@@ -178,6 +180,7 @@ func newRunOptions(instance *tfv1alpha1.Terraform, isDestroy bool) RunOptions {
 		serviceAccount:            serviceAccount,
 		configMapData:             make(map[string]string),
 		sshConfig:                 sshConfig,
+		runnerAnnotations:         runnerAnnotations,
 	}
 }
 
@@ -1064,7 +1067,7 @@ func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job 
 		}...)
 	}
 
-	annotations := make(map[string]string)
+	annotations := r.runnerAnnotations
 	envFrom := []corev1.EnvFromSource{}
 
 	for _, c := range r.credentials {
