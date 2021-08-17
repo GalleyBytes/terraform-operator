@@ -50,6 +50,9 @@ type TerraformSpec struct {
 	// git protocol over SSH or HTTPS
 	TerraformModule *SrcOpts `json:"terraformModule"`
 
+	// RunnerAnnotations are annotations that will be added to all runner pods.
+	RunnerAnnotations map[string]string `json:"runnerAnnotations,omitempty"`
+
 	Sources []*SrcOpts      `json:"sources,omitempty"`
 	Env     []corev1.EnvVar `json:"env,omitempty"`
 
