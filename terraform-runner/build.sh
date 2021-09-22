@@ -12,7 +12,7 @@ DOCKER_REPO=${DOCKER_REPO:-"isaaguilar"}
 ## Build setup-runner
 ##
 export USER_UID=1000
-export DOCKER_IMAGE="$DOCKER_REPO/setup-runner-alphav1:1.0.0"
+export DOCKER_IMAGE="$DOCKER_REPO/setup-runner-alphav2:1.0.0"
 printf "\n\n----------------\nBuilding $DOCKER_IMAGE\n"
 
 envsubst < setup.Dockerfile > temp
@@ -23,7 +23,7 @@ docker push "$DOCKER_IMAGE"
 ## Build script-runner
 ##
 export USER_UID=1000
-export DOCKER_IMAGE="$DOCKER_REPO/script-runner-alphav1:1.0.0"
+export DOCKER_IMAGE="$DOCKER_REPO/script-runner-alphav2:1.0.0"
 printf "\n\n----------------\nBuilding $DOCKER_IMAGE\n"
 
 envsubst < script.Dockerfile > temp
@@ -58,7 +58,7 @@ for TF_IMAGE in ${AVAILABLE_HASHICORP_TERRAFORM_IMAGES[@]};do
     # (($(docker images hashicorp/terraform:$TF_IMAGE --format='{{ .Repository }}{{ .Tag }}'|wc -l) > 0)) && continue
     export TF_IMAGE
     export USER_UID=1000
-    export DOCKER_IMAGE="$DOCKER_REPO/tf-runner-alphav2:$TF_IMAGE"
+    export DOCKER_IMAGE="$DOCKER_REPO/tf-runner-alphav3:$TF_IMAGE"
     printf "\n\n----------------\nBuilding $DOCKER_IMAGE\n"
 
     envsubst < tf.Dockerfile > temp

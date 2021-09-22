@@ -48,6 +48,24 @@ type TerraformSpec struct {
 	ScriptRunner    string `json:"scriptRunner,omitempty"`
 	SetupRunner     string `json:"setupRunner,omitempty"`
 
+	// TerraformRunnerExecutionScriptConfigMap allows the user to define a
+	// custom terraform runner script that gets executed instead of the default
+	// script built into the runner image. The configmap "name" and "key" are
+	// required.
+	TerraformRunnerExecutionScriptConfigMap *corev1.ConfigMapKeySelector `json:"terraformRunnerExecutionScriptConfigMap,omitempty"`
+
+	// ScriptRunnerExecutionScriptConfigMap allows the user to define a
+	// custom terraform runner script that gets executed instead of the default
+	// script built into the runner image. The configmap "name" and "key" are
+	// required.
+	ScriptRunnerExecutionScriptConfigMap *corev1.ConfigMapKeySelector `json:"scriptRunnerExecutionScriptConfigMap,omitempty"`
+
+	// SetupRunnerExecutionScriptConfigMap allows the user to define a
+	// custom terraform runner script that gets executed instead of the default
+	// script built into the runner image. The configmap "name" and "key" are
+	// required.
+	SetupRunnerExecutionScriptConfigMap *corev1.ConfigMapKeySelector `json:"setupRunnerExecutionScriptConfigMap,omitempty"`
+
 	// TerraformRunnerPullPolicy describes a policy for if/when to pull the
 	// TerraformRunner image. Acceptable values are "Always", "Never", or
 	// "IfNotPresent".

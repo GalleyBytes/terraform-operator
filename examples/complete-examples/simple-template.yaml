@@ -20,9 +20,6 @@ spec:
         in_cluster_config  = true
       }
     }
-  applyOnCreate: true
-  applyOnUpdate: true
-  applyOnDelete: true
   ignoreDelete: false
   
   ## Optionally pull some tfvars from a file. For this, "extras" must be "['is-file']"
@@ -39,16 +36,31 @@ spec:
     value: example
   
   # Print hello before running terraform
-  prerunScript: |-
-    #!/usr/bin/env bash
-    
-    echo "Hello, I am here -> $(pwd)"
+  #prerunScript: |-
+  #  #!/usr/bin/env bash
+  #  
+  #  echo "Hello, I am here -> $(pwd)"
     
   
   # Sleep after running terraform just as an example. 
-  postrunScript: |-
-    #!/usr/bin/env bash
-    
-    cd "/$TFOPS_MAIN_MODULE"
-    terraform_output_id=$(terraform output id)
-    echo "$terraform_output_id Terraform is done!" 
+  #postrunScript: |-
+  #  #!/usr/bin/env bash
+  #  
+  #  cd "/$TFOPS_MAIN_MODULE"
+  #  terraform_output_id=$(terraform output id)
+  #  echo "$terraform_output_id Terraform is done!" 
+
+  setupRunnerExecutionScriptConfigMap:
+    name: tfexe
+    key: setup
+    optional: false
+  
+  scriptRunnerExecutionScriptConfigMap:
+    name: tfexe
+    key: script
+    optional: false
+  
+  terraformRunnerExecutionScriptConfigMap:
+    name: tfexe
+    key: tf
+    optional: false
