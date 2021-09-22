@@ -3,7 +3,7 @@ RUN apk add bash
 COPY tf.sh /runner/tfo_runner.sh
 
 ENV TFO_RUNNER_SCRIPT=/runner/tfo_runner.sh \
-    USER_UID=1000 \
+    USER_UID=2000 \
     USER_NAME=tfo-runner \
     HOME=/home/tfo-runner
 COPY usersetup.sh /usersetup.sh
