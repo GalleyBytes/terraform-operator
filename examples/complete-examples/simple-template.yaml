@@ -23,10 +23,11 @@ spec:
   ignoreDelete: false
   
   ## Optionally pull some tfvars from a file. For this, "extras" must be "['is-file']"
-  # sources:
-  # - address: https://github.com/cloudposse/terraform-example-module.git//examples/complete/fixtures.us-east-2.tfvars
-  #   extras:
-  #   - is-file
+  sources:
+  - address: https://github.com/kubernetes/kubernetes.git//build/lib/
+  - address: https://github.com/cloudposse/terraform-example-module.git//examples/complete/fixtures.us-east-2.tfvars
+    extras:
+    - is-file
 
   # Create a tfvar env for the terraform to use
   env:
@@ -64,3 +65,12 @@ spec:
     name: tfexe
     key: tf
     optional: false
+  
+  scmAuthMethods:
+  - host: github.com
+    timeout: 100
+    git:
+      ssh:
+        requireProxy: false
+        sshKeySecretRef:
+          name: gitsshkey

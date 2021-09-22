@@ -106,7 +106,8 @@ type ParsedAddress struct {
 }
 
 type GitRepoAccessOptions struct {
-	Client         gitclient.GitRepo
+	ClientGitRepo  gitclient.GitRepo
+	Timeout        int64
 	Address        string
 	Directory      string
 	Extras         []string
@@ -848,12 +849,6 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Ter
 		return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
 	}
 
-	err = stackRepoAccessOptions.getParsedAddress()
-	if err != nil {
-		r.Recorder.Event(tf, "Warning", "ProcessingError", fmt.Errorf("Error in parsing address: %v", err).Error())
-		return fmt.Errorf("Error in parsing address: %v", err)
-	}
-
 	// Since we're not going to download this to a configmap, we need to
 	// pass the information to the pod to do it. We should be able to
 	// use stackRepoAccessOptions.parsedAddress and just send that to
@@ -920,11 +915,6 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Ter
 			if err != nil {
 				r.Recorder.Event(tf, "Warning", "ConfigError", fmt.Errorf("Error in Spec: %v", err).Error())
 				return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
-			}
-
-			err = configRepoAccessOptions.getParsedAddress()
-			if err != nil {
-				return err
 			}
 			reqLogger.V(1).Info("Setting up download options for config repo access")
 
@@ -1035,10 +1025,6 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Ter
 		if err != nil {
 			r.Recorder.Event(tf, "Warning", "ConfigError", fmt.Errorf("Error getting git repo access options: %v", err).Error())
 			return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
-		}
-		err = exportRepoAccessOptions.getParsedAddress()
-		if err != nil {
-			return fmt.Errorf("Error parsing export repo address %s", err)
 		}
 
 		// TODO decide what to do on errors
@@ -2399,7 +2385,7 @@ func (r ReconcileTerraform) loadSecret(ctx context.Context, name, namespace stri
 	return secret, nil
 }
 
-func newGitRepoAccessOptionsFromSpec(instance *tfv1alpha1.Terraform, address string, extras []string) (GitRepoAccessOptions, error) {
+func newGitRepoAccessOptionsFromSpec(tf *tfv1alpha1.Terraform, address string, extras []string) (GitRepoAccessOptions, error) {
 	d := GitRepoAccessOptions{}
 	var sshProxyOptions tfv1alpha1.ProxyOpts
 
@@ -2419,14 +2405,36 @@ func newGitRepoAccessOptionsFromSpec(instance *tfv1alpha1.Terraform, address str
 		Extras:    extras,
 		Directory: temp,
 	}
-	d.SCMAuthMethods = instance.Spec.SCMAuthMethods
+	d.SCMAuthMethods = tf.Spec.SCMAuthMethods
 
-	if instance.Spec.SSHTunnel != nil {
-		sshProxyOptions = *instance.Spec.SSHTunnel
+	if tf.Spec.SSHTunnel != nil {
+		sshProxyOptions = *tf.Spec.SSHTunnel
 	}
 	d.SSHProxy = sshProxyOptions
 
+	err = d.getParsedAddress()
+	if err != nil {
+		return d, fmt.Errorf("Error in parsing address: %v", err)
+	}
+
+	// sets d.Timeout
+	d.getTimeoutConfig()
+
 	return d, nil
+}
+
+// getTimeoutConfig checks the configured SCM configurations for a configured
+// timeout that matches the host for a configured repo. Will always set the
+// Timeout option of GitRepoAccessOptions. Defaults to 30 (seconds).
+func (d *GitRepoAccessOptions) getTimeoutConfig() {
+	var timeout int64 = 30 // seconds
+	for _, m := range d.SCMAuthMethods {
+		if m.Host == d.host {
+			timeout = m.Timeout
+			break
+		}
+	}
+	d.Timeout = timeout
 }
 
 func getHostKey(host string) (ssh.PublicKey, error) {
@@ -2897,14 +2905,19 @@ func (d *GitRepoAccessOptions) download(ctx context.Context, k8sclient client.Cl
 	reqLogger := logf.WithValues("Download", d.Address, "Namespace", namespace, "Function", "download")
 	reqLogger.V(1).Info(fmt.Sprintf("Getting ready to download source %s", d.repo))
 
-	var gitRepo gitclient.GitRepo
+	var err error
+	var clientGitRepo gitclient.GitRepo
 	if d.protocol == "ssh" {
 		filename, err := d.getGitSSHKey(ctx, k8sclient, namespace, d.protocol, reqLogger)
 		if err != nil {
 			return fmt.Errorf("Download failed for '%s': %v", d.repo, err)
 		}
 		defer os.Remove(filename)
-		gitRepo, err = gitclient.GitSSHDownload(d.repo, d.Directory, filename, d.hash, reqLogger)
+		clientGitRepo, err = gitclient.NewGitRepo("", "", filename, reqLogger)
+		if err != nil {
+			return err
+		}
+		err = clientGitRepo.GitSSHDownload(d.repo, d.Directory, filename, d.hash, d.Timeout)
 		if err != nil {
 			return fmt.Errorf("Download failed for '%s': %v", d.repo, err)
 		}
@@ -2916,21 +2929,23 @@ func (d *GitRepoAccessOptions) download(ctx context.Context, k8sclient client.Cl
 			// Maybe we don't need to exit if no creds are used here
 			reqLogger.Info(fmt.Sprintf("%v", err))
 		}
-
-		gitRepo, err = gitclient.GitHTTPDownload(d.repo, d.Directory, "git", token, d.hash)
+		clientGitRepo, err = gitclient.NewGitRepo("git", token, "", reqLogger)
+		if err != nil {
+			return err
+		}
+		err = clientGitRepo.GitHTTPDownload(d.repo, d.Directory, "git", token, d.hash, d.Timeout)
 		if err != nil {
 			return fmt.Errorf("Download failed for '%s': %v", d.repo, err)
 		}
 	}
 
 	// Set the hash and return
-	var err error
-	d.Client = gitRepo
-	d.hash, err = gitRepo.HashString()
+	d.ClientGitRepo = clientGitRepo
+	d.hash, err = clientGitRepo.HashString()
 	if err != nil {
 		return err
 	}
-	reqLogger.Info(fmt.Sprintf("Hash: %v", d.hash))
+	reqLogger.V(1).Info(fmt.Sprintf("Hash: %v", d.hash))
 	return nil
 }
 
@@ -3220,7 +3235,7 @@ func (d GitRepoAccessOptions) commitTfvars(ctx context.Context, k8sclient client
 	}
 
 	// Create a file in the external repo
-	err = d.Client.CheckoutBranch("")
+	err = d.ClientGitRepo.CheckoutBranch("")
 	if err != nil {
 		errString := fmt.Sprintf("Could not check out new branch %v", err)
 		reqLogger.Info(errString)
@@ -3377,13 +3392,13 @@ func (d GitRepoAccessOptions) commitTfvars(ctx context.Context, k8sclient client
 
 	// Commit and push to repo
 	commitMsg := fmt.Sprintf("automatic update via terraform-operator\nupdates to:\n%s", strings.Join(filesToCommit, "\n"))
-	err = d.Client.Commit(filesToCommit, commitMsg)
+	err = d.ClientGitRepo.Commit(filesToCommit, commitMsg)
 	if err != nil {
 		errString := fmt.Sprintf("Could not commit to repo %v", err)
 		reqLogger.V(1).Info(errString)
 		return
 	}
-	err = d.Client.Push("refs/heads/master")
+	err = d.ClientGitRepo.Push("refs/heads/master")
 	if err != nil {
 		errString := fmt.Sprintf("Could not push to repo %v", err)
 		reqLogger.V(1).Info(errString)

@@ -316,8 +316,7 @@ spec:
                 description: SCMAuthMethod definition of SCMs that require tokens/keys
                 properties:
                   git:
-                    description: SCM define the SCM for a host which is defined at
-                      a higher-level
+                    description: Git configuration options for auth methods of git
                     properties:
                       https:
                         description: GitHTTPS configures the setup for git over https
@@ -377,6 +376,11 @@ spec:
                     type: object
                   host:
                     type: string
+                  timeout:
+                    description: Timeout In seconds is the time before giving up trying
+                      to fetch a repo
+                    format: int64
+                    type: integer
                 required:
                 - host
                 type: object

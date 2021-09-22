@@ -162,7 +162,11 @@ type TerraformSpec struct {
 // SCMAuthMethod definition of SCMs that require tokens/keys
 type SCMAuthMethod struct {
 	Host string `json:"host"`
-	// SCM define the SCM for a host which is defined at a higher-level
+
+	// Timeout In seconds is the time before giving up trying to fetch a repo
+	Timeout int64 `json:"timeout,omitempty"`
+
+	// Git configuration options for auth methods of git
 	Git *GitSCM `json:"git,omitempty"`
 }
 
