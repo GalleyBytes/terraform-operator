@@ -146,15 +146,15 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	// TODO Read the tfstate and decide IF_NEW_RESOURCE based on that
 	// applyAction := false
 	name := tf.Status.PodNamePrefix
-	terraformRunner := "isaaguilar/tf-runner-alphav3"
+	terraformRunner := "isaaguilar/tf-runner-alphav4"
 	terraformRunnerPullPolicy := corev1.PullIfNotPresent
 	terraformVersion := "1.0.2"
 
-	scriptRunner := "isaaguilar/script-runner-alphav2"
+	scriptRunner := "isaaguilar/script-runner-alphav4"
 	scriptRunnerPullPolicy := corev1.PullIfNotPresent
 	scriptRunnerVersion := "1.0.0"
 
-	setupRunner := "isaaguilar/setup-runner-alphav2"
+	setupRunner := "isaaguilar/setup-runner-alphav4"
 	setupRunnerPullPolicy := corev1.PullIfNotPresent
 	setupRunnerVersion := "1.0.0"
 
@@ -2091,8 +2091,8 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 
 	// Make sure to use the same uid for containers so the dir in the
 	// PersistentVolume have the correct permissions for the user
-	user := int64(1000)
-	group := int64(1000)
+	user := int64(2000)
+	group := int64(2000)
 	runAsNonRoot := true
 	securityContext := &corev1.SecurityContext{
 		RunAsUser:    &user,

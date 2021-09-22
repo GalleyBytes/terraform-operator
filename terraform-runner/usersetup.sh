@@ -8,7 +8,7 @@ chown ${USER_UID}:0 -R ${HOME}
 chmod ug+rwx ${HOME}
 
 # runtime user will need to be able to self-insert in /etc/passwd
-chmod g+rw /etc/passwd
+chmod 777 /etc/passwd
 
 # no need for this script to remain in the image after running
 rm $0
