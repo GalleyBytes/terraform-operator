@@ -89,6 +89,22 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 				Description: "TerraformSpec defines the desired state of Terraform",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
+					"runnerAnnotations": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RunnerAnnotations are annotations that will be added to all runner pods.",
+							Type:        []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
 					"terraformVersion": {
 						SchemaProps: spec.SchemaProps{
 							Description: "TerraformVersion helps the operator decide which image tag to pull for the terraform runner. Defaults to \"0.11.14\"",
@@ -125,6 +141,24 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
 							Format: "",
+						},
+					},
+					"terraformRunnerExecutionScriptConfigMap": {
+						SchemaProps: spec.SchemaProps{
+							Description: "TerraformRunnerExecutionScriptConfigMap allows the user to define a custom terraform runner script that gets executed instead of the default script built into the runner image. The configmap \"name\" and \"key\" are required.",
+							Ref:         ref("k8s.io/api/core/v1.ConfigMapKeySelector"),
+						},
+					},
+					"scriptRunnerExecutionScriptConfigMap": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ScriptRunnerExecutionScriptConfigMap allows the user to define a custom terraform runner script that gets executed instead of the default script built into the runner image. The configmap \"name\" and \"key\" are required.",
+							Ref:         ref("k8s.io/api/core/v1.ConfigMapKeySelector"),
+						},
+					},
+					"setupRunnerExecutionScriptConfigMap": {
+						SchemaProps: spec.SchemaProps{
+							Description: "SetupRunnerExecutionScriptConfigMap allows the user to define a custom terraform runner script that gets executed instead of the default script built into the runner image. The configmap \"name\" and \"key\" are required.",
+							Ref:         ref("k8s.io/api/core/v1.ConfigMapKeySelector"),
 						},
 					},
 					"terraformRunnerPullPolicy": {
@@ -344,7 +378,7 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 			},
 		},
 		Dependencies: []string{
-			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Credentials", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ExportRepo", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ReconcileTerraformDeployment", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SrcOpts", "k8s.io/api/core/v1.EnvVar"},
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Credentials", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ExportRepo", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ReconcileTerraformDeployment", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SrcOpts", "k8s.io/api/core/v1.ConfigMapKeySelector", "k8s.io/api/core/v1.EnvVar"},
 	}
 }
 

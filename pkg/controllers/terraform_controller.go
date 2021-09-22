@@ -117,40 +117,43 @@ type GitRepoAccessOptions struct {
 }
 
 type RunOptions struct {
-	moduleConfigMaps          []string
-	namespace                 string
-	name                      string
-	envVars                   []corev1.EnvVar
-	credentials               []tfv1alpha1.Credentials
-	stack                     ParsedAddress
-	serviceAccount            string
-	configMapData             map[string]string
-	secretData                map[string][]byte
-	terraformRunner           string
-	terraformRunnerPullPolicy corev1.PullPolicy
-	terraformVersion          string
-	scriptRunner              string
-	scriptRunnerPullPolicy    corev1.PullPolicy
-	scriptRunnerVersion       string
-	setupRunner               string
-	setupRunnerPullPolicy     corev1.PullPolicy
-	setupRunnerVersion        string
-	runnerAnnotations         map[string]string
+	moduleConfigMaps                        []string
+	namespace                               string
+	name                                    string
+	envVars                                 []corev1.EnvVar
+	credentials                             []tfv1alpha1.Credentials
+	stack                                   ParsedAddress
+	serviceAccount                          string
+	configMapData                           map[string]string
+	secretData                              map[string][]byte
+	terraformRunner                         string
+	terraformRunnerExecutionScriptConfigMap *corev1.ConfigMapKeySelector
+	terraformRunnerPullPolicy               corev1.PullPolicy
+	terraformVersion                        string
+	scriptRunner                            string
+	scriptRunnerExecutionScriptConfigMap    *corev1.ConfigMapKeySelector
+	scriptRunnerPullPolicy                  corev1.PullPolicy
+	scriptRunnerVersion                     string
+	setupRunner                             string
+	setupRunnerExecutionScriptConfigMap     *corev1.ConfigMapKeySelector
+	setupRunnerPullPolicy                   corev1.PullPolicy
+	setupRunnerVersion                      string
+	runnerAnnotations                       map[string]string
 }
 
 func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	// TODO Read the tfstate and decide IF_NEW_RESOURCE based on that
 	// applyAction := false
 	name := tf.Status.PodNamePrefix
-	terraformRunner := "isaaguilar/tf-runner-alphav2"
+	terraformRunner := "isaaguilar/tf-runner-alphav3"
 	terraformRunnerPullPolicy := corev1.PullIfNotPresent
 	terraformVersion := "1.0.2"
 
-	scriptRunner := "isaaguilar/script-runner-alphav1"
+	scriptRunner := "isaaguilar/script-runner-alphav2"
 	scriptRunnerPullPolicy := corev1.PullIfNotPresent
 	scriptRunnerVersion := "1.0.0"
 
-	setupRunner := "isaaguilar/setup-runner-alphav1"
+	setupRunner := "isaaguilar/setup-runner-alphav2"
 	setupRunnerPullPolicy := corev1.PullIfNotPresent
 	setupRunnerVersion := "1.0.0"
 
@@ -196,23 +199,26 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	credentials := tf.Spec.Credentials
 
 	return RunOptions{
-		namespace:                 tf.Namespace,
-		name:                      name,
-		envVars:                   tf.Spec.Env,
-		credentials:               credentials,
-		terraformVersion:          terraformVersion,
-		terraformRunner:           terraformRunner,
-		terraformRunnerPullPolicy: terraformRunnerPullPolicy,
-		runnerAnnotations:         runnerAnnotations,
-		serviceAccount:            serviceAccount,
-		configMapData:             make(map[string]string),
-		secretData:                make(map[string][]byte),
-		scriptRunner:              scriptRunner,
-		scriptRunnerPullPolicy:    scriptRunnerPullPolicy,
-		scriptRunnerVersion:       scriptRunnerVersion,
-		setupRunner:               setupRunner,
-		setupRunnerPullPolicy:     setupRunnerPullPolicy,
-		setupRunnerVersion:        setupRunnerVersion,
+		namespace:                               tf.Namespace,
+		name:                                    name,
+		envVars:                                 tf.Spec.Env,
+		credentials:                             credentials,
+		terraformVersion:                        terraformVersion,
+		terraformRunner:                         terraformRunner,
+		terraformRunnerExecutionScriptConfigMap: tf.Spec.TerraformRunnerExecutionScriptConfigMap,
+		terraformRunnerPullPolicy:               terraformRunnerPullPolicy,
+		runnerAnnotations:                       runnerAnnotations,
+		serviceAccount:                          serviceAccount,
+		configMapData:                           make(map[string]string),
+		secretData:                              make(map[string][]byte),
+		scriptRunner:                            scriptRunner,
+		scriptRunnerPullPolicy:                  scriptRunnerPullPolicy,
+		scriptRunnerExecutionScriptConfigMap:    tf.Spec.ScriptRunnerExecutionScriptConfigMap,
+		scriptRunnerVersion:                     scriptRunnerVersion,
+		setupRunner:                             setupRunner,
+		setupRunnerPullPolicy:                   setupRunnerPullPolicy,
+		setupRunnerExecutionScriptConfigMap:     tf.Spec.SetupRunnerExecutionScriptConfigMap,
+		setupRunnerVersion:                      setupRunnerVersion,
 	}
 }
 
@@ -1956,6 +1962,117 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		},
 	}...)
 
+	// Envs from this point may differ between runners
+	terraformRunnerEnvs := make([]corev1.EnvVar, len(envs))
+	scriptRunnerEnvs := make([]corev1.EnvVar, len(envs))
+	setupRunnerEnvs := make([]corev1.EnvVar, len(envs))
+	copy(terraformRunnerEnvs, envs)
+	copy(scriptRunnerEnvs, envs)
+	copy(setupRunnerEnvs, envs)
+
+	executionScript := "tfo_runner.sh"
+	if r.terraformRunnerExecutionScriptConfigMap != nil {
+		executionScriptVolumeName := "terraform-runner-execution-script"
+		tfo_runner_script := "/terraform-runner/" + executionScript
+		volumes = append(volumes, []corev1.Volume{
+			{
+				Name: executionScriptVolumeName,
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: r.terraformRunnerExecutionScriptConfigMap.LocalObjectReference,
+						DefaultMode:          &xmode,
+						Optional:             r.terraformRunnerExecutionScriptConfigMap.Optional,
+						Items: []corev1.KeyToPath{
+							{
+								Key:  r.terraformRunnerExecutionScriptConfigMap.Key,
+								Path: executionScript,
+							},
+						},
+					},
+				},
+			},
+		}...)
+		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
+			{
+				Name:      executionScriptVolumeName,
+				MountPath: tfo_runner_script,
+				SubPath:   executionScript,
+			},
+		}...)
+		terraformRunnerEnvs = append(terraformRunnerEnvs, corev1.EnvVar{
+			Name:  "TFO_RUNNER_SCRIPT",
+			Value: tfo_runner_script,
+		})
+	}
+
+	if r.scriptRunnerExecutionScriptConfigMap != nil {
+		executionScriptVolumeName := "script-runner-execution-script"
+		tfo_runner_script := "/script-runner/" + executionScript
+		volumes = append(volumes, []corev1.Volume{
+			{
+				Name: executionScriptVolumeName,
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: r.scriptRunnerExecutionScriptConfigMap.LocalObjectReference,
+						DefaultMode:          &xmode,
+						Optional:             r.scriptRunnerExecutionScriptConfigMap.Optional,
+						Items: []corev1.KeyToPath{
+							{
+								Key:  r.scriptRunnerExecutionScriptConfigMap.Key,
+								Path: executionScript,
+							},
+						},
+					},
+				},
+			},
+		}...)
+		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
+			{
+				Name:      executionScriptVolumeName,
+				MountPath: tfo_runner_script,
+				SubPath:   executionScript,
+			},
+		}...)
+		scriptRunnerEnvs = append(scriptRunnerEnvs, corev1.EnvVar{
+			Name:  "TFO_RUNNER_SCRIPT",
+			Value: tfo_runner_script,
+		})
+	}
+
+	if r.setupRunnerExecutionScriptConfigMap != nil {
+		executionScriptVolumeName := "setup-runner-execution-script"
+		tfo_runner_script := "/setup-runner/" + executionScript
+		volumes = append(volumes, []corev1.Volume{
+			{
+				Name: executionScriptVolumeName,
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: r.setupRunnerExecutionScriptConfigMap.LocalObjectReference,
+						DefaultMode:          &xmode,
+						Optional:             r.setupRunnerExecutionScriptConfigMap.Optional,
+						Items: []corev1.KeyToPath{
+							{
+								Key:  r.setupRunnerExecutionScriptConfigMap.Key,
+								Path: executionScript,
+							},
+						},
+					},
+				},
+			},
+		}...)
+		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
+			{
+				Name:      executionScriptVolumeName,
+				MountPath: tfo_runner_script,
+				SubPath:   executionScript,
+			},
+		}...)
+		setupRunnerEnvs = append(setupRunnerEnvs, corev1.EnvVar{
+			Name:  "TFO_RUNNER_SCRIPT",
+			Value: tfo_runner_script,
+		})
+	}
+
 	annotations := r.runnerAnnotations
 	envFrom := []corev1.EnvFromSource{}
 
@@ -2007,7 +2124,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 			Image:           r.terraformRunner + ":" + r.terraformVersion,
 			ImagePullPolicy: r.terraformRunnerPullPolicy,
 			EnvFrom:         envFrom,
-			Env:             envs,
+			Env:             terraformRunnerEnvs,
 			VolumeMounts:    volumeMounts,
 		})
 
@@ -2020,7 +2137,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 				Image:           r.setupRunner + ":" + r.setupRunnerVersion,
 				ImagePullPolicy: r.setupRunnerPullPolicy,
 				EnvFrom:         envFrom,
-				Env:             envs,
+				Env:             setupRunnerEnvs,
 				VolumeMounts:    volumeMounts,
 			})
 		}
@@ -2036,7 +2153,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 				Image:           r.scriptRunner + ":" + r.scriptRunnerVersion,
 				ImagePullPolicy: r.scriptRunnerPullPolicy,
 				EnvFrom:         envFrom,
-				Env:             envs,
+				Env:             scriptRunnerEnvs,
 				VolumeMounts:    volumeMounts,
 			})
 		}
@@ -2052,7 +2169,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 			Image:           r.scriptRunner + ":" + r.scriptRunnerVersion,
 			ImagePullPolicy: r.scriptRunnerPullPolicy,
 			EnvFrom:         envFrom,
-			Env:             envs,
+			Env:             scriptRunnerEnvs,
 			VolumeMounts:    volumeMounts,
 		})
 	}

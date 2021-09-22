@@ -1,8 +1,8 @@
 FROM hashicorp/terraform:${TF_IMAGE}
 RUN apk add bash
-COPY tf.sh /tfo_runner.sh
+COPY tf.sh /runner/tfo_runner.sh
 
-ENV TFO_RUNNER_SCRIPT=/tfo_runner.sh \
+ENV TFO_RUNNER_SCRIPT=/runner/tfo_runner.sh \
     USER_UID=1000 \
     USER_NAME=tfo-runner \
     HOME=/home/tfo-runner
