@@ -140,6 +140,7 @@ type RunOptions struct {
 	setupRunnerPullPolicy                   corev1.PullPolicy
 	setupRunnerVersion                      string
 	runnerAnnotations                       map[string]string
+	runnerRules                             []rbacv1.PolicyRule
 }
 
 func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
@@ -159,6 +160,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	setupRunnerVersion := "1.0.0"
 
 	runnerAnnotations := tf.Spec.RunnerAnnotations
+	runnerRules := tf.Spec.RunnerRules
 
 	// sshConfig := utils.TruncateResourceName(tf.Name, 242) + "-ssh-config"
 	serviceAccount := tf.Spec.ServiceAccount
@@ -220,6 +222,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 		setupRunnerPullPolicy:                   setupRunnerPullPolicy,
 		setupRunnerExecutionScriptConfigMap:     tf.Spec.SetupRunnerExecutionScriptConfigMap,
 		setupRunnerVersion:                      setupRunnerVersion,
+		runnerRules:                             runnerRules,
 	}
 }
 
@@ -464,9 +467,11 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			reqLogger.V(1).Info(err.Error())
 			return reconcile.Result{}, err
 		}
-		err := r.Client.Delete(ctx, &pods.Items[0])
-		if err != nil {
-			reqLogger.V(1).Info(err.Error())
+		if !tf.Spec.KeepCompletedPods {
+			err := r.Client.Delete(ctx, &pods.Items[0])
+			if err != nil {
+				reqLogger.V(1).Info(err.Error())
+			}
 		}
 		return reconcile.Result{}, nil
 	}
@@ -1440,6 +1445,10 @@ func (r RunOptions) generateRole() *rbacv1.Role {
 				break
 			}
 		}
+	}
+
+	for _, rule := range r.runnerRules {
+		rules = append(rules, rule)
 	}
 
 	role := &rbacv1.Role{

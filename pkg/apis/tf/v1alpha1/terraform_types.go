@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -30,6 +31,13 @@ type TerraformSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
 	// Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html
+
+	// KeepCompletedPods when true will keep completed pods. Default is false
+	// and completed pods are removed.
+	KeepCompletedPods bool `json:"keepCompletedPods,omitempty"`
+
+	// RunnerRules are RBAC rules that will be added to all runner pods.
+	RunnerRules []rbacv1.PolicyRule `json:"runnerRules,omitempty"`
 
 	// RunnerAnnotations are annotations that will be added to all runner pods.
 	RunnerAnnotations map[string]string `json:"runnerAnnotations,omitempty"`

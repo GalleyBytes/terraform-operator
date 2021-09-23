@@ -89,6 +89,27 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 				Description: "TerraformSpec defines the desired state of Terraform",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
+					"keepCompletedPods": {
+						SchemaProps: spec.SchemaProps{
+							Description: "KeepCompletedPods when true will keep completed pods. Default is false and completed pods are removed.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+					"runnerRules": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RunnerRules are RBAC rules that will be added to all runner pods.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("k8s.io/api/rbac/v1.PolicyRule"),
+									},
+								},
+							},
+						},
+					},
 					"runnerAnnotations": {
 						SchemaProps: spec.SchemaProps{
 							Description: "RunnerAnnotations are annotations that will be added to all runner pods.",
@@ -378,7 +399,7 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 			},
 		},
 		Dependencies: []string{
-			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Credentials", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ExportRepo", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ReconcileTerraformDeployment", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SrcOpts", "k8s.io/api/core/v1.ConfigMapKeySelector", "k8s.io/api/core/v1.EnvVar"},
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Credentials", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ExportRepo", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ReconcileTerraformDeployment", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SrcOpts", "k8s.io/api/core/v1.ConfigMapKeySelector", "k8s.io/api/core/v1.EnvVar", "k8s.io/api/rbac/v1.PolicyRule"},
 	}
 }
 
