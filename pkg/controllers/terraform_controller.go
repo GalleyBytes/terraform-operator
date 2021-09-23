@@ -2100,7 +2100,15 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		RunAsNonRoot: &runAsNonRoot,
 	}
 	if isTFRunner {
-		envs = append(envs, corev1.EnvVar{
+		terraformRunnerEnvs = append(envs, corev1.EnvVar{
+			Name:  "TFO_RUNNER",
+			Value: string(podType),
+		})
+		setupRunnerEnvs = append(envs, corev1.EnvVar{
+			Name:  "TFO_RUNNER",
+			Value: string(podType),
+		})
+		scriptRunnerEnvs = append(envs, corev1.EnvVar{
 			Name:  "TFO_RUNNER",
 			Value: string(podType),
 		})
@@ -2129,7 +2137,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		}
 
 		if preScriptPodType != "" {
-			envs = append(envs, corev1.EnvVar{
+			scriptRunnerEnvs = append(envs, corev1.EnvVar{
 				Name:  "TFO_SCRIPT",
 				Value: string(preScriptPodType),
 			})
@@ -2145,7 +2153,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		}
 
 	} else {
-		envs = append(envs, corev1.EnvVar{
+		scriptRunnerEnvs = append(envs, corev1.EnvVar{
 			Name:  "TFO_SCRIPT",
 			Value: string(podType),
 		})
