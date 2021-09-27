@@ -2220,10 +2220,8 @@ func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *
 	isFirstInstall := tf.Status.Stages[n-1].Reason == "TF_RESOURCE_CREATED"
 
 	if isFirstInstall || isNewGeneration {
-		if isFirstInstall {
-			if err := r.createPVC(ctx, tf, runOpts); err != nil {
-				return err
-			}
+		if err := r.createPVC(ctx, tf, runOpts); err != nil {
+			return err
 		}
 		if err := r.createSecret(ctx, tf, runOpts); err != nil {
 			return err
