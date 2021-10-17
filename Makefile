@@ -85,7 +85,7 @@ client-gen: client-gen-bin
 	$(CLIENT_GEN) -n versioned --input-base ""  --input ${PKG}/pkg/apis/tf/v1alpha1 -p ${PKG}/pkg/client/clientset -h ./hack/boilerplate.go.txt
 
 k8s-gen: crds openapi-gen client-gen
-	
+
 docker-build:
 	docker build -t ${DOCKER_REPO}/${IMAGE_NAME}:${VERSION} -f build/Dockerfile .
 
@@ -120,7 +120,7 @@ install: crds
 
 # Run against the configured Kubernetes cluster in ~/.kube/config
 run: fmt vet
-	go run cmd/manager/main.go
+	go run cmd/manager/main.go --max-concurrent-reconciles 10
 
 # Run tests
 ENVTEST_ASSETS_DIR=$(shell pwd)/testbin
