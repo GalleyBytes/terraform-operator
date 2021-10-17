@@ -25,6 +25,7 @@ import (
 	tfv1alpha1 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1"
 	"github.com/isaaguilar/terraform-operator/pkg/gitclient"
 	"github.com/isaaguilar/terraform-operator/pkg/utils"
+	localcache "github.com/patrickmn/go-cache"
 	giturl "github.com/whilp/git-urls"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/net/proxy"
@@ -37,13 +38,13 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
-
-	// "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	runtimecontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -69,13 +70,17 @@ func (r *ReconcileTerraform) SetupWithManager(mgr ctrl.Manager) error {
 	// if err != nil {
 	// 	return err
 	// }
-	var err error
-	err = ctrl.NewControllerManagedBy(mgr).
+	controllerOptions := runtimecontroller.Options{
+		MaxConcurrentReconciles: r.MaxConcurrentReconciles,
+	}
+
+	err := ctrl.NewControllerManagedBy(mgr).
 		For(&tfv1alpha1.Terraform{}).
 		Watches(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForOwner{
 			IsController: true,
 			OwnerType:    &tfv1alpha1.Terraform{},
 		}).
+		WithOptions(controllerOptions).
 		Complete(r)
 	if err != nil {
 		return err
@@ -87,10 +92,12 @@ func (r *ReconcileTerraform) SetupWithManager(mgr ctrl.Manager) error {
 type ReconcileTerraform struct {
 	// This client, initialized using mgr.Client() above, is a split client
 	// that reads objects from the cache and writes to the apiserver
-	Client   client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
-	Log      logr.Logger
+	Client                  client.Client
+	Scheme                  *runtime.Scheme
+	Recorder                record.EventRecorder
+	Log                     logr.Logger
+	MaxConcurrentReconciles int
+	Cache                   *localcache.Cache
 }
 
 type ParsedAddress struct {
@@ -240,16 +247,22 @@ var logf = ctrl.Log.WithName("terraform_controller")
 
 // Reconcile reads that state of the cluster for a Terraform object and makes changes based on the state read
 // and what is in the Terraform.Spec
-// TODO(user): Modify this Reconcile function to implement your Controller logic.  This example creates
-// a Pod as an example
 // Note:
 // The Controller will requeue the Request to be processed again if the returned error is non-nil or
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
 func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
-	reqLogger := r.Log.WithValues("Terraform", request.NamespacedName)
-	reqLogger.V(2).Info("Reconciling Terraform")
+	reconcilerID := string(uuid.NewUUID())
+	reqLogger := r.Log.WithValues("Terraform", request.NamespacedName, "id", reconcilerID)
+	lockKey := request.String() + "-reconcile-lock"
+	lockOwner, lockFound := r.Cache.Get(lockKey)
+	if lockFound {
+		reqLogger.Info(fmt.Sprintf("Request is locked by '%s'", lockOwner.(string)))
+		return reconcile.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	r.Cache.Set(lockKey, reconcilerID, -1)
+	defer r.Cache.Delete(lockKey)
+	reqLogger.V(2).Info("Request has acquired reconcile lock")
 
-	// Check for the resource's existance
 	tf := &tfv1alpha1.Terraform{}
 	err := r.Client.Get(ctx, request.NamespacedName, tf)
 	if err != nil {
@@ -685,7 +698,7 @@ func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
 // IgnoreDelete is true, the finalizer is removed. When IgnoreDelete is false,
 // the finalizer is added.
 //
-// The finalizer will be responsible for kicking off the destroy workflow.
+// The finalizer will be responsible for starting the destroy-workflow.
 func updateFinalizer(tf *tfv1alpha1.Terraform) bool {
 	finalizers := tf.GetFinalizers()
 

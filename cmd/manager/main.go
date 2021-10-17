@@ -4,16 +4,17 @@ import (
 	"context"
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
-
 	"github.com/isaaguilar/terraform-operator/pkg/apis"
 	"github.com/isaaguilar/terraform-operator/pkg/controllers"
+	localcache "github.com/patrickmn/go-cache"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -36,11 +37,13 @@ func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
+	var maxConcurrentReconciles int
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 1, "The max number of concurrent Reconciles for the controller")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -48,6 +51,7 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	c := localcache.New(60*time.Second, 3600*time.Second)
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
@@ -63,10 +67,12 @@ func main() {
 	}
 
 	if err = (&controllers.ReconcileTerraform{
-		Client:   mgr.GetClient(),
-		Log:      ctrl.Log.WithName("terraform_controller"),
-		Recorder: mgr.GetEventRecorderFor("terraform-controller"),
-		Scheme:   mgr.GetScheme(),
+		Client:                  mgr.GetClient(),
+		Log:                     ctrl.Log.WithName("terraform_controller"),
+		Recorder:                mgr.GetEventRecorderFor("terraform-controller"),
+		Scheme:                  mgr.GetScheme(),
+		MaxConcurrentReconciles: maxConcurrentReconciles,
+		Cache:                   c,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Cluster")
 		os.Exit(1)
