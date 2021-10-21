@@ -12,7 +12,7 @@ DOCKER_REPO=${DOCKER_REPO:-"isaaguilar"}
 ## Build setup-runner
 ##
 export USER_UID=2000
-export DOCKER_IMAGE="$DOCKER_REPO/setup-runner-alphav4:1.0.0"
+export DOCKER_IMAGE="$DOCKER_REPO/setup-runner-alphav5:1.0.0"
 printf "\n\n----------------\nBuilding $DOCKER_IMAGE\n"
 
 envsubst < setup.Dockerfile > temp

@@ -7,6 +7,9 @@ if stat "$TFO_SSH"/* >/dev/null 2>/dev/null; then
   chmod -R 0600 "$TFO_ROOT_PATH"/.ssh/*
 fi
 
+out="$TFO_ROOT_PATH"/generations/$TFO_GENERATION
+mkdir -p "$out"
+
 if [[ -d "$TFO_MAIN_MODULE" ]]; then
     rm -rf "$TFO_MAIN_MODULE"
 fi
