@@ -128,6 +128,7 @@ type RunOptions struct {
 	moduleConfigMaps                        []string
 	namespace                               string
 	name                                    string
+	versionedName                           string
 	envVars                                 []corev1.EnvVar
 	credentials                             []tfv1alpha1.Credentials
 	stack                                   ParsedAddress
@@ -154,6 +155,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	// TODO Read the tfstate and decide IF_NEW_RESOURCE based on that
 	// applyAction := false
 	name := tf.Status.PodNamePrefix
+	versionedName := name + "-v" + fmt.Sprint(tf.Generation)
 	terraformRunner := "isaaguilar/tf-runner-alphav4"
 	terraformRunnerPullPolicy := corev1.PullIfNotPresent
 	terraformVersion := "1.0.2"
@@ -162,7 +164,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	scriptRunnerPullPolicy := corev1.PullIfNotPresent
 	scriptRunnerVersion := "1.0.0"
 
-	setupRunner := "isaaguilar/setup-runner-alphav4"
+	setupRunner := "isaaguilar/setup-runner-alphav5"
 	setupRunnerPullPolicy := corev1.PullIfNotPresent
 	setupRunnerVersion := "1.0.0"
 
@@ -174,7 +176,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	if serviceAccount == "" {
 		// By prefixing the service account with "tf-", IRSA roles can use wildcard
 		// "tf-*" service account for AWS credentials.
-		serviceAccount = "tf-" + name
+		serviceAccount = "tf-" + versionedName
 	}
 
 	if tf.Spec.TerraformRunner != "" {
@@ -211,6 +213,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	return RunOptions{
 		namespace:                               tf.Namespace,
 		name:                                    name,
+		versionedName:                           versionedName,
 		envVars:                                 tf.Spec.Env,
 		credentials:                             credentials,
 		terraformVersion:                        terraformVersion,
@@ -389,7 +392,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	// Check for the current stage pod
 	inNamespace := client.InNamespace(tf.Namespace)
 	f := fields.Set{
-		"metadata.generateName": fmt.Sprintf("%s-%s-", tf.Status.PodNamePrefix, podType),
+		"metadata.generateName": fmt.Sprintf("%s-%s-", tf.Status.PodNamePrefix+"-v"+fmt.Sprint(generation), podType),
 	}
 	labels := map[string]string{
 		"tfGeneration": fmt.Sprintf("%d", generation),
@@ -1126,14 +1129,14 @@ func (r ReconcileTerraform) deleteConfigMapIfExists(ctx context.Context, name, n
 
 func (r ReconcileTerraform) createConfigMap(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
 	kind := "ConfigMap"
-	err := r.deleteConfigMapIfExists(ctx, runOpts.name, runOpts.namespace)
-	if err != nil {
-		return err
-	}
 
 	resource := runOpts.generateConfigMap()
 	controllerutil.SetControllerReference(tf, resource, r.Scheme)
 
+	err := r.deleteConfigMapIfExists(ctx, resource.Name, resource.Namespace)
+	if err != nil {
+		return err
+	}
 	err = r.Client.Create(ctx, resource)
 	if err != nil {
 		r.Recorder.Event(tf, "Warning", fmt.Sprintf("%sCreateError", kind), fmt.Sprintf("Could not create %s %v", kind, err))
@@ -1175,13 +1178,14 @@ func (r ReconcileTerraform) deleteSecretIfExists(ctx context.Context, name, name
 
 func (r ReconcileTerraform) createSecret(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
 	kind := "Secret"
-	err := r.deleteSecretIfExists(ctx, runOpts.name, runOpts.namespace)
-	if err != nil {
-		return err
-	}
 
 	resource := runOpts.generateSecret()
 	controllerutil.SetControllerReference(tf, resource, r.Scheme)
+
+	err := r.deleteSecretIfExists(ctx, resource.Name, resource.Namespace)
+	if err != nil {
+		return err
+	}
 
 	err = r.Client.Create(ctx, resource)
 	if err != nil {
@@ -1224,14 +1228,14 @@ func (r ReconcileTerraform) deleteServiceAccountIfExists(ctx context.Context, na
 
 func (r ReconcileTerraform) createServiceAccount(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
 	kind := "ServiceAccount"
-	err := r.deleteServiceAccountIfExists(ctx, runOpts.serviceAccount, runOpts.namespace)
-	if err != nil {
-		return err
-	}
 
 	resource := runOpts.generateServiceAccount()
 	controllerutil.SetControllerReference(tf, resource, r.Scheme)
 
+	err := r.deleteServiceAccountIfExists(ctx, resource.Name, resource.Namespace)
+	if err != nil {
+		return err
+	}
 	err = r.Client.Create(ctx, resource)
 	if err != nil {
 		r.Recorder.Event(tf, "Warning", fmt.Sprintf("%sCreateError", kind), fmt.Sprintf("Could not create %s %v", kind, err))
@@ -1272,14 +1276,14 @@ func (r ReconcileTerraform) deleteRoleIfExists(ctx context.Context, name, namesp
 
 func (r ReconcileTerraform) createRole(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
 	kind := "Role"
-	err := r.deleteRoleIfExists(ctx, runOpts.name, runOpts.namespace)
-	if err != nil {
-		return err
-	}
 
 	resource := runOpts.generateRole()
 	controllerutil.SetControllerReference(tf, resource, r.Scheme)
 
+	err := r.deleteRoleIfExists(ctx, resource.Name, resource.Namespace)
+	if err != nil {
+		return err
+	}
 	err = r.Client.Create(ctx, resource)
 	if err != nil {
 		r.Recorder.Event(tf, "Warning", fmt.Sprintf("%sCreateError", kind), fmt.Sprintf("Could not create %s %v", kind, err))
@@ -1320,14 +1324,14 @@ func (r ReconcileTerraform) deleteRoleBindingIfExists(ctx context.Context, name,
 
 func (r ReconcileTerraform) createRoleBinding(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
 	kind := "RoleBinding"
-	err := r.deleteRoleBindingIfExists(ctx, runOpts.name, runOpts.namespace)
-	if err != nil {
-		return err
-	}
 
 	resource := runOpts.generateRoleBinding()
 	controllerutil.SetControllerReference(tf, resource, r.Scheme)
 
+	err := r.deleteRoleBindingIfExists(ctx, resource.Name, resource.Namespace)
+	if err != nil {
+		return err
+	}
 	err = r.Client.Create(ctx, resource)
 	if err != nil {
 		r.Recorder.Event(tf, "Warning", fmt.Sprintf("%sCreateError", kind), fmt.Sprintf("Could not create %s %v", kind, err))
@@ -1386,7 +1390,7 @@ func (r RunOptions) generateConfigMap() *corev1.ConfigMap {
 
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.name,
+			Name:      r.versionedName,
 			Namespace: r.namespace,
 		},
 		Data: r.configMapData,
@@ -1408,7 +1412,7 @@ func (r RunOptions) generateServiceAccount() *corev1.ServiceAccount {
 
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        r.serviceAccount,
+			Name:        r.serviceAccount, // "tf-" + r.versionedName
 			Namespace:   r.namespace,
 			Annotations: annotations,
 		},
@@ -1466,7 +1470,7 @@ func (r RunOptions) generateRole() *rbacv1.Role {
 
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.name,
+			Name:      r.versionedName,
 			Namespace: r.namespace,
 		},
 		Rules: rules,
@@ -1477,7 +1481,7 @@ func (r RunOptions) generateRole() *rbacv1.Role {
 func (r RunOptions) generateRoleBinding() *rbacv1.RoleBinding {
 	rb := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.name,
+			Name:      r.versionedName,
 			Namespace: r.namespace,
 		},
 		Subjects: []rbacv1.Subject{
@@ -1489,7 +1493,7 @@ func (r RunOptions) generateRoleBinding() *rbacv1.RoleBinding {
 		},
 		RoleRef: rbacv1.RoleRef{
 			Kind:     "Role",
-			Name:     r.name,
+			Name:     r.versionedName,
 			APIGroup: "rbac.authorization.k8s.io",
 		},
 	}
@@ -1761,14 +1765,13 @@ func (r RunOptions) generatePVC(size string) *corev1.PersistentVolumeClaim {
 
 func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, isTFRunner bool, generation int64) *corev1.Pod {
 	pod := &corev1.Pod{}
-	id := r.name
-	generateName := id + "-" + string(podType) + "-"
+	generateName := r.versionedName + "-" + string(podType) + "-"
 
 	envs := r.envVars
 	envs = append(envs, []corev1.EnvVar{
 		{
 			Name:  "TFO_RUNNER",
-			Value: id,
+			Value: r.versionedName,
 		},
 		{
 			Name:  "TFO_NAMESPACE",
@@ -1780,7 +1783,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		},
 		{
 			Name:  "TFO_MAIN_MODULE",
-			Value: "/home/tfo-runner/main",
+			Value: "/home/tfo-runner/generations/" + fmt.Sprint(generation) + "/main",
 		},
 	}...)
 
@@ -1793,7 +1796,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 				// 		for the plan.
 				//
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: id,
+					ClaimName: r.name,
 					ReadOnly:  false,
 				},
 				//
@@ -1879,7 +1882,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{
-						Name: id,
+						Name: r.versionedName,
 					},
 				},
 			},
@@ -1904,7 +1907,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		Name: "gitaskpass",
 		VolumeSource: corev1.VolumeSource{
 			Secret: &corev1.SecretVolumeSource{
-				SecretName: id,
+				SecretName: r.versionedName,
 				Optional:   &optional,
 				Items: []corev1.KeyToPath{
 					{
@@ -1949,7 +1952,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 			Name: sshMountName,
 			VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{
-					SecretName:  id,
+					SecretName:  r.versionedName,
 					DefaultMode: &mode,
 					Optional:    &optional,
 					Items:       sshConfigItems,
@@ -2122,15 +2125,15 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		RunAsNonRoot: &runAsNonRoot,
 	}
 	if isTFRunner {
-		terraformRunnerEnvs = append(envs, corev1.EnvVar{
+		terraformRunnerEnvs = append(terraformRunnerEnvs, corev1.EnvVar{
 			Name:  "TFO_RUNNER",
 			Value: string(podType),
 		})
-		setupRunnerEnvs = append(envs, corev1.EnvVar{
+		setupRunnerEnvs = append(setupRunnerEnvs, corev1.EnvVar{
 			Name:  "TFO_RUNNER",
 			Value: string(podType),
 		})
-		scriptRunnerEnvs = append(envs, corev1.EnvVar{
+		scriptRunnerEnvs = append(scriptRunnerEnvs, corev1.EnvVar{
 			Name:  "TFO_RUNNER",
 			Value: string(podType),
 		})
@@ -2159,7 +2162,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		}
 
 		if preScriptPodType != "" {
-			scriptRunnerEnvs = append(envs, corev1.EnvVar{
+			scriptRunnerEnvs = append(scriptRunnerEnvs, corev1.EnvVar{
 				Name:  "TFO_SCRIPT",
 				Value: string(preScriptPodType),
 			})
@@ -2175,7 +2178,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		}
 
 	} else {
-		scriptRunnerEnvs = append(envs, corev1.EnvVar{
+		scriptRunnerEnvs = append(scriptRunnerEnvs, corev1.EnvVar{
 			Name:  "TFO_SCRIPT",
 			Value: string(podType),
 		})
@@ -2272,28 +2275,33 @@ func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *
 			return fmt.Errorf("could not find PersistentVolumeClaim '%s'", lookupKey)
 		}
 
-		if _, found, err := r.checkConfigMapExists(ctx, lookupKey); err != nil {
-			return err
-		} else if !found {
-			return fmt.Errorf("could not find ConfigMap '%s'", lookupKey)
+		lookupVersionedKey := types.NamespacedName{
+			Name:      runOpts.versionedName,
+			Namespace: runOpts.namespace,
 		}
 
-		if _, found, err := r.checkSecretExists(ctx, lookupKey); err != nil {
+		if _, found, err := r.checkConfigMapExists(ctx, lookupVersionedKey); err != nil {
 			return err
 		} else if !found {
-			return fmt.Errorf("could not find Secret '%s'", lookupKey)
+			return fmt.Errorf("could not find ConfigMap '%s'", lookupVersionedKey)
 		}
 
-		if _, found, err := r.checkRoleBindingExists(ctx, lookupKey); err != nil {
+		if _, found, err := r.checkSecretExists(ctx, lookupVersionedKey); err != nil {
 			return err
 		} else if !found {
-			return fmt.Errorf("could not find RoleBinding '%s'", lookupKey)
+			return fmt.Errorf("could not find Secret '%s'", lookupVersionedKey)
 		}
 
-		if _, found, err := r.checkRoleExists(ctx, lookupKey); err != nil {
+		if _, found, err := r.checkRoleBindingExists(ctx, lookupVersionedKey); err != nil {
 			return err
 		} else if !found {
-			return fmt.Errorf("could not find Role '%s'", lookupKey)
+			return fmt.Errorf("could not find RoleBinding '%s'", lookupVersionedKey)
+		}
+
+		if _, found, err := r.checkRoleExists(ctx, lookupVersionedKey); err != nil {
+			return err
+		} else if !found {
+			return fmt.Errorf("could not find Role '%s'", lookupVersionedKey)
 		}
 
 		serviceAccountLookupKey := types.NamespacedName{
@@ -2752,7 +2760,7 @@ func tarBinaryData(fullpath, filename string) (map[string][]byte, error) {
 func (r RunOptions) generateSecret() *corev1.Secret {
 	secretObject := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.name,
+			Name:      r.versionedName,
 			Namespace: r.namespace,
 		},
 		Data: r.secretData,
