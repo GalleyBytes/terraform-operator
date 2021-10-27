@@ -547,11 +547,11 @@ func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
 	tfIsFinalizing := utils.ListContainsStr(deletePhases, string(tf.Status.Phase))
 	tfIsNotFinalizing := !tfIsFinalizing
 
-	deletePodTypes := []string{
-		string(tfv1alpha1.PodPreInitDelete),
-		string(tfv1alpha1.PodInitDelete),
-		string(tfv1alpha1.PodPostInitDelete),
-	}
+	// deletePodTypes := []string{
+	// 	string(tfv1alpha1.PodPreInitDelete),
+	// 	string(tfv1alpha1.PodInitDelete),
+	// 	string(tfv1alpha1.PodPostInitDelete),
+	// }
 	initDelete := tf.Status.Phase == tfv1alpha1.PhaseInitDelete
 
 	var podType tfv1alpha1.PodType
@@ -567,20 +567,22 @@ func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
 	currentStagePodType := currentStage.PodType
 	currentStageCanNotBeInterrupted := currentStage.Interruptible == tfv1alpha1.CanNotBeInterrupt
 	currentStageIsRunning := currentStage.State == tfv1alpha1.StateInProgress
+	isNewGeneration := currentStage.Generation != tf.Generation
 
 	// resource status
 	if currentStageCanNotBeInterrupted && currentStageIsRunning {
 		// Cannot change to the next stage becuase the current stage cannot be
 		// interrupted and is currently running
 		isNewStage = false
-	} else if currentStage.Generation != tf.Generation && tfIsNotFinalizing {
+	} else if isNewGeneration && tfIsNotFinalizing {
 		// The current generation has changed and this is the first pod in the
 		// normal terraform workflow
 		isNewStage = true
 		reason = "GENERATION_CHANGE"
 		podType = tfv1alpha1.PodInit
 
-	} else if initDelete && !utils.ListContainsStr(deletePodTypes, string(currentStagePodType)) {
+		// } else if initDelete && !utils.ListContainsStr(deletePodTypes, string(currentStagePodType)) {
+	} else if initDelete && isNewGeneration {
 		// The tf resource is marked for deletion and this is the first pod
 		// in the terraform destroy workflow.
 		isNewStage = true
@@ -846,8 +848,9 @@ func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, instance *tf
 func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Terraform) error {
 	reqLogger := r.Log.WithValues("Terraform", types.NamespacedName{Name: tf.Name, Namespace: tf.Namespace}.String())
 	n := len(tf.Status.Stages)
-	isNewGeneration := tf.Status.Stages[n-1].Reason == "GENERATION_CHANGE"
-	isFirstInstall := tf.Status.Stages[n-1].Reason == "TF_RESOURCE_CREATED"
+	reason := tf.Status.Stages[n-1].Reason
+	isNewGeneration := reason == "GENERATION_CHANGE" || reason == "TF_RESOURCE_DELETED"
+	isFirstInstall := reason == "TF_RESOURCE_CREATED"
 	isChanged := isNewGeneration || isFirstInstall
 	// r.Recorder.Event(tf, "Normal", "InitializeJobCreate", fmt.Sprintf("Setting up a Job"))
 	// TODO(user): Add the cleanup steps that the operator
@@ -2147,7 +2150,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 			VolumeMounts:    volumeMounts,
 		})
 
-		if podType == tfv1alpha1.PodInit {
+		if podType == tfv1alpha1.PodInit || podType == tfv1alpha1.PodInitDelete {
 			// setup once per generation
 
 			initContainers = append(initContainers, corev1.Container{
@@ -2232,8 +2235,9 @@ func (r *RunOptions) getOrCreateEnv(name, value string) {
 func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *tfv1alpha1.Terraform, runOpts RunOptions) (err error) {
 
 	n := len(tf.Status.Stages)
-	isNewGeneration := tf.Status.Stages[n-1].Reason == "GENERATION_CHANGE"
-	isFirstInstall := tf.Status.Stages[n-1].Reason == "TF_RESOURCE_CREATED"
+	reason := tf.Status.Stages[n-1].Reason
+	isNewGeneration := reason == "GENERATION_CHANGE" || reason == "TF_RESOURCE_DELETED"
+	isFirstInstall := reason == "TF_RESOURCE_CREATED"
 
 	if isFirstInstall || isNewGeneration {
 		if err := r.createPVC(ctx, tf, runOpts); err != nil {
