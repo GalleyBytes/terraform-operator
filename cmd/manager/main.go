@@ -10,6 +10,7 @@ import (
 	"github.com/isaaguilar/terraform-operator/pkg/apis"
 	"github.com/isaaguilar/terraform-operator/pkg/controllers"
 	localcache "github.com/patrickmn/go-cache"
+	"go.uber.org/zap/zapcore"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -46,6 +47,7 @@ func main() {
 	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 1, "The max number of concurrent Reconciles for the controller")
 	opts := zap.Options{
 		Development: true,
+		Level:       zapcore.DebugLevel,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()

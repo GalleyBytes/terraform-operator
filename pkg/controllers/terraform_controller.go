@@ -1,19 +1,11 @@
 package controllers
 
 import (
-	"archive/tar"
-	"bufio"
-	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
-	"io"
-	"io/ioutil"
-	"log"
-	"net/http"
-	"os"
-	"path/filepath"
-	"sort"
-	"strconv"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -21,16 +13,10 @@ import (
 	"github.com/elliotchance/sshtunnel"
 	"github.com/go-logr/logr"
 	getter "github.com/hashicorp/go-getter"
-	goSocks5 "github.com/isaaguilar/socks5-proxy"
 	tfv1alpha1 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1"
 	"github.com/isaaguilar/terraform-operator/pkg/gitclient"
 	"github.com/isaaguilar/terraform-operator/pkg/utils"
 	localcache "github.com/patrickmn/go-cache"
-	giturl "github.com/whilp/git-urls"
-	"golang.org/x/crypto/ssh"
-	"golang.org/x/net/proxy"
-	gitTransportClient "gopkg.in/src-d/go-git.v4/plumbing/transport/client"
-	githttp "gopkg.in/src-d/go-git.v4/plumbing/transport/http"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -53,23 +39,6 @@ import (
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ReconcileTerraform) SetupWithManager(mgr ctrl.Manager) error {
-	// err := ctrl.NewControllerManagedBy(mgr).
-	// 	For(&tfv1alpha1.Terraform{}).
-	// 	Complete(r)
-	// if err != nil {
-	// 	return err
-	// }
-
-	// err = ctrl.NewControllerManagedBy(mgr).
-	// 	For(&batchv1.Job{}).
-	// 	Watches(&source.Kind{Type: &batchv1.Job{}}, &handler.EnqueueRequestForOwner{
-	// 		IsController: true,
-	// 		OwnerType:    &tfv1alpha1.Terraform{},
-	// 	}).
-	// 	Complete(r)
-	// if err != nil {
-	// 	return err
-	// }
 	controllerOptions := runtimecontroller.Options{
 		MaxConcurrentReconciles: r.MaxConcurrentReconciles,
 	}
@@ -100,16 +69,47 @@ type ReconcileTerraform struct {
 	Cache                   *localcache.Cache
 }
 
+// ParsedAddress uses go-getter's detect mechanism to get the parsed url
+// TODO ParsedAddress can be moved into it's own package
 type ParsedAddress struct {
-	sourcedir string
-	subdirs   []string
-	hash      string
-	protocol  string
-	uri       string
-	host      string
-	port      string
-	user      string
-	repo      string
+	// DetectedScheme is the name of the bin or protocol to use to fetch. For
+	// example, git will be used to fetch git repos (over https or ssh
+	// "protocol").
+	DetectedScheme string `json:"detect"`
+
+	// Path the target path for the downloaded file or directory
+	Path string `json:"path"`
+
+	UseAsVar bool `json:"useAsVar"`
+
+	// Url is the raw address + query
+	Url string `json:"url"`
+
+	// Files are the files to find with a repo.
+	Files []string `json:"files"`
+
+	// Hash is also known as the `ref` query argument. For git this is the
+	// commit-sha or branch-name to checkout.
+	Hash string `json:"hash"`
+
+	// UrlScheme is the protocol of the URL
+	UrlScheme string `json:"protocol"`
+
+	// Uri is the path of the URL after the proto://host.
+	Uri string `json:"uri"`
+
+	// Host is the host of the URL.
+	Host string `json:"host"`
+
+	// Port is the port to use when fetching the URL.
+	Port string `json:"port"`
+
+	// User is the user to use when fetching the URL.
+	User string `json:"user"`
+
+	// Repo when using a SCM is the URL of the repo which is the same as the
+	// URL and omitting the query args.
+	Repo string `json:"repo"`
 }
 
 type GitRepoAccessOptions struct {
@@ -124,9 +124,17 @@ type GitRepoAccessOptions struct {
 	ParsedAddress
 }
 
+type ExportOptions struct {
+	stack       ParsedAddress
+	confPath    string
+	tfvarsPath  string
+	gitUsername string
+	gitEmail    string
+}
+
 type RunOptions struct {
-	moduleConfigMaps                        []string
 	namespace                               string
+	tfName                                  string
 	name                                    string
 	versionedName                           string
 	envVars                                 []corev1.EnvVar
@@ -149,24 +157,26 @@ type RunOptions struct {
 	setupRunnerVersion                      string
 	runnerAnnotations                       map[string]string
 	runnerRules                             []rbacv1.PolicyRule
+	exportOptions                           ExportOptions
 }
 
 func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	// TODO Read the tfstate and decide IF_NEW_RESOURCE based on that
 	// applyAction := false
+	tfName := tf.Name
 	name := tf.Status.PodNamePrefix
 	versionedName := name + "-v" + fmt.Sprint(tf.Generation)
-	terraformRunner := "isaaguilar/tf-runner-alphav4"
+	terraformRunner := "isaaguilar/tf-runner-v5alpha3"
 	terraformRunnerPullPolicy := corev1.PullIfNotPresent
-	terraformVersion := "1.0.2"
+	terraformVersion := "1.0.11"
 
-	scriptRunner := "isaaguilar/script-runner-alphav4"
+	scriptRunner := "isaaguilar/script-runner"
 	scriptRunnerPullPolicy := corev1.PullIfNotPresent
 	scriptRunnerVersion := "1.0.0"
 
-	setupRunner := "isaaguilar/setup-runner-alphav5"
+	setupRunner := "isaaguilar/setup-runner"
 	setupRunnerPullPolicy := corev1.PullIfNotPresent
-	setupRunnerVersion := "1.0.0"
+	setupRunnerVersion := "1.0.1"
 
 	runnerAnnotations := tf.Spec.RunnerAnnotations
 	runnerRules := tf.Spec.RunnerRules
@@ -212,6 +222,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 
 	return RunOptions{
 		namespace:                               tf.Namespace,
+		tfName:                                  tfName,
 		name:                                    name,
 		versionedName:                           versionedName,
 		envVars:                                 tf.Spec.Env,
@@ -236,17 +247,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	}
 }
 
-func (r *RunOptions) updateDownloadedModules(module string) {
-	r.moduleConfigMaps = append(r.moduleConfigMaps, module)
-}
-
-func (r *RunOptions) updateEnvVars(v corev1.EnvVar) {
-	r.envVars = append(r.envVars, v)
-}
-
 const terraformFinalizer = "finalizer.tf.isaaguilar.com"
-
-var logf = ctrl.Log.WithName("terraform_controller")
 
 // Reconcile reads that state of the cluster for a Terraform object and makes changes based on the state read
 // and what is in the Terraform.Spec
@@ -264,6 +265,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	}
 	r.Cache.Set(lockKey, reconcilerID, -1)
 	defer r.Cache.Delete(lockKey)
+	defer reqLogger.V(2).Info("Request has released reconcile lock")
 	reqLogger.V(2).Info("Request has acquired reconcile lock")
 
 	tf := &tfv1alpha1.Terraform{}
@@ -325,10 +327,11 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 
 	// Add the first stage
 	if len(tf.Status.Stages) == 0 {
-		podType := tfv1alpha1.PodInit
+		podType := tfv1alpha1.PodSetup
 		stageState := tfv1alpha1.StateInitializing
 		interruptible := tfv1alpha1.CanNotBeInterrupt
 		addNewStage(tf, podType, "TF_RESOURCE_CREATED", interruptible, stageState)
+		tf.Status.Exported = tfv1alpha1.ExportedFalse
 		err := r.updateStatus(ctx, tf)
 		if err != nil {
 			return reconcile.Result{}, err
@@ -348,12 +351,12 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		tf.Status.Phase = tfv1alpha1.PhaseInitDelete
 	}
 
-	// Check the status on stages that have not completed
-	for _, stage := range tf.Status.Stages {
-		if stage.State == tfv1alpha1.StateInProgress {
-			// TODO
-		}
-	}
+	// // TODO Check the status on stages that have not completed
+	// for _, stage := range tf.Status.Stages {
+	// 	if stage.State == tfv1alpha1.StateInProgress {
+	//
+	// 	}
+	// }
 
 	if checkSetNewStage(tf) {
 		err := r.updateStatus(ctx, tf)
@@ -370,7 +373,19 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	podType = currentStage.PodType
 	generation = currentStage.Generation
 
+	if tf.Spec.ExportRepo != nil && podType != tfv1alpha1.PodSetup {
+		// Run the export-runner
+		err := r.exportRepo(ctx, tf, generation, reqLogger)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+	}
+
 	if podType == "" {
+		// podType is blank when the terraform workflow has completed for
+		// either create or delete. This updates the status as "completed" on
+		// the resource (or "deleted" which will be used to tell the controller
+		// to remove any finalizers).
 		if tf.Status.Phase == tfv1alpha1.PhaseRunning {
 			tf.Status.Phase = tfv1alpha1.PhaseCompleted
 			err := r.updateStatus(ctx, tf)
@@ -395,7 +410,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		"metadata.generateName": fmt.Sprintf("%s-%s-", tf.Status.PodNamePrefix+"-v"+fmt.Sprint(generation), podType),
 	}
 	labels := map[string]string{
-		"tfGeneration": fmt.Sprintf("%d", generation),
+		"terraforms.tf.isaaguilar.com/generation": fmt.Sprintf("%d", generation),
 	}
 	matchingFields := client.MatchingFields(f)
 	matchingLabels := client.MatchingLabels(labels)
@@ -497,15 +512,10 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	return reconcile.Result{}, nil
 }
 
-// func stageCheck(tf *tfv1alpha1.Terraform) {
-// 	n := len(tf.Status.Stages)
-// 	if tf.Status.Stages[n-1].State == tfv1alpha1.StateComplete {
-// 		// Get the next stage and set to initialize and return after appending
-// 		// the new stage
-// 	}
-// }
-
 func addNewStage(tf *tfv1alpha1.Terraform, podType tfv1alpha1.PodType, reason string, interruptible tfv1alpha1.Interruptible, stageState tfv1alpha1.StageState) {
+	if reason == "GENERATION_CHANGE" {
+		tf.Status.Exported = tfv1alpha1.ExportedFalse
+	}
 	startTime := metav1.NewTime(time.Now())
 	stopTime := metav1.NewTime(time.Unix(0, 0))
 	if stageState == tfv1alpha1.StateComplete {
@@ -538,6 +548,8 @@ func addNewStage(tf *tfv1alpha1.Terraform, podType tfv1alpha1.PodType, reason st
 //
 func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
 	var isNewStage bool
+	var podType tfv1alpha1.PodType
+	var reason string
 
 	deletePhases := []string{
 		string(tfv1alpha1.PhaseDeleted),
@@ -546,23 +558,14 @@ func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
 	}
 	tfIsFinalizing := utils.ListContainsStr(deletePhases, string(tf.Status.Phase))
 	tfIsNotFinalizing := !tfIsFinalizing
-
-	// deletePodTypes := []string{
-	// 	string(tfv1alpha1.PodPreInitDelete),
-	// 	string(tfv1alpha1.PodInitDelete),
-	// 	string(tfv1alpha1.PodPostInitDelete),
-	// }
 	initDelete := tf.Status.Phase == tfv1alpha1.PhaseInitDelete
-
-	var podType tfv1alpha1.PodType
-	var reason string
 	stageState := tfv1alpha1.StateInitializing
 	interruptible := tfv1alpha1.CanBeInterrupt
-	// current stage
+	// n is the last stage which should be the current stage
 	n := len(tf.Status.Stages)
-	if n == 0 {
-		// There should always be at least 1 stage, this shouldn't happen
-	}
+	// if n == 0 {
+	// 	// There should always be at least 1 stage, this shouldn't happen
+	// }
 	currentStage := tf.Status.Stages[n-1]
 	currentStagePodType := currentStage.PodType
 	currentStageCanNotBeInterrupted := currentStage.Interruptible == tfv1alpha1.CanNotBeInterrupt
@@ -579,7 +582,7 @@ func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
 		// normal terraform workflow
 		isNewStage = true
 		reason = "GENERATION_CHANGE"
-		podType = tfv1alpha1.PodInit
+		podType = tfv1alpha1.PodSetup
 
 		// } else if initDelete && !utils.ListContainsStr(deletePodTypes, string(currentStagePodType)) {
 	} else if initDelete && isNewGeneration {
@@ -587,7 +590,7 @@ func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
 		// in the terraform destroy workflow.
 		isNewStage = true
 		reason = "TF_RESOURCE_DELETED"
-		podType = tfv1alpha1.PodInitDelete
+		podType = tfv1alpha1.PodSetupDelete
 		interruptible = tfv1alpha1.CanNotBeInterrupt
 
 	} else if currentStage.State == tfv1alpha1.StateComplete {
@@ -595,6 +598,12 @@ func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
 		reason = ""
 
 		switch currentStagePodType {
+		//
+		// setup
+		//
+		case tfv1alpha1.PodSetup:
+			podType = tfv1alpha1.PodInit
+
 		//
 		// init types
 		//
@@ -641,6 +650,12 @@ func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
 			reason = "COMPLETED_TERRAFORM"
 			podType = tfv1alpha1.PodNil
 			stageState = tfv1alpha1.StateComplete
+
+		//
+		// setup delete
+		//
+		case tfv1alpha1.PodSetupDelete:
+			podType = tfv1alpha1.PodInitDelete
 
 		//
 		// init (delete) types
@@ -766,7 +781,6 @@ func (d GitRepoAccessOptions) TunnelClose(reqLogger logr.Logger) {
 		return
 	}
 	reqLogger.V(1).Info("TunnelClose called but could not find tunnel to close")
-	return
 }
 
 func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, instance *tfv1alpha1.Terraform, k8sclient client.Client) (map[string][]byte, error) {
@@ -847,7 +861,10 @@ func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, instance *tf
 
 func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Terraform) error {
 	reqLogger := r.Log.WithValues("Terraform", types.NamespacedName{Name: tf.Name, Namespace: tf.Namespace}.String())
+	var err error
 	n := len(tf.Status.Stages)
+	podType := tf.Status.Stages[n-1].PodType
+	generation := tf.Status.Stages[n-1].Generation
 	reason := tf.Status.Stages[n-1].Reason
 	isNewGeneration := reason == "GENERATION_CHANGE" || reason == "TF_RESOURCE_DELETED"
 	isFirstInstall := reason == "TF_RESOURCE_CREATED"
@@ -857,36 +874,21 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Ter
 	// needs to do before the CR can be deleted. Examples
 	// of finalizers include performing backups and deleting
 	// resources that are not owned by this CR, like a PVC.
+	scmMap := make(map[string]scmType)
+	for _, v := range tf.Spec.SCMAuthMethods {
+		if v.Git != nil {
+			scmMap[v.Host] = gitScmType
+		}
+	}
 
 	runOpts := newRunOptions(tf)
-	// runOpts.updateEnvVars(corev1.EnvVar{
-	// 	Name:  "DEPLOYMENT",
-	// 	Value: instance.Name,
-	// })
-	// runOpts.namespace = instance.Namespace
-
-	// Stack Download
-	address := tf.Spec.TerraformModule.Address
-	stackRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(tf, address, []string{})
+	runOpts.stack, err = getParsedAddress(tf.Spec.TerraformModule, "", false, scmMap)
 	if err != nil {
-		r.Recorder.Event(tf, "Warning", "ProcessingError", fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err).Error())
-		return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
+		return err
 	}
 
-	// Since we're not going to download this to a configmap, we need to
-	// pass the information to the pod to do it. We should be able to
-	// use stackRepoAccessOptions.parsedAddress and just send that to
-	// the pod's environment vars.
-
-	runOpts.updateDownloadedModules(stackRepoAccessOptions.hash)
-	runOpts.stack = stackRepoAccessOptions.ParsedAddress
-	if runOpts.stack.repo == "" {
-		return fmt.Errorf("Error is parsing terraformModule")
-	}
-
-	// TODO Update secrets only when the generation changes
 	if isChanged {
-		for _, m := range stackRepoAccessOptions.SCMAuthMethods {
+		for _, m := range tf.Spec.SCMAuthMethods {
 			// I think Terraform only allows for one git token. Add the first one
 			// to the job's env vars as GIT_PASSWORD.
 			if m.Git.HTTPS != nil {
@@ -905,86 +907,45 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Ter
 				sshConfigData, err := formatJobSSHConfig(ctx, reqLogger, tf, r.Client)
 				if err != nil {
 					r.Recorder.Event(tf, "Warning", "SSHConfigError", fmt.Errorf("%v", err).Error())
-					return fmt.Errorf("Error setting up sshconfig: %v", err)
+					return fmt.Errorf("error setting up sshconfig: %v", err)
 				}
 				for k, v := range sshConfigData {
 					runOpts.secretData[k] = v
 				}
 
 			}
-			break
+			if m.Git.HTTPS == nil && m.Git.SSH == nil {
+				continue
+			} else {
+				break
+			}
 		}
-	}
 
-	//
-	// TODO
-	//		The following section can have downloads from other sources. This
-	//		can take a few seconds to a few mintues to complete and will block
-	// 		the entire queue until it is completed.
-	//
-	//		Implement a way to run this in the background and signal that the
-	//		configmap is ready for usage which will then trigger the controller
-	//		to go ahead and configure the pods.
-	//
-	tfvars := ""
-	if isChanged {
+		resourceDownloadItems := []ParsedAddress{}
+		// Configure the resourceDownloads in JSON that the setupRunner will
+		// use to download the resources into the main module directory
+
 		// ConfigMap Data only needs to be updated when generation changes
 
-		otherConfigFiles := make(map[string]string)
-		for _, s := range tf.Spec.Sources {
+		for _, s := range tf.Spec.ResourceDownloads {
 			address := strings.TrimSpace(s.Address)
-			extras := s.Extras
-			// Loop thru all the sources in spec.config
-			configRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(tf, address, extras)
+			parsedAddress, err := getParsedAddress(address, s.Path, s.UseAsVar, scmMap)
 			if err != nil {
-				r.Recorder.Event(tf, "Warning", "ConfigError", fmt.Errorf("Error in Spec: %v", err).Error())
-				return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
+				return err
 			}
-			reqLogger.V(1).Info("Setting up download options for config repo access")
-
-			if (tfv1alpha1.ProxyOpts{}) != configRepoAccessOptions.SSHProxy {
-				if strings.Contains(configRepoAccessOptions.protocol, "http") {
-					err := configRepoAccessOptions.startHTTPSProxy(ctx, r.Client, tf.Namespace, reqLogger)
-					if err != nil {
-						reqLogger.Error(err, "failed to start ssh proxy")
-						return err
-					}
-				} else if configRepoAccessOptions.protocol == "ssh" {
-					err := configRepoAccessOptions.startSSHProxy(ctx, r.Client, tf.Namespace, reqLogger)
-					if err != nil {
-						reqLogger.Error(err, "failed to start ssh proxy")
-						return err
-					}
-					defer configRepoAccessOptions.TunnelClose(reqLogger.WithValues("Spec", "source"))
-				}
-			}
-
-			err = configRepoAccessOptions.download(ctx, r.Client, tf.Namespace)
-			if err != nil {
-				r.Recorder.Event(tf, "Warning", "DownloadError", fmt.Errorf("Error in download: %v", err).Error())
-				return fmt.Errorf("Error in download: %v", err)
-			}
-
-			reqLogger.V(1).Info(fmt.Sprintf("Config was downloaded and updated GitRepoAccessOptions: %+v", configRepoAccessOptions))
-
-			tfvarSource, err := configRepoAccessOptions.tfvarFiles()
-			if err != nil {
-				r.Recorder.Event(tf, "Warning", "ReadFileError", fmt.Errorf("Error reading tfvar files: %v", err).Error())
-				return fmt.Errorf("Error in reading tfvarFiles: %v", err)
-			}
-			tfvars += tfvarSource
-
-			otherConfigFiles, err = configRepoAccessOptions.otherConfigFiles()
-			if err != nil {
-				r.Recorder.Event(tf, "Warning", "ReadFileError", fmt.Errorf("Error reading files: %v", err).Error())
-				return fmt.Errorf("Error in reading otherConfigFiles: %v", err)
-			}
+			// b, err := json.Marshal(parsedAddress)
+			// if err != nil {
+			// 	return err
+			// }
+			resourceDownloadItems = append(resourceDownloadItems, parsedAddress)
 		}
-
-		runOpts.configMapData["tfvars"] = tfvars
-		for k, v := range otherConfigFiles {
-			runOpts.configMapData[k] = v
+		b, err := json.Marshal(resourceDownloadItems)
+		if err != nil {
+			return err
 		}
+		resourceDownloads := string(b)
+
+		runOpts.configMapData[".__TFO__ResourceDownloads.json"] = resourceDownloads
 
 		// Override the backend.tf by inserting a custom backend
 		if tf.Spec.CustomBackend != "" {
@@ -1040,24 +1001,8 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Ter
 		}
 	}
 
-	// Flatten all the .tfvars and TF_VAR envs into a single file and push
-	if tf.Spec.ExportRepo != nil && isChanged {
-		e := tf.Spec.ExportRepo
-
-		address := e.Address
-		exportRepoAccessOptions, err := newGitRepoAccessOptionsFromSpec(tf, address, []string{})
-		if err != nil {
-			r.Recorder.Event(tf, "Warning", "ConfigError", fmt.Errorf("Error getting git repo access options: %v", err).Error())
-			return fmt.Errorf("Error in newGitRepoAccessOptionsFromSpec: %v", err)
-		}
-
-		// TODO decide what to do on errors
-		// Closing the tunnel from within this function
-		go exportRepoAccessOptions.commitTfvars(ctx, r.Client, tfvars, e.TFVarsFile, e.ConfFile, tf.Namespace, tf.Spec.CustomBackend, runOpts, reqLogger)
-	}
-
 	// RUN
-	err = r.run(ctx, reqLogger, tf, runOpts)
+	err = r.run(ctx, reqLogger, tf, runOpts, isNewGeneration, isFirstInstall, podType, generation)
 	if err != nil {
 		return err
 	}
@@ -1344,12 +1289,8 @@ func (r ReconcileTerraform) createRoleBinding(ctx context.Context, tf *tfv1alpha
 	return nil
 }
 
-func (r ReconcileTerraform) createPod(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
+func (r ReconcileTerraform) createPod(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions, podType tfv1alpha1.PodType, generation int64) error {
 	kind := "Pod"
-
-	n := len(tf.Status.Stages)
-	podType := tf.Status.Stages[n-1].PodType
-	generation := tf.Status.Stages[n-1].Generation
 
 	tfRunnerPodTypes := []string{
 		string(tfv1alpha1.PodInit),
@@ -1467,9 +1408,7 @@ func (r RunOptions) generateRole() *rbacv1.Role {
 		}
 	}
 
-	for _, rule := range r.runnerRules {
-		rules = append(rules, rule)
-	}
+	rules = append(rules, r.runnerRules...)
 
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1503,250 +1442,6 @@ func (r RunOptions) generateRoleBinding() *rbacv1.RoleBinding {
 	return rb
 }
 
-// func (r RunOptions) generateJob(tfvarsConfigMap *corev1.ConfigMap) *batchv1.Job {
-// 	// reqLogger := log.WithValues("function", "run")
-// 	// reqLogger.Info(fmt.Sprintf("Running job with this setup: %+v", r))
-
-// 	// TF Module
-// 	if r.mainModule == "" {
-// 		r.mainModule = "main_module"
-// 	}
-// 	envs := r.envVars
-// 	envs = append(envs, []corev1.EnvVar{
-// 		{
-// 			Name:  "TFOPS_MAIN_MODULE",
-// 			Value: r.mainModule,
-// 		},
-// 		{
-// 			Name:  "NAMESPACE",
-// 			Value: r.namespace,
-// 		},
-// 	}...)
-// 	tfModules := []corev1.Volume{}
-// 	// Check if stack is in a subdir
-
-// 	if r.stack.repo == "" {
-// 		// TODO This is an error and should not be allowed
-// 		//		Find out where this is not checked and error out
-// 		//		and let the user know the repo is missing (maybe check repo
-// 		// 		validitiy?)
-// 	}
-// 	if r.stack.repo != "" {
-// 		envs = append(envs, []corev1.EnvVar{
-// 			{
-// 				Name:  "STACK_REPO",
-// 				Value: r.stack.repo,
-// 			},
-// 			{
-// 				Name:  "STACK_REPO_HASH",
-// 				Value: r.stack.hash,
-// 			},
-// 		}...)
-// 		if r.tokenSecret != nil {
-// 			if r.tokenSecret.Name != "" {
-// 				envs = append(envs, []corev1.EnvVar{
-// 					{
-// 						Name: "GIT_PASSWORD",
-// 						ValueFrom: &corev1.EnvVarSource{
-// 							SecretKeyRef: &corev1.SecretKeySelector{
-// 								LocalObjectReference: corev1.LocalObjectReference{
-// 									Name: r.tokenSecret.Name,
-// 								},
-// 								Key: r.tokenSecret.Key,
-// 							},
-// 						},
-// 					},
-// 				}...)
-// 			}
-// 		}
-
-// 		// r.tokenSecret.Name
-// 		// if r.token != "" {
-
-// 		// }
-// 		if len(r.stack.subdirs) > 0 {
-// 			envs = append(envs, []corev1.EnvVar{
-// 				{
-// 					Name:  "STACK_REPO_SUBDIR",
-// 					Value: r.stack.subdirs[0],
-// 				},
-// 			}...)
-// 		}
-// 	} else {
-// 		for i, v := range r.moduleConfigMaps {
-// 			tfModules = append(tfModules, []corev1.Volume{
-// 				{
-// 					Name: v,
-// 					VolumeSource: corev1.VolumeSource{
-// 						ConfigMap: &corev1.ConfigMapVolumeSource{
-// 							LocalObjectReference: corev1.LocalObjectReference{
-// 								Name: v,
-// 							},
-// 						},
-// 					},
-// 				},
-// 			}...)
-
-// 			envs = append(envs, []corev1.EnvVar{
-// 				{
-// 					Name:  "TFOPS_MODULE" + strconv.Itoa(i),
-// 					Value: v,
-// 				},
-// 			}...)
-// 		}
-// 	}
-
-// 	// Check if is new resource
-// 	if r.isNewResource {
-// 		envs = append(envs, []corev1.EnvVar{
-// 			{
-// 				Name:  "IS_NEW_RESOURCE",
-// 				Value: "true",
-// 			},
-// 		}...)
-// 	}
-
-// 	// This resource is used to create a volumeMount which have 63 char limits.
-// 	// Truncate the instance.Name enough to fit "-tfvars" wich will be the
-// 	// configmapName and volumeMount name.
-// 	tfvarsConfigMapVolumeName := utils.TruncateResourceName(r.name, 56) + "-tfvars"
-// 	tfVars := []corev1.Volume{}
-// 	tfVars = append(tfVars, []corev1.Volume{
-// 		{
-// 			Name: tfvarsConfigMapVolumeName,
-// 			VolumeSource: corev1.VolumeSource{
-// 				ConfigMap: &corev1.ConfigMapVolumeSource{
-// 					LocalObjectReference: corev1.LocalObjectReference{
-// 						Name: tfvarsConfigMap.Name,
-// 					},
-// 				},
-// 			},
-// 		},
-// 	}...)
-
-// 	envs = append(envs, []corev1.EnvVar{
-// 		{
-// 			Name:  "TFOPS_VARFILE_FLAG",
-// 			Value: "-var-file /tfops/" + tfvarsConfigMapVolumeName + "/tfvars",
-// 		},
-// 		{
-// 			Name:  "TFOPS_CONFIGMAP_PATH",
-// 			Value: "/tfops/" + tfvarsConfigMapVolumeName,
-// 		},
-// 	}...)
-
-// 	volumes := append(tfModules, tfVars...)
-
-// 	volumeMounts := []corev1.VolumeMount{}
-// 	for _, v := range volumes {
-// 		// setting up volumeMounts
-// 		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
-// 			{
-// 				Name:      v.Name,
-// 				MountPath: "/tfops/" + v.Name,
-// 			},
-// 		}...)
-// 	}
-
-// 	if r.sshConfig != "" {
-// 		mode := int32(0600)
-// 		volumes = append(volumes, []corev1.Volume{
-// 			{
-// 				Name: "ssh-key",
-// 				VolumeSource: corev1.VolumeSource{
-// 					Secret: &corev1.SecretVolumeSource{
-// 						SecretName:  r.sshConfig,
-// 						DefaultMode: &mode,
-// 					},
-// 				},
-// 			},
-// 		}...)
-// 		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
-// 			{
-// 				Name:      "ssh-key",
-// 				MountPath: "/root/.ssh/",
-// 			},
-// 		}...)
-// 	}
-
-// 	annotations := make(map[string]string)
-// 	envFrom := []corev1.EnvFromSource{}
-
-// 	for _, c := range r.credentials {
-// 		if c.AWSCredentials.KIAM != "" {
-// 			annotations["iam.amazonaws.com/role"] = c.AWSCredentials.KIAM
-// 		}
-// 	}
-
-// 	for _, c := range r.credentials {
-// 		if (tfv1alpha1.SecretNameRef{}) != c.SecretNameRef {
-// 			envFrom = append(envFrom, []corev1.EnvFromSource{
-// 				{
-// 					SecretRef: &corev1.SecretEnvSource{
-// 						LocalObjectReference: corev1.LocalObjectReference{
-// 							Name: c.SecretNameRef.Name,
-// 						},
-// 					},
-// 				},
-// 			}...)
-// 		}
-// 	}
-
-// 	// Create a manual selector for jobs (lets job-names be more than 63 chars)
-// 	manualSelector := true
-
-// 	// Custom UUID for label purposes
-// 	uid := uuid.NewUUID()
-
-// 	// The job-name label must be <64 chars
-// 	labels := make(map[string]string)
-// 	labels["tf-job"] = string(uid)
-// 	labels["job-name"] = r.jobNameLabel
-
-// 	// Schedule a job that will execute the terraform plan
-// 	job := &batchv1.Job{
-// 		ObjectMeta: metav1.ObjectMeta{
-// 			Name:      r.name,
-// 			Namespace: r.namespace,
-// 		},
-// 		Spec: batchv1.JobSpec{
-// 			ManualSelector: &manualSelector,
-// 			Selector: &metav1.LabelSelector{
-// 				MatchLabels: labels,
-// 			},
-// 			Template: corev1.PodTemplateSpec{
-// 				ObjectMeta: metav1.ObjectMeta{
-// 					Annotations: annotations,
-// 					Labels:      labels,
-// 				},
-// 				Spec: corev1.PodSpec{
-// 					ServiceAccountName: r.serviceAccount,
-// 					RestartPolicy:      "OnFailure",
-// 					Containers: []corev1.Container{
-// 						{
-// 							Name: "tf",
-// 							// TODO Version docker images more specifically than static versions
-// 							Image:           r.terraformRunner + ":" + r.terraformVersion,
-// 							ImagePullPolicy: r.terraformRunnerPullPolicy,
-// 							EnvFrom:         envFrom,
-// 							Env: append(envs, []corev1.EnvVar{
-// 								{
-// 									Name:  "INSTANCE_NAME",
-// 									Value: r.name,
-// 								},
-// 							}...),
-// 							VolumeMounts: volumeMounts,
-// 						},
-// 					},
-// 					Volumes: volumes,
-// 				},
-// 			},
-// 		},
-// 	}
-
-// 	return job
-// }
-
 func (r RunOptions) generatePVC(size string) *corev1.PersistentVolumeClaim {
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1767,14 +1462,20 @@ func (r RunOptions) generatePVC(size string) *corev1.PersistentVolumeClaim {
 }
 
 func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, isTFRunner bool, generation int64) *corev1.Pod {
-	pod := &corev1.Pod{}
+
 	generateName := r.versionedName + "-" + string(podType) + "-"
+
+	generationPath := "/home/tfo-runner/generations/" + fmt.Sprint(generation)
 
 	envs := r.envVars
 	envs = append(envs, []corev1.EnvVar{
 		{
 			Name:  "TFO_RUNNER",
 			Value: r.versionedName,
+		},
+		{
+			Name:  "TFO_RESOURCE",
+			Value: r.tfName,
 		},
 		{
 			Name:  "TFO_NAMESPACE",
@@ -1785,14 +1486,22 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 			Value: fmt.Sprintf("%d", generation),
 		},
 		{
+			Name:  "TFO_GENERATION_PATH",
+			Value: generationPath,
+		},
+		{
 			Name:  "TFO_MAIN_MODULE",
-			Value: "/home/tfo-runner/generations/" + fmt.Sprint(generation) + "/main",
+			Value: generationPath + "/main",
+		},
+		{
+			Name:  "TFO_TERRAFORM_VERSION",
+			Value: r.terraformVersion,
 		},
 	}...)
 
 	volumes := []corev1.Volume{
 		{
-			Name: "tfrun",
+			Name: "tfohome",
 			VolumeSource: corev1.VolumeSource{
 				//
 				// TODO add an option to the tf to use host or pvc
@@ -1817,7 +1526,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 	}
 	volumeMounts := []corev1.VolumeMount{
 		{
-			Name:      "tfrun",
+			Name:      "tfohome",
 			MountPath: "/home/tfo-runner",
 			ReadOnly:  false,
 		},
@@ -1836,14 +1545,14 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 	// 	// 		validitiy?)
 	// }
 
-	ref := r.stack.hash
+	ref := r.stack.Hash
 	if ref == "" {
 		ref = "master"
 	}
 	envs = append(envs, []corev1.EnvVar{
 		{
 			Name:  "TFO_MAIN_MODULE_REPO",
-			Value: r.stack.repo,
+			Value: r.stack.Repo,
 		},
 		{
 			Name:  "TFO_MAIN_MODULE_REPO_REF",
@@ -1855,8 +1564,8 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 	// if r.token != "" {
 
 	// }
-	if len(r.stack.subdirs) > 0 {
-		value := r.stack.subdirs[0]
+	if len(r.stack.Files) > 0 {
+		value := r.stack.Files[0]
 		if value == "" {
 			value = "."
 		}
@@ -1980,9 +1689,11 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 	terraformRunnerEnvs := make([]corev1.EnvVar, len(envs))
 	scriptRunnerEnvs := make([]corev1.EnvVar, len(envs))
 	setupRunnerEnvs := make([]corev1.EnvVar, len(envs))
+	exportRunnerEnvs := make([]corev1.EnvVar, len(envs))
 	copy(terraformRunnerEnvs, envs)
 	copy(scriptRunnerEnvs, envs)
 	copy(setupRunnerEnvs, envs)
+	copy(exportRunnerEnvs, envs)
 
 	executionScript := "tfo_runner.sh"
 	if r.terraformRunnerExecutionScriptConfigMap != nil {
@@ -2111,9 +1822,15 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 	}
 
 	labels := make(map[string]string)
-	labels["tfGeneration"] = fmt.Sprintf("%d", generation)
+	labels["terraforms.tf.isaaguilar.com/generation"] = fmt.Sprintf("%d", generation)
+	labels["terraforms.tf.isaaguilar.com/resourceName"] = r.tfName
+	labels["terraforms.tf.isaaguilar.com/podPrefix"] = r.name
+	labels["terraforms.tf.isaaguilar.com/terraformVersion"] = r.terraformVersion
+	labels["app.kubernetes.io/name"] = "terraform-operator"
+	labels["app.kubernetes.io/component"] = "terraform-operator-runner"
+	labels["app.kubernetes.io/instance"] = string(podType)
+	labels["app.kubernetes.io/created-by"] = "controller"
 
-	// Schedule a job that will execute the terraform plan
 	initContainers := []corev1.Container{}
 	containers := []corev1.Container{}
 
@@ -2127,12 +1844,24 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		RunAsGroup:   &group,
 		RunAsNonRoot: &runAsNonRoot,
 	}
-	if isTFRunner {
-		terraformRunnerEnvs = append(terraformRunnerEnvs, corev1.EnvVar{
+
+	if podType == tfv1alpha1.PodSetup || podType == tfv1alpha1.PodSetupDelete {
+		// setup once per generation
+		setupRunnerEnvs = append(setupRunnerEnvs, corev1.EnvVar{
 			Name:  "TFO_RUNNER",
 			Value: string(podType),
 		})
-		setupRunnerEnvs = append(setupRunnerEnvs, corev1.EnvVar{
+		containers = append(containers, corev1.Container{
+			Name:            "tfo-setup",
+			SecurityContext: securityContext,
+			Image:           r.setupRunner + ":" + r.setupRunnerVersion,
+			ImagePullPolicy: r.setupRunnerPullPolicy,
+			EnvFrom:         envFrom,
+			Env:             setupRunnerEnvs,
+			VolumeMounts:    volumeMounts,
+		})
+	} else if isTFRunner {
+		terraformRunnerEnvs = append(terraformRunnerEnvs, corev1.EnvVar{
 			Name:  "TFO_RUNNER",
 			Value: string(podType),
 		})
@@ -2150,20 +1879,6 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 			VolumeMounts:    volumeMounts,
 		})
 
-		if podType == tfv1alpha1.PodInit || podType == tfv1alpha1.PodInitDelete {
-			// setup once per generation
-
-			initContainers = append(initContainers, corev1.Container{
-				Name:            "tfo-init",
-				SecurityContext: securityContext,
-				Image:           r.setupRunner + ":" + r.setupRunnerVersion,
-				ImagePullPolicy: r.setupRunnerPullPolicy,
-				EnvFrom:         envFrom,
-				Env:             setupRunnerEnvs,
-				VolumeMounts:    volumeMounts,
-			})
-		}
-
 		if preScriptPodType != "" {
 			scriptRunnerEnvs = append(scriptRunnerEnvs, corev1.EnvVar{
 				Name:  "TFO_SCRIPT",
@@ -2179,7 +1894,56 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 				VolumeMounts:    volumeMounts,
 			})
 		}
-
+	} else if podType == tfv1alpha1.PodExport {
+		exportRef := r.exportOptions.stack.Hash
+		if exportRef == "" {
+			exportRef = "master"
+		}
+		exportRunnerEnvs = append(exportRunnerEnvs, []corev1.EnvVar{
+			{
+				Name:  "TFO_EXPORT_REPO_PATH",
+				Value: generationPath + "/export",
+			},
+			{
+				Name:  "TFO_EXPORT_REPO",
+				Value: r.exportOptions.stack.Repo,
+			},
+			{
+				Name:  "TFO_EXPORT_REPO_REF",
+				Value: exportRef,
+			},
+			{
+				Name:  "TFO_EXPORT_REPO_SUBDIR",
+				Value: exportRef,
+			},
+			{
+				Name:  "TFO_EXPORT_CONF_PATH",
+				Value: r.exportOptions.confPath,
+			},
+			{
+				Name:  "TFO_EXPORT_TFVARS_PATH",
+				Value: r.exportOptions.tfvarsPath,
+			},
+			{
+				Name:  "TFO_EXPORT_REPO_AUTOMATED_USER_NAME",
+				Value: r.exportOptions.gitUsername,
+			},
+			{
+				Name:  "TFO_EXPORT_REPO_AUTOMATED_USER_EMAIL",
+				Value: r.exportOptions.gitEmail,
+			},
+		}...)
+		containers = append(containers, corev1.Container{
+			SecurityContext: securityContext,
+			Name:            "export",
+			Image:           "docker.io/isaaguilar/export-runner" + ":" + "0.0.1", // CHANGE THIS TO EXPORT RUNNER, FOR NOW USE SOMETHING
+			ImagePullPolicy: corev1.PullAlways,
+			EnvFrom:         envFrom,
+			Env:             exportRunnerEnvs,
+			VolumeMounts:    volumeMounts,
+			// Command:         []string{"/bin/sleep"},
+			// Args:            []string{"3600"},
+		})
 	} else {
 		scriptRunnerEnvs = append(scriptRunnerEnvs, corev1.EnvVar{
 			Name:  "TFO_SCRIPT",
@@ -2198,7 +1962,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 	podSecurityContext := corev1.PodSecurityContext{
 		FSGroup: &user,
 	}
-	pod = &corev1.Pod{
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: generateName,
 			Namespace:    r.namespace,
@@ -2218,26 +1982,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 	return pod
 }
 
-// getOrCreateEnv will check if an env exists. If it does not, it will be
-// created with the value
-func (r *RunOptions) getOrCreateEnv(name, value string) {
-	for _, i := range r.envVars {
-		if i.Name == name {
-			return
-		}
-	}
-	r.envVars = append(r.envVars, corev1.EnvVar{
-		Name:  name,
-		Value: value,
-	})
-}
-
-func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *tfv1alpha1.Terraform, runOpts RunOptions) (err error) {
-
-	n := len(tf.Status.Stages)
-	reason := tf.Status.Stages[n-1].Reason
-	isNewGeneration := reason == "GENERATION_CHANGE" || reason == "TF_RESOURCE_DELETED"
-	isFirstInstall := reason == "TF_RESOURCE_CREATED"
+func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *tfv1alpha1.Terraform, runOpts RunOptions, isNewGeneration, isFirstInstall bool, podType tfv1alpha1.PodType, generation int64) (err error) {
 
 	if isFirstInstall || isNewGeneration {
 		if err := r.createPVC(ctx, tf, runOpts); err != nil {
@@ -2320,81 +2065,14 @@ func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *
 
 	}
 
-	if err := r.createPod(ctx, tf, runOpts); err != nil {
+	if err := r.createPod(ctx, tf, runOpts, podType, generation); err != nil {
 		return err
 	}
-
-	// generateName := id + "-" + string(podType) + "-"
-	// pod := runOpts.generatePod(podType, preScriptPodType, isTFRunner, id, generateName, generation)
-	// controllerutil.SetControllerReference(tf, pod, r.Scheme)
-
-	//
-	// TODO recreate resources for new inits podTypes
-	//
-	// createResources := false
-	// if podType == tfv1alpha1.PodInit || podType == tfv1alpha1.PodInitDelete {
-	// 	createResources = true
-	// }
-	// _ = createResources
-
-	// if serviceAccount != nil {
-	// 	controllerutil.SetControllerReference(tf, serviceAccount, r.Scheme)
-
-	// 	err = r.Client.Create(ctx, serviceAccount)
-	// 	if err != nil && errors.IsNotFound(err) {
-	// 		return "", err
-	// 	} else if err != nil {
-	// 		reqLogger.Info(err.Error())
-	// 	}
-	// }
-
-	// err = r.Client.Create(ctx, role)
-	// if err != nil && errors.IsNotFound(err) {
-	// 	return "", err
-	// } else if err != nil {
-	// 	reqLogger.Info(err.Error())
-	// }
-
-	// err = r.Client.Create(ctx, roleBinding)
-	// if err != nil && errors.IsNotFound(err) {
-	// 	return "", err
-	// } else if err != nil {
-	// 	reqLogger.Info(err.Error())
-	// }
-
-	// err = r.Client.Create(ctx, secret)
-	// if err != nil && errors.IsNotFound(err) {
-	// 	return "", err
-	// } else if err != nil {
-	// 	reqLogger.Info(fmt.Sprintf("Secret %s already exists", secret.Name))
-	// 	updateErr := r.Client.Update(ctx, secret)
-	// 	if updateErr != nil && errors.IsNotFound(updateErr) {
-	// 		return "", updateErr
-	// 	} else if updateErr != nil {
-	// 		reqLogger.Info(err.Error())
-	// 	}
-	// }
-
-	// err = r.Client.Create(ctx, job)
-	// if err != nil && errors.IsNotFound(err) {
-	// 	return "", err
-	// } else if err != nil {
-	// 	reqLogger.Info(err.Error())
-	// }
-	// return job.Name, nil
-
-	// err = r.Client.Create(ctx, pod)
-	// if err != nil && errors.IsNotFound(err) {
-	// 	return "", err
-	// } else if err != nil {
-	// 	reqLogger.Info(err.Error())
-	// }
 
 	return nil
 }
 
 func (r ReconcileTerraform) createGitAskpass(ctx context.Context, tokenSecret tfv1alpha1.TokenSecretRef) ([]byte, error) {
-	gitAskpass := []byte{}
 	secret, err := r.loadSecret(ctx, tokenSecret.Name, tokenSecret.Namespace)
 	if err != nil {
 		return []byte{}, err
@@ -2406,7 +2084,7 @@ func (r ReconcileTerraform) createGitAskpass(ctx context.Context, tokenSecret tf
 		#!/bin/sh
 		exec echo "%s"
 	`, secret.Data[tokenSecret.Key])
-	gitAskpass = []byte(s)
+	gitAskpass := []byte(s)
 	return gitAskpass, nil
 
 }
@@ -2416,7 +2094,6 @@ func (r ReconcileTerraform) loadSecret(ctx context.Context, name, namespace stri
 		namespace = "default"
 	}
 	lookupKey := types.NamespacedName{Name: name, Namespace: namespace}
-	fmt.Println(lookupKey)
 	secret := &corev1.Secret{}
 	err := r.Client.Get(ctx, lookupKey, secret)
 	if err != nil {
@@ -2424,342 +2101,6 @@ func (r ReconcileTerraform) loadSecret(ctx context.Context, name, namespace stri
 	}
 	return secret, nil
 }
-
-func newGitRepoAccessOptionsFromSpec(tf *tfv1alpha1.Terraform, address string, extras []string) (GitRepoAccessOptions, error) {
-	d := GitRepoAccessOptions{}
-	var sshProxyOptions tfv1alpha1.ProxyOpts
-
-	// var tfAuthOptions []tfv1alpha1.AuthOpts
-
-	// TODO allow configmaps as a source. This has to be parsed differently
-	// before being passed to terraform's parsing mechanism
-
-	temp, err := ioutil.TempDir("", "repo")
-	if err != nil {
-		return d, fmt.Errorf("Unable to make directory: %v", err)
-	}
-	// defer os.RemoveAll(temp) // clean up
-
-	d = GitRepoAccessOptions{
-		Address:   address,
-		Extras:    extras,
-		Directory: temp,
-	}
-	d.SCMAuthMethods = tf.Spec.SCMAuthMethods
-
-	if tf.Spec.SSHTunnel != nil {
-		sshProxyOptions = *tf.Spec.SSHTunnel
-	}
-	d.SSHProxy = sshProxyOptions
-
-	err = d.getParsedAddress()
-	if err != nil {
-		return d, fmt.Errorf("Error in parsing address: %v", err)
-	}
-
-	// sets d.Timeout
-	d.getTimeoutConfig()
-
-	return d, nil
-}
-
-// getTimeoutConfig checks the configured SCM configurations for a configured
-// timeout that matches the host for a configured repo. Will always set the
-// Timeout option of GitRepoAccessOptions. Defaults to 30 (seconds).
-func (d *GitRepoAccessOptions) getTimeoutConfig() {
-	var timeout int64 = 30 // seconds
-	for _, m := range d.SCMAuthMethods {
-		if m.Host == d.host {
-			timeout = m.Timeout
-			break
-		}
-	}
-	d.Timeout = timeout
-}
-
-func getHostKey(host string) (ssh.PublicKey, error) {
-	file, err := os.Open(filepath.Join(os.Getenv("HOME"), ".ssh", "known_hosts"))
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	var hostKey ssh.PublicKey
-	for scanner.Scan() {
-		fields := strings.Split(scanner.Text(), " ")
-		if len(fields) != 3 {
-			continue
-		}
-		if strings.Contains(fields[0], host) {
-			var err error
-			hostKey, _, _, _, err = ssh.ParseAuthorizedKey(scanner.Bytes())
-			if err != nil {
-				return nil, fmt.Errorf("error parsing %q: %v", fields[2], err)
-			}
-			break
-		}
-	}
-
-	if hostKey == nil {
-		return nil, fmt.Errorf("no hostkey for %s", host)
-	}
-	return hostKey, nil
-}
-
-func (d GitRepoAccessOptions) tfvarFiles() (string, error) {
-	// dump contents of tfvar files into a var
-	tfvars := ""
-
-	// TODO Should path definitions walk the path?
-	if utils.ListContainsStr(d.Extras, "is-file") {
-		for _, filename := range d.subdirs {
-			if !strings.HasSuffix(filename, ".tfvars") {
-				continue
-			}
-			file := filepath.Join(d.Directory, filename)
-			content, err := ioutil.ReadFile(file)
-			if err != nil {
-				return "", fmt.Errorf("error reading file: %v", err)
-			}
-			tfvars += string(content) + "\n"
-		}
-	} else if len(d.subdirs) > 0 {
-		for _, s := range d.subdirs {
-			subdir := filepath.Join(d.Directory, s)
-			lsdir, err := ioutil.ReadDir(subdir)
-			if err != nil {
-				return "", fmt.Errorf("error listing dir: %v", err)
-			}
-
-			for _, f := range lsdir {
-				if strings.Contains(f.Name(), ".tfvars") {
-					file := filepath.Join(subdir, f.Name())
-
-					content, err := ioutil.ReadFile(file)
-					if err != nil {
-						return "", fmt.Errorf("error reading file: %v", err)
-					}
-
-					tfvars += string(content) + "\n"
-				}
-			}
-		}
-	} else {
-		lsdir, err := ioutil.ReadDir(d.Directory)
-		if err != nil {
-			return "", fmt.Errorf("error listing dir: %v", err)
-		}
-
-		for _, f := range lsdir {
-			if strings.Contains(f.Name(), ".tfvars") {
-				file := filepath.Join(d.Directory, f.Name())
-
-				content, err := ioutil.ReadFile(file)
-				if err != nil {
-					return "", fmt.Errorf("error reading file: %v", err)
-				}
-
-				tfvars += string(content) + "\n"
-			}
-		}
-	}
-	// TODO validate tfvars
-	return tfvars, nil
-}
-
-// TODO combine this with the tfvars and make it a generic  get configs method
-func (d GitRepoAccessOptions) otherConfigFiles() (map[string]string, error) {
-	// create a configmap entry per source file
-	configFiles := make(map[string]string)
-
-	// TODO Should path definitions walk the path?
-	if utils.ListContainsStr(d.Extras, "is-file") {
-		for _, filename := range d.subdirs {
-			file := filepath.Join(d.Directory, filename)
-			content, err := ioutil.ReadFile(file)
-			if err != nil {
-				return configFiles, fmt.Errorf("error reading file: %v", err)
-			}
-			configFiles[filepath.Base(filename)] = string(content)
-		}
-	} else if len(d.subdirs) > 0 {
-		for _, s := range d.subdirs {
-			subdir := filepath.Join(d.Directory, s)
-			lsdir, err := ioutil.ReadDir(subdir)
-			if err != nil {
-				return configFiles, fmt.Errorf("error listing dir: %v", err)
-			}
-
-			for _, f := range lsdir {
-
-				file := filepath.Join(subdir, f.Name())
-
-				content, err := ioutil.ReadFile(file)
-				if err != nil {
-					return configFiles, fmt.Errorf("error reading file: %v", err)
-				}
-
-				configFiles[f.Name()] = string(content)
-
-			}
-		}
-	} else {
-		lsdir, err := ioutil.ReadDir(d.Directory)
-		if err != nil {
-			return configFiles, fmt.Errorf("error listing dir: %v", err)
-		}
-
-		for _, f := range lsdir {
-
-			file := filepath.Join(d.Directory, f.Name())
-
-			content, err := ioutil.ReadFile(file)
-			if err != nil {
-				return configFiles, fmt.Errorf("error reading file: %v", err)
-			}
-
-			configFiles[f.Name()] = string(content)
-
-		}
-	}
-	// TODO validate tfvars
-	return configFiles, nil
-}
-
-// downloadFromSource will downlaod the files locally. It will also download
-// tf modules locally if the user opts to. TF module downloading
-// is probably going to be used in the event that go-getter cannot fetch the
-// modules, perhaps becuase of a firewall. Check for proxy settings to send
-// to the download command.
-func downloadFromSource(src, moduleDir string) error {
-
-	// Check for global proxy
-
-	ds := getter.Detectors
-	output, err := getter.Detect(src, moduleDir, ds)
-	if err != nil {
-		return fmt.Errorf("Could not Detect source: %v", err)
-	}
-
-	if strings.HasPrefix(output, "git::") {
-		// send to gitSource
-		return fmt.Errorf("There isn't an error, reading output as %v", output)
-	} else if strings.HasPrefix(output, "https://") {
-		return fmt.Errorf("downloadFromSource does not yet support http(s)")
-	} else if strings.HasPrefix(output, "file://") {
-		return fmt.Errorf("downloadFromSource does not yet support file")
-	} else if strings.HasPrefix(output, "s3::") {
-		return fmt.Errorf("downloadFromSource does not yet support s3")
-	}
-
-	// TODO If the total size of the stacks configmap is too large, it will have
-	// to uploaded else where.
-
-	return nil
-}
-
-func configureGitSSHString(user, host, port, uri string) string {
-	if !strings.HasPrefix(uri, "/") {
-		uri = "/" + uri
-	}
-	return fmt.Sprintf("ssh://%s@%s:%s%s", user, host, port, uri)
-}
-
-func tarBinaryData(fullpath, filename string) (map[string][]byte, error) {
-	binaryData := make(map[string][]byte)
-	// Archive the file and send to configmap
-	// First remove the .git file if exists in Path
-	gitFile := filepath.Join(fullpath, ".git")
-	_, err := os.Stat(gitFile)
-	if err == nil {
-		if err = os.RemoveAll(gitFile); err != nil {
-			return binaryData, fmt.Errorf("Could not find or remove .git: %v", err)
-		}
-	}
-
-	tardir, err := ioutil.TempDir("", "tarball")
-	if err != nil {
-		return binaryData, fmt.Errorf("unable making tardir: %v", err)
-	}
-	defer os.RemoveAll(tardir) // clean up
-
-	tarTarget := filepath.Join(tardir, "tarball")
-	tarSource := filepath.Join(tardir, filename)
-
-	err = os.Mkdir(tarTarget, 0755)
-	if err != nil {
-		return binaryData, fmt.Errorf("Could not create tarTarget: %v", err)
-	}
-	err = os.Mkdir(tarSource, 0755)
-	if err != nil {
-		return binaryData, fmt.Errorf("Could not create tarTarget: %v", err)
-	}
-
-	// expect result of untar to be same as filename. Copy src to a
-	// "filename" dir instead of it's current dir
-	// targetSrc := filepath.Join(target, fmt.Sprintf("%s", filename))
-	err = utils.CopyDirectory(fullpath, tarSource)
-	if err != nil {
-		return binaryData, err
-	}
-
-	err = tarit("repo", tarSource, tarTarget)
-	if err != nil {
-		return binaryData, fmt.Errorf("error archiving '%s': %v", tarSource, err)
-	}
-	// files := make(map[string][]byte)
-	tarballs, err := ioutil.ReadDir(tarTarget)
-	if err != nil {
-		return binaryData, fmt.Errorf("error listing tardir: %v", err)
-	}
-	for _, f := range tarballs {
-		content, err := ioutil.ReadFile(filepath.Join(tarTarget, f.Name()))
-		if err != nil {
-			return binaryData, fmt.Errorf("error reading tarball: %v", err)
-		}
-
-		binaryData[f.Name()] = content
-	}
-
-	return binaryData, nil
-}
-
-// func readConfigMap(k8sclient client.Client, name, namespace string) (*corev1.ConfigMap, error) {
-// 	configMap := &corev1.ConfigMap{}
-// 	namespacedName := types.NamespacedName{Namespace: namespace, Name: name}
-// 	err := k8sclient.Get(ctx, namespacedName, configMap)
-// 	// configMap, err := c.clientset.CoreV1().ConfigMaps(namespace).Get(name, metav1.GetOptions{})
-// 	if err != nil {
-// 		return &corev1.ConfigMap{}, fmt.Errorf("error reading configmap: %v", err)
-// 	}
-
-// 	return configMap, nil
-// }
-
-// func (c *k8sClient) createConfigMap(name, namespace string, binaryData map[string][]byte, data map[string]string) error {
-
-// 	configMapObject := &corev1.ConfigMap{
-// 		ObjectMeta: metav1.ObjectMeta{
-// 			Name:      name,
-// 			Namespace: namespace,
-// 		},
-// 		Data:       data,
-// 		BinaryData: binaryData,
-// 	}
-
-// 	// TODO Make the terraform the referenced Owner of this resource
-// 	_, err := c.clientset.CoreV1().ConfigMaps(namespace).Create(configMapObject)
-// 	if err != nil {
-// 		// fmt.Printf("The first create error... %v\n", err.Error())
-// 		_, err = c.clientset.CoreV1().ConfigMaps(namespace).Update(configMapObject)
-// 		if err != nil {
-// 			return fmt.Errorf("error creating configmap: %v", err)
-// 		}
-// 	}
-
-// 	return nil
-// }
 
 func (r RunOptions) generateSecret() *corev1.Secret {
 	secretObject := &corev1.Secret{
@@ -2780,7 +2121,7 @@ func loadPassword(ctx context.Context, k8sclient client.Client, key, name, names
 	err := k8sclient.Get(ctx, namespacedName, secret)
 	// secret, err := c.clientset.CoreV1().Secrets(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
-		return "", fmt.Errorf("Could not get secret: %v", err)
+		return "", fmt.Errorf("could not get secret: %v", err)
 	}
 
 	var password []byte
@@ -2798,651 +2139,269 @@ func loadPassword(ctx context.Context, k8sclient client.Client, key, name, names
 
 }
 
-func loadPrivateKey(ctx context.Context, k8sclient client.Client, key, name, namespace string) (*os.File, error) {
+// forcedRegexp is the regular expression that finds forced getters. This
+// syntax is schema::url, example: git::https://foo.com
+var forcedRegexp = regexp.MustCompile(`^([A-Za-z0-9]+)::(.+)$`)
 
-	secret := &corev1.Secret{}
-	namespacedName := types.NamespacedName{Namespace: namespace, Name: name}
-	err := k8sclient.Get(ctx, namespacedName, secret)
-	if err != nil {
-		return nil, fmt.Errorf("Could not get id_rsa secret: %v", err)
+// getForcedGetter takes a source and returns the tuple of the forced
+// getter and the raw URL (without the force syntax).
+func getForcedGetter(src string) (string, string) {
+	var forced string
+	if ms := forcedRegexp.FindStringSubmatch(src); ms != nil {
+		forced = ms[1]
+		src = ms[2]
 	}
 
-	var privateKey []byte
-	for k, value := range secret.Data {
-		if k == key {
-			privateKey = value
-		}
-	}
-
-	if len(privateKey) == 0 {
-		return nil, fmt.Errorf("unable to locate '%s' in secret: %v", key, err)
-	}
-
-	content := []byte(privateKey)
-	tmpfile, err := ioutil.TempFile("", "id_rsa")
-	if err != nil {
-		return nil, fmt.Errorf("error creating tmpfile: %v", err)
-	}
-
-	if _, err := tmpfile.Write(content); err != nil {
-		return nil, fmt.Errorf("unable to write tempfile: %v", err)
-	}
-
-	var mode os.FileMode
-	mode = 0600
-	os.Chmod(tmpfile.Name(), mode)
-
-	return tmpfile, nil
+	return forced, src
 }
 
-func unique(s []string) []string {
-	keys := make(map[string]bool)
-	list := []string{}
-	for _, entry := range s {
-		if _, value := keys[entry]; !value {
-			keys[entry] = true
-			list = append(list, entry)
-		}
+var sshPattern = regexp.MustCompile("^(?:([^@]+)@)?([^:]+):/?(.+)$")
+
+type sshDetector struct{}
+
+func (s *sshDetector) Detect(src, _ string) (string, bool, error) {
+	matched := sshPattern.FindStringSubmatch(src)
+	if matched == nil {
+		return "", false, nil
 	}
-	return list
+
+	user := matched[1]
+	host := matched[2]
+	path := matched[3]
+	qidx := strings.Index(path, "?")
+	if qidx == -1 {
+		qidx = len(path)
+	}
+
+	var u url.URL
+	u.Scheme = "ssh"
+	u.User = url.User(user)
+	u.Host = host
+	u.Path = path[0:qidx]
+	if qidx < len(path) {
+		q, err := url.ParseQuery(path[qidx+1:])
+		if err != nil {
+			return "", false, fmt.Errorf("error parsing GitHub SSH URL: %s", err)
+		}
+		u.RawQuery = q.Encode()
+	}
+
+	return u.String(), true, nil
 }
 
-func tarit(filename, source, target string) error {
-	target = filepath.Join(target, fmt.Sprintf("%s.tar", filename))
-	tarfile, err := os.Create(target)
+type scmType string
+
+var gitScmType scmType = "git"
+
+func getParsedAddress(address, path string, useAsVar bool, scmMap map[string]scmType) (ParsedAddress, error) {
+	detectors := []getter.Detector{
+		new(sshDetector),
+	}
+
+	detectors = append(detectors, getter.Detectors...)
+
+	output, err := getter.Detect(address, "moduleDir", detectors)
 	if err != nil {
-		return err
+		return ParsedAddress{}, err
 	}
-	defer tarfile.Close()
 
-	tarball := tar.NewWriter(tarfile)
-	defer tarball.Close()
+	forcedDetect, result := getForcedGetter(output)
+	urlSource, filesSource := getter.SourceDirSubdir(result)
 
-	info, err := os.Stat(source)
+	parsedURL, err := url.Parse(urlSource)
 	if err != nil {
-		return nil
+		return ParsedAddress{}, err
 	}
 
-	var baseDir string
-	if info.IsDir() {
-		baseDir = filepath.Base(source)
+	scheme := parsedURL.Scheme
+
+	// TODO URL parse rules: github.com should check the url is 'host/user/repo'
+	// Currently the below is just a host check which isn't 100% correct
+	if utils.ListContainsStr([]string{"github.com"}, parsedURL.Host) {
+		scheme = "git"
 	}
 
-	return filepath.Walk(source,
-		func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-			header, err := tar.FileInfoHeader(info, info.Name())
-			if err != nil {
-				return err
-			}
+	// Check scm configuration for hosts and what scheme to map them as
+	// Use the scheme of the scm configuration.
+	// If git && another scm is defined in the scm configuration, select git.
+	// If the user needs another scheme, the user must use forceDetect
+	// (ie scheme::url://host...)
+	hosts := []string{}
+	for host := range scmMap {
+		hosts = append(hosts, host)
+	}
+	if utils.ListContainsStr(hosts, parsedURL.Host) {
+		scheme = string(scmMap[parsedURL.Host])
+	}
 
-			if baseDir != "" {
-				header.Name = filepath.Join(baseDir, strings.TrimPrefix(path, source))
-			}
+	// forceDetect shall override all other schemes
+	if forcedDetect != "" {
+		scheme = forcedDetect
+	}
 
-			if err := tarball.WriteHeader(header); err != nil {
-				return err
-			}
-
-			if info.IsDir() {
-				return nil
-			}
-
-			file, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			defer file.Close()
-			_, err = io.Copy(tarball, file)
-			return err
-		})
-}
-
-func untar(tarball, target string) error {
-	reader, err := os.Open(tarball)
+	y, err := url.ParseQuery(parsedURL.RawQuery)
 	if err != nil {
-		return err
+		return ParsedAddress{}, err
 	}
-	defer reader.Close()
-	tarReader := tar.NewReader(reader)
+	hash := y.Get("ref")
 
-	for {
-		header, err := tarReader.Next()
-		if err == io.EOF {
-			break
-		} else if err != nil {
-			return err
-		}
-
-		path := filepath.Join(target, header.Name)
-		info := header.FileInfo()
-		if info.IsDir() {
-			if err = os.MkdirAll(path, info.Mode()); err != nil {
-				return err
-			}
-			continue
-		}
-
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode())
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		_, err = io.Copy(file, tarReader)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (d *GitRepoAccessOptions) download(ctx context.Context, k8sclient client.Client, namespace string) error {
-	// This function only supports git modules. There's no explicit check
-	// for this yet.
-	// TODO document available options for sources
-	reqLogger := logf.WithValues("Download", d.Address, "Namespace", namespace, "Function", "download")
-	reqLogger.V(1).Info(fmt.Sprintf("Getting ready to download source %s", d.repo))
-
-	var err error
-	var clientGitRepo gitclient.GitRepo
-	if d.protocol == "ssh" {
-		filename, err := d.getGitSSHKey(ctx, k8sclient, namespace, d.protocol, reqLogger)
-		if err != nil {
-			return fmt.Errorf("Download failed for '%s': %v", d.repo, err)
-		}
-		defer os.Remove(filename)
-		clientGitRepo, err = gitclient.NewGitRepo("", "", filename, reqLogger)
-		if err != nil {
-			return err
-		}
-		err = clientGitRepo.GitSSHDownload(d.repo, d.Directory, filename, d.hash, d.Timeout)
-		if err != nil {
-			return fmt.Errorf("Download failed for '%s': %v", d.repo, err)
-		}
-	} else {
-		// TODO find out and support any other protocols
-		// Just assume http is the only other protocol for now
-		token, err := d.getGitToken(ctx, k8sclient, namespace, d.protocol, reqLogger)
-		if err != nil {
-			// Maybe we don't need to exit if no creds are used here
-			reqLogger.Info(fmt.Sprintf("%v", err))
-		}
-		clientGitRepo, err = gitclient.NewGitRepo("git", token, "", reqLogger)
-		if err != nil {
-			return err
-		}
-		err = clientGitRepo.GitHTTPDownload(d.repo, d.Directory, "git", token, d.hash, d.Timeout)
-		if err != nil {
-			return fmt.Errorf("Download failed for '%s': %v", d.repo, err)
-		}
-	}
-
-	// Set the hash and return
-	d.ClientGitRepo = clientGitRepo
-	d.hash, err = clientGitRepo.HashString()
-	if err != nil {
-		return err
-	}
-	reqLogger.V(1).Info(fmt.Sprintf("Hash: %v", d.hash))
-	return nil
-}
-
-func (d *GitRepoAccessOptions) startHTTPSProxy(ctx context.Context, k8sclient client.Client, namespace string, reqLogger logr.Logger) error {
-	proxyAuthMethod, err := d.getProxyAuthMethod(ctx, k8sclient, namespace)
-	if err != nil {
-		return fmt.Errorf("Error getting proxyAuthMethod: %v", err)
-	}
-
-	reqLogger.V(1).Info("Setting up http proxy")
-	proxyServer := ""
-	if strings.Contains(d.host, ":") {
-		proxyServer = d.SSHProxy.Host
-	} else {
-		// fmt.Sprintf("%s:22", d.SSHProxy.Host)
-	}
-
-	hostKey := goSocks5.NewHostKey()
-	duration := time.Duration(60 * time.Second)
-	socks5Proxy := goSocks5.NewSocks5Proxy(hostKey, nil, duration)
-
-	err = socks5Proxy.Start(d.SSHProxy.User, proxyServer, proxyAuthMethod)
-	if err != nil {
-		return fmt.Errorf("unable to start socks5: %v", err)
-	}
-	time.Sleep(100 * time.Millisecond)
-
-	socks5Addr, err := socks5Proxy.Addr()
-	if err != nil {
-		return fmt.Errorf("unable to get socks5Addr: %v", err)
-	}
-
-	dialer, err := proxy.SOCKS5("tcp", socks5Addr, nil, proxy.Direct)
-	if err != nil {
-		return fmt.Errorf("unable to get dialer: %v", err)
-	}
-
-	httpTransport := &http.Transport{Dial: dialer.Dial}
-	// set our socks5 as the dialer
-	// httpTransport.Dial = dialer.Dial
-	httpClient := &http.Client{Transport: httpTransport}
-
-	gitTransportClient.InstallProtocol("http", githttp.NewClient(httpClient))
-	gitTransportClient.InstallProtocol("https", githttp.NewClient(httpClient))
-	return nil
-}
-
-func (d *GitRepoAccessOptions) startSSHProxy(ctx context.Context, k8sclient client.Client, namespace string, reqLogger logr.Logger) error {
-	uri := d.uri
-
-	reqLogger.V(1).Info(fmt.Sprintf("Setting up ssh proxy for %s with job: %+v", namespace, d))
-	port, tunnel, err := d.setupSSHProxy(ctx, k8sclient, namespace)
-	if err != nil {
-		return err
-	}
-
-	if os.Getenv("DEBUG_SSHTUNNEL") != "" {
-		tunnel.Log = log.New(os.Stdout, "", log.Ldate|log.Lmicroseconds)
-	}
-	d.tunnel = tunnel
-
-	if strings.Index(uri, "/") != 0 {
-		uri = "/" + uri
-	}
-	reqLogger.V(1).Info("SSH proxy is ready for usage")
-	// configure auth with go git options
-	d.repo = fmt.Sprintf("ssh://%s@127.0.0.1:%s%s", d.user, port, uri)
-	return nil
-
-}
-
-func (d *GitRepoAccessOptions) setupSSHProxy(ctx context.Context, k8sclient client.Client, namespace string) (string, *sshtunnel.SSHTunnel, error) {
-	var port string
-	var tunnel *sshtunnel.SSHTunnel
-	proxyAuthMethod, err := d.getProxyAuthMethod(ctx, k8sclient, namespace)
-	if err != nil {
-		return port, tunnel, fmt.Errorf("Error getting proxyAuthMethod: %v", err)
-	}
-	proxyServerWithUser := fmt.Sprintf("%s@%s", d.SSHProxy.User, d.SSHProxy.Host)
-	destination := ""
-	if strings.Contains(d.host, ":") {
-		destination = d.host
-	} else {
-		destination = fmt.Sprintf("%s:%s", d.host, d.port)
-	}
-
-	// Setup the tunnel, but do not yet start it yet.
-	// // User and host of tunnel server, it will default to port 22
-	// // if not specified.
-	// proxyServerWithUser,
-
-	// // Pick ONE of the following authentication methods:
-	// // sshtunnel.PrivateKeyFile(filepath.Join(os.Getenv("HOME"), ".ssh", "id_rsa")), // 1. private key
-	// proxyAuthMethod,
-
-	// // The destination host and port of the actual server.
-	// destination,
-	tunnel = sshtunnel.NewSSHTunnel(proxyServerWithUser, proxyAuthMethod, destination, "0")
-
-	// NewSSHTunnel will bind to a random port so that you can have
-	// multiple SSH tunnels available. The port is available through:
-	//   tunnel.Local.Port
-
-	// You can use any normal Go code to connect to the destination server
-	// through localhost. You may need to use 127.0.0.1 for some libraries.
-
-	// You can provide a logger for debugging, or remove this line to
-	// make it silent.
-	// tunnel.Log = log.New(os.Stdout, "", log.Ldate|log.Lmicroseconds)
-	// reqLogger.Info(tunnel.Log)
-
-	// Start the server in the background. You will need to wait a
-	// small amount of time for it to bind to the localhost port
-	// before you can start sending connections.
-	go tunnel.Start()
-	time.Sleep(1000 * time.Millisecond)
-	port = strconv.Itoa(tunnel.Local.Port)
-
-	return port, tunnel, nil
-}
-
-func (d *GitRepoAccessOptions) getParsedAddress() error {
-	sourcedir, subdirstr := getter.SourceDirSubdir(d.Address)
 	// subdir can contain a list seperated by double slashes
-	subdirs := strings.Split(subdirstr, "//")
-	src := strings.TrimPrefix(sourcedir, "git::")
-	var hash string
-	if strings.Contains(sourcedir, "?") {
-		for i, v := range strings.Split(sourcedir, "?") {
-			if i > 0 {
-				if strings.Contains(v, "&") {
-					for _, w := range strings.Split(v, "&") {
-						if strings.Contains(w, "ref=") {
-							hash = strings.Split(w, "ref=")[1]
-						}
-					}
-
-				} else if strings.Contains(v, "ref=") {
-					hash = strings.Split(v, "ref=")[1]
-				}
-			}
-
-		}
+	files := strings.Split(filesSource, "//")
+	if len(files) == 1 && files[0] == "" {
+		files = []string{"."}
 	}
 
-	// strip out the url args
-	repo := strings.Split(src, "?")[0]
-	u, err := giturl.Parse(repo)
-	if err != nil {
-		return fmt.Errorf("unable to parse giturl: %v", err)
-	}
-	protocol := u.Scheme
-	uri := strings.Split(u.RequestURI(), "?")[0]
-	host := u.Host
-	port := u.Port()
+	// Assign default ports for common protos
+	port := parsedURL.Port()
 	if port == "" {
-		if protocol == "ssh" {
+		if parsedURL.Scheme == "ssh" {
 			port = "22"
-		} else if protocol == "https" {
+		} else if parsedURL.Scheme == "https" {
 			port = "443"
 		}
 	}
 
-	user := u.User.Username()
-	if user == "" {
-		user = "git"
+	p := ParsedAddress{
+		DetectedScheme: scheme,
+		Path:           path,
+		UseAsVar:       useAsVar,
+		Url:            parsedURL.String(),
+		Files:          files,
+		Hash:           hash,
+		UrlScheme:      parsedURL.Scheme,
+		Host:           parsedURL.Host,
+		Uri:            strings.Split(parsedURL.RequestURI(), "?")[0],
+		Port:           port,
+		User:           parsedURL.User.Username(),
+		Repo:           strings.Split(parsedURL.String(), "?")[0],
 	}
-
-	d.ParsedAddress = ParsedAddress{
-		sourcedir: sourcedir,
-		subdirs:   subdirs,
-		hash:      hash,
-		protocol:  protocol,
-		uri:       uri,
-		host:      host,
-		port:      port,
-		user:      user,
-		repo:      repo,
-	}
-	return nil
+	return p, nil
 }
 
-func (d GitRepoAccessOptions) getProxyAuthMethod(ctx context.Context, k8sclient client.Client, namespace string) (ssh.AuthMethod, error) {
-	var proxyAuthMethod ssh.AuthMethod
-
-	name := d.SSHProxy.SSHKeySecretRef.Name
-	key := d.SSHProxy.SSHKeySecretRef.Key
-	if key == "" {
-		key = "id_rsa"
+func (r *ReconcileTerraform) exportRepo(ctx context.Context, tf *tfv1alpha1.Terraform, generation int64, reqLogger logr.Logger) error {
+	if tf.Status.Exported == tfv1alpha1.ExportedTrue {
+		return nil
 	}
-	ns := d.SSHProxy.SSHKeySecretRef.Namespace
-	if ns == "" {
-		ns = namespace
-	}
-
-	sshKey, err := loadPrivateKey(ctx, k8sclient, key, name, ns)
-	if err != nil {
-		return proxyAuthMethod, fmt.Errorf("unable to get privkey: %v", err)
-	}
-	defer os.Remove(sshKey.Name())
-	defer sshKey.Close()
-	proxyAuthMethod = sshtunnel.PrivateKeyFile(sshKey.Name())
-
-	return proxyAuthMethod, nil
-}
-
-func (d *GitRepoAccessOptions) getGitSSHKey(ctx context.Context, k8sclient client.Client, namespace, protocol string, reqLogger logr.Logger) (string, error) {
-	var filename string
-	for _, m := range d.SCMAuthMethods {
-		if m.Host == d.ParsedAddress.host && m.Git.SSH != nil {
-			reqLogger.Info("Using Git over SSH with a key")
-			name := m.Git.SSH.SSHKeySecretRef.Name
-			key := m.Git.SSH.SSHKeySecretRef.Key
-			if key == "" {
-				key = "id_rsa"
-			}
-			ns := m.Git.SSH.SSHKeySecretRef.Namespace
-			if ns == "" {
-				ns = namespace
-			}
-			sshKey, err := loadPrivateKey(ctx, k8sclient, key, name, ns)
-			if err != nil {
-				return filename, err
-			}
-			defer sshKey.Close()
-			filename = sshKey.Name()
-		}
-	}
-	if filename == "" {
-		return filename, fmt.Errorf("Failed to find Git SSH Key for %v\n", d.ParsedAddress.host)
-	}
-	return filename, nil
-}
-
-func (d *GitRepoAccessOptions) getGitToken(ctx context.Context, k8sclient client.Client, namespace, protocol string, reqLogger logr.Logger) (string, error) {
-	var token string
 	var err error
-	for _, m := range d.SCMAuthMethods {
-		if m.Host == d.ParsedAddress.host && m.Git.HTTPS != nil {
-			reqLogger.Info("Using Git over HTTPS with a token")
-			name := m.Git.HTTPS.TokenSecretRef.Name
-			key := m.Git.HTTPS.TokenSecretRef.Key
-			if key == "" {
-				key = "token"
+	var exportPodType tfv1alpha1.PodType = tfv1alpha1.PodExport
+
+	// Updates from exported False to InProgress
+	if tf.Status.Exported == tfv1alpha1.ExportedFalse {
+		tf.Status.Exported = tfv1alpha1.ExportedPending
+		err := r.updateStatus(ctx, tf)
+		if err != nil {
+			reqLogger.V(1).Info(err.Error())
+			return err
+		}
+		return nil
+	}
+
+	inNamespace := client.InNamespace(tf.Namespace)
+	f := fields.Set{
+		"metadata.generateName": fmt.Sprintf("%s-%s-", tf.Status.PodNamePrefix+"-v"+fmt.Sprint(generation), exportPodType),
+	}
+	labels := map[string]string{
+		"terraforms.tf.isaaguilar.com/generation": fmt.Sprintf("%d", generation),
+	}
+	matchingFields := client.MatchingFields(f)
+	matchingLabels := client.MatchingLabels(labels)
+	pods := &corev1.PodList{}
+	err = r.Client.List(ctx, pods, inNamespace, matchingFields, matchingLabels)
+	if err != nil {
+		reqLogger.Error(err, "")
+		return err
+	}
+
+	if len(pods.Items) == 0 && tf.Status.Exported == tfv1alpha1.ExportedInProgress {
+		reqLogger.V(1).Info("No pods found. Removing the in-progress status")
+		// This case can happen if the pod is running and the user deletes it.
+		// Reset the phase to pending and then update the status which will
+		// force the resource to requeue.
+		tf.Status.Exported = tfv1alpha1.ExportedPending
+		err := r.updateStatus(ctx, tf)
+		if err != nil {
+			reqLogger.V(1).Info(err.Error())
+			return err
+		}
+		return nil
+	}
+
+	if len(pods.Items) == 0 && tf.Status.Exported == tfv1alpha1.ExportedPending {
+		var err error
+		n := len(tf.Status.Stages)
+		generation := tf.Status.Stages[n-1].Generation
+		scmMap := make(map[string]scmType)
+		for _, v := range tf.Spec.SCMAuthMethods {
+			if v.Git != nil {
+				scmMap[v.Host] = gitScmType
 			}
-			ns := m.Git.HTTPS.TokenSecretRef.Namespace
-			if ns == "" {
-				ns = namespace
-			}
-			token, err = loadPassword(ctx, k8sclient, key, name, ns)
+		}
+
+		runOpts := newRunOptions(tf)
+		runOpts.stack, err = getParsedAddress(tf.Spec.TerraformModule, "", false, scmMap)
+		if err != nil {
+			r.Recorder.Event(tf, "Warning", "ConfigError", err.Error())
+			return err
+		}
+		runOpts.exportOptions.stack, err = getParsedAddress(tf.Spec.ExportRepo.Address, "", false, scmMap)
+		if err != nil {
+			r.Recorder.Event(tf, "Warning", "ConfigError", err.Error())
+			return err
+		}
+		runOpts.exportOptions.confPath = tf.Spec.ExportRepo.ConfFile
+		runOpts.exportOptions.tfvarsPath = tf.Spec.ExportRepo.TFVarsFile
+		runOpts.exportOptions.gitEmail = "terraform-operator@example.com"
+		runOpts.exportOptions.gitUsername = "Terraform Operator"
+
+		err = r.run(ctx, reqLogger, tf, runOpts, false, false, tfv1alpha1.PodExport, generation)
+		if err != nil {
+			return err
+		}
+		tf.Status.Exported = tfv1alpha1.ExportCreating
+		err = r.updateStatus(ctx, tf)
+		if err != nil {
+			reqLogger.V(1).Info(err.Error())
+			return err
+		}
+	}
+
+	if len(pods.Items) > 0 {
+		if pods.Items[0].Status.Phase == corev1.PodFailed {
+			tf.Status.Exported = tfv1alpha1.ExportedPending
+			err = r.updateStatus(ctx, tf)
 			if err != nil {
-				return token, fmt.Errorf("unable to get token: %v", err)
+				reqLogger.V(1).Info(err.Error())
+				return err
 			}
+			return nil
 		}
-	}
-	if token == "" {
-		return token, fmt.Errorf("Failed to find Git token Key for %v\n", d.ParsedAddress.host)
-	}
-	return token, nil
-}
 
-func (d GitRepoAccessOptions) commitTfvars(ctx context.Context, k8sclient client.Client, tfvars, tfvarsFile, confFile, namespace, customBackend string, runOpts RunOptions, reqLogger logr.Logger) {
-	filesToCommit := []string{}
-
-	reqLogger.V(1).Info("Setting up download options for export")
-	if (tfv1alpha1.ProxyOpts{}) != d.SSHProxy {
-		if strings.Contains(d.protocol, "http") {
-			err := d.startHTTPSProxy(ctx, k8sclient, namespace, reqLogger)
+		if pods.Items[0].Status.Phase == corev1.PodSucceeded {
+			tf.Status.Exported = tfv1alpha1.ExportedTrue
+			err = r.updateStatus(ctx, tf)
 			if err != nil {
-				reqLogger.Error(err, "failed to start ssh proxy")
-				return
+				reqLogger.V(1).Info(err.Error())
+				return err
 			}
-		} else if d.protocol == "ssh" {
-			err := d.startSSHProxy(ctx, k8sclient, namespace, reqLogger)
-			if err != nil {
-				reqLogger.Error(err, "failed to start ssh proxy")
-				return
-			}
-			defer d.TunnelClose(reqLogger.WithValues("Spec", "exportRepo"))
-		}
-	}
-	err := d.download(ctx, k8sclient, namespace)
-	if err != nil {
-		errString := fmt.Sprintf("Could not download repo %v", err)
-		reqLogger.Info(errString)
-		return
-	}
-
-	// Create a file in the external repo
-	err = d.ClientGitRepo.CheckoutBranch("")
-	if err != nil {
-		errString := fmt.Sprintf("Could not check out new branch %v", err)
-		reqLogger.Info(errString)
-		return
-	}
-
-	// Format TFVars File
-	// First read in the tfvar file that gets created earlier. This tfvar
-	// file should have already concatenated all the tfvars found
-	// from the git repos
-	tfvarsFileContent := tfvars
-	for _, i := range runOpts.envVars {
-		k := i.Name
-		v := i.Value
-		// TODO Attempt to resolve other kinds of TF_VAR_ values via
-		// 		an EnvVarSource other than `Value`
-		if v == "" {
-			continue
-		}
-		if !strings.Contains(k, "TF_VAR") {
-			continue
-		}
-		k = strings.ReplaceAll(k, "TF_VAR_", "")
-		if string(v[0]) != "{" && string(v[0]) != "[" {
-			v = fmt.Sprintf("\"%s\"", v)
-		}
-		tfvarsFileContent = tfvarsFileContent + fmt.Sprintf("\n%s = %s", k, v)
-	}
-
-	// Remove Duplicates
-	// TODO replace this code with a more terraform native method of merging tfvars
-	var c bytes.Buffer
-	var currentKey string
-	var currentValue string
-	keyIndexer := make(map[string]string)
-	var openBrackets int
-	for _, line := range strings.Split(tfvarsFileContent, "\n") {
-		lineArr := strings.Split(line, "=")
-		// ignore blank lines
-		if strings.TrimSpace(lineArr[0]) == "" {
-			continue
-		}
-
-		if openBrackets > 0 {
-			currentValue += "\n" + strings.ReplaceAll(line, "\t", "  ")
-			// Check for more open brackets and close brackets
-			trimmedLine := strings.TrimSpace(line)
-			lastCharIdx := len(trimmedLine) - 1
-			lastChar := string(trimmedLine[lastCharIdx])
-			lastTwoChar := ""
-			if lastCharIdx > 0 {
-				lastTwoChar = string(trimmedLine[lastCharIdx-1:])
-			}
-
-			if lastChar == "{" || lastChar == "[" {
-				openBrackets++
-			} else if lastChar == "}" || lastChar == "]" || lastTwoChar == "}," || lastTwoChar == "]," {
-				openBrackets--
-			}
-			if openBrackets == 0 {
-				keyIndexer[currentKey] = currentValue
-			}
-			continue
-		}
-		currentKey = strings.TrimSpace(lineArr[0])
-
-		if len(lineArr) > 1 {
-			lastLineArrIdx := len(lineArr) - 1
-			trimmedLine := lineArr[lastLineArrIdx]
-			lastCharIdx := len(trimmedLine) - 1
-			lastChar := string(trimmedLine[lastCharIdx])
-			if lastChar == "{" || lastChar == "[" {
-				openBrackets++
-			}
-		} else {
-			errString := fmt.Sprintf("Error in parsing tfvars string: %s", line)
-			reqLogger.Info(errString)
-			return
-		}
-
-		currentValue = line
-		if openBrackets > 0 {
-			continue
-		}
-		keyIndexer[currentKey] = currentValue
-	}
-
-	keys := make([]string, 0, len(keyIndexer))
-	for k := range keyIndexer {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		fmt.Fprintf(&c, "%s\n\n", keyIndexer[k])
-
-	}
-
-	// Write HCL to file
-	// Create the path if not exists
-	err = os.MkdirAll(filepath.Dir(filepath.Join(d.Directory, tfvarsFile)), 0755)
-	if err != nil {
-		errString := fmt.Sprintf("Could not create path: %v", err)
-		reqLogger.Info(errString)
-		return
-	}
-	err = ioutil.WriteFile(filepath.Join(d.Directory, tfvarsFile), c.Bytes(), 0644)
-	if err != nil {
-		errString := fmt.Sprintf("Could not write file %v", err)
-		reqLogger.Info(errString)
-		return
-	}
-
-	// Write to file
-
-	filesToCommit = append(filesToCommit, tfvarsFile)
-
-	// Format Conf File
-	if confFile != "" {
-		confFileContent := ""
-		// The backend-configs for tf-operator are actually written
-		// as a complete tf resource. We need to extract only the key
-		// and values from the conf file only.
-		if customBackend != "" {
-
-			configsOnly := strings.Split(customBackend, "\n")
-			for _, line := range configsOnly {
-				// Assuming that config lines contain an equal sign
-				// All other lines are discarded
-				if strings.Contains(line, "=") {
-					if confFileContent == "" {
-						confFileContent = strings.TrimSpace(line)
-					} else {
-						confFileContent = confFileContent + "\n" + strings.TrimSpace(line)
-					}
+			if !tf.Spec.KeepCompletedPods {
+				err := r.Client.Delete(ctx, &pods.Items[0])
+				if err != nil {
+					reqLogger.V(1).Info(err.Error())
 				}
 			}
+			return nil
 		}
 
-		// Write to file
-		err = os.MkdirAll(filepath.Dir(filepath.Join(d.Directory, confFile)), 0755)
-		if err != nil {
-			errString := fmt.Sprintf("Could not create path: %v", err)
-			reqLogger.Info(errString)
-			return
+		if tf.Status.Exported != tfv1alpha1.ExportedInProgress {
+			tf.Status.Exported = tfv1alpha1.ExportedInProgress
+			err = r.updateStatus(ctx, tf)
+			if err != nil {
+				reqLogger.V(1).Info(err.Error())
+				return err
+			}
+			return nil
 		}
-		err = ioutil.WriteFile(filepath.Join(d.Directory, confFile), []byte(confFileContent), 0644)
-		if err != nil {
-			errString := fmt.Sprintf("Could not write file %v", err)
-			reqLogger.Info(errString)
-			return
-		}
-		filesToCommit = append(filesToCommit, confFile)
-	}
 
-	// Commit and push to repo
-	commitMsg := fmt.Sprintf("automatic update via terraform-operator\nupdates to:\n%s", strings.Join(filesToCommit, "\n"))
-	err = d.ClientGitRepo.Commit(filesToCommit, commitMsg)
-	if err != nil {
-		errString := fmt.Sprintf("Could not commit to repo %v", err)
-		reqLogger.V(1).Info(errString)
-		return
 	}
-	err = d.ClientGitRepo.Push("refs/heads/master")
-	if err != nil {
-		errString := fmt.Sprintf("Could not push to repo %v", err)
-		reqLogger.V(1).Info(errString)
-		return
-	}
-
+	return nil
 }

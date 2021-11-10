@@ -78,13 +78,16 @@ endif
 crds: controller-gen
 	$(CONTROLLER_GEN) $(CRD_OPTIONS) paths="./..." output:crd:stdout > deploy/crds/tf.isaaguilar.com_terraforms_crd.yaml
 
+generate: controller-gen
+	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
+
 openapi-gen: openapi-gen-bin
 	$(OPENAPI_GEN) --logtostderr=true -o "" -i ./pkg/apis/tf/v1alpha1 -O zz_generated.openapi -p ./pkg/apis/tf/v1alpha1 -h ./hack/boilerplate.go.txt -r "-"
 
 client-gen: client-gen-bin
 	$(CLIENT_GEN) -n versioned --input-base ""  --input ${PKG}/pkg/apis/tf/v1alpha1 -p ${PKG}/pkg/client/clientset -h ./hack/boilerplate.go.txt
 
-k8s-gen: crds openapi-gen client-gen
+k8s-gen: crds generate openapi-gen client-gen
 
 docker-build:
 	docker build -t ${DOCKER_REPO}/${IMAGE_NAME}:${VERSION} -f build/Dockerfile .
