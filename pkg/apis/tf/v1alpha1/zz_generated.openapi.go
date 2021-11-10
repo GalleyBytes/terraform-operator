@@ -204,16 +204,19 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 					"terraformModule": {
 						SchemaProps: spec.SchemaProps{
 							Description: "TerraformModule is the terraform module scm address. Currently supports git protocol over SSH or HTTPS",
-							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SrcOpts"),
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
-					"sources": {
+					"resourceDownloads": {
 						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
+							Description: "ResourceDownloads defines other files to download into the module directory that can be used by the terraform workflow runners. The `tfvar` type will also be fetched by the `exportRepo` option (if defined) to aggregate the set of tfvars to save to an scm system.",
+							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
-										Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SrcOpts"),
+										Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ResourceDownload"),
 									},
 								},
 							},
@@ -221,7 +224,8 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 					},
 					"env": {
 						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
+							Description: "Env is used to define a common set of environment variables into the workflow runners. The `TF_VAR_` prefix will also be used by the `exportRepo` option.",
+							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
@@ -399,7 +403,7 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 			},
 		},
 		Dependencies: []string{
-			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Credentials", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ExportRepo", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ReconcileTerraformDeployment", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SrcOpts", "k8s.io/api/core/v1.ConfigMapKeySelector", "k8s.io/api/core/v1.EnvVar", "k8s.io/api/rbac/v1.PolicyRule"},
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Credentials", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ExportRepo", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ReconcileTerraformDeployment", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ResourceDownload", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod", "k8s.io/api/core/v1.ConfigMapKeySelector", "k8s.io/api/core/v1.EnvVar", "k8s.io/api/rbac/v1.PolicyRule"},
 	}
 }
 
@@ -443,6 +447,12 @@ func schema_pkg_apis_tf_v1alpha1_TerraformStatus(ref common.ReferenceCallback) c
 									},
 								},
 							},
+						},
+					},
+					"exported": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
 						},
 					},
 				},

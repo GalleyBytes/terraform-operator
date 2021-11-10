@@ -1,0 +1,34 @@
+apiVersion: tf.isaaguilar.com/v1alpha1
+kind: Terraform
+metadata:
+  name: simple-template-example
+spec:
+  terraformVersion: 0.13.6
+  terraformRunnerPullPolicy: IfNotPresent
+  # Pull this module to execute
+  terraformModule: https://github.com/cloudposse/terraform-example-module.git?ref=master
+
+  # Use kubernetes as a backend which is available for terraform >= v0.13
+  customBackend: |-
+    terraform {
+      backend "kubernetes" {
+        secret_suffix    = "simple-template-example"
+        in_cluster_config  = true
+      }
+    }
+  ignoreDelete: false
+
+  resourceDownloads:
+  - address: https://github.com/kubernetes/kubernetes.git//build/lib/
+  - address: https://github.com/cloudposse/terraform-example-module.git//examples/complete/fixtures.us-east-2.tfvars
+    useAsVar: true
+
+  # Create a tfvar env for the terraform to use
+  env:
+  - name: TF_VAR_name
+    value: simple-template
+  - name: TF_VAR_environment
+    value: example
+
+  scmAuthMethods: [] # No keys are required to download or use this tf module
+

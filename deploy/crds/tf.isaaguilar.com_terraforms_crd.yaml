@@ -129,6 +129,9 @@ spec:
                 be used.
               type: string
             env:
+              description: Env is used to define a common set of environment variables
+                into the workflow runners. The `TF_VAR_` prefix will also be used
+                by the `exportRepo` option.
               items:
                 description: EnvVar represents an environment variable present in
                   a Container.
@@ -247,7 +250,6 @@ spec:
                   type: string
               required:
               - address
-              - tfvarsFile
               type: object
             ignoreDelete:
               description: IgnoreDelete will bypass the finalization process and remove
@@ -308,6 +310,32 @@ spec:
               required:
               - enable
               type: object
+            resourceDownloads:
+              description: ResourceDownloads defines other files to download into
+                the module directory that can be used by the terraform workflow runners.
+                The `tfvar` type will also be fetched by the `exportRepo` option (if
+                defined) to aggregate the set of tfvars to save to an scm system.
+              items:
+                description: 'ResourceDownload (formerly SrcOpts) defines a resource
+                  to fetch using one of the configured protocols: ssh|http|https (eg
+                  git::SSH or git::HTTPS)'
+                properties:
+                  address:
+                    description: Address defines the source address resources to fetch.
+                    type: string
+                  path:
+                    description: Path will download the resources into this path which
+                      is relative to the main module directory.
+                    type: string
+                  useAsVar:
+                    description: UseAsVar will add the file as a tfvar via the -var-file
+                      flag of the terraform plan command. The downloaded resource
+                      must not be a directory.
+                    type: boolean
+                required:
+                - address
+                type: object
+              type: array
             runnerAnnotations:
               additionalProperties:
                 type: string
@@ -499,28 +527,6 @@ spec:
               type: string
             setupRunnerVersion:
               type: string
-            sources:
-              items:
-                description: SrcOpts defines a terraform source location (eg git::SSH
-                  or git::HTTPS)
-                properties:
-                  address:
-                    description: Address defines the source address of the tf resources.
-                      This this var will try to accept any format defined in https://www.terraform.io/docs/modules/sources.html
-                      When downloading `tfvars`, the double slash `//` syntax is used
-                      to define dir or tfvar files. This can be used multiple times
-                      for multiple items.
-                    type: string
-                  extras:
-                    description: Extras will allow for giving the controller specific
-                      instructions for fetching files from the address.
-                    items:
-                      type: string
-                    type: array
-                required:
-                - address
-                type: object
-              type: array
             sshTunnel:
               description: SSHTunnel can be defined for pulling from scm sources that
                 cannot be accessed by the network the operator/runner runs in. An
@@ -553,23 +559,7 @@ spec:
             terraformModule:
               description: TerraformModule is the terraform module scm address. Currently
                 supports git protocol over SSH or HTTPS
-              properties:
-                address:
-                  description: Address defines the source address of the tf resources.
-                    This this var will try to accept any format defined in https://www.terraform.io/docs/modules/sources.html
-                    When downloading `tfvars`, the double slash `//` syntax is used
-                    to define dir or tfvar files. This can be used multiple times
-                    for multiple items.
-                  type: string
-                extras:
-                  description: Extras will allow for giving the controller specific
-                    instructions for fetching files from the address.
-                  items:
-                    type: string
-                  type: array
-              required:
-              - address
-              type: object
+              type: string
             terraformRunner:
               description: TerraformRunner gives the user the ability to inject their
                 own container image to execute terraform. This is very helpful for
@@ -610,6 +600,8 @@ spec:
         status:
           description: TerraformStatus defines the observed state of Terraform
           properties:
+            exported:
+              type: string
             lastCompletedGeneration:
               format: int64
               type: integer

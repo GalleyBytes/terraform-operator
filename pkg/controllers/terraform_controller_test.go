@@ -18,6 +18,9 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"testing"
 	"time"
 
 	tfv1alpha1 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1"
@@ -55,10 +58,8 @@ var _ = Describe("Terraform controller", func() {
 					Namespace: TerraformNamespace,
 				},
 				Spec: tfv1alpha1.TerraformSpec{
-					TerraformModule: &tfv1alpha1.SrcOpts{
-						Address: "https://github.com/cloudposse/terraform-example-module.git?ref=master",
-					},
-					ApplyOnCreate: true,
+					TerraformModule: "https://github.com/cloudposse/terraform-example-module.git?ref=master",
+					ApplyOnCreate:   true,
 				},
 			}
 			Expect(k8sClient.Create(ctx, &terraform)).Should(Succeed())
@@ -68,20 +69,15 @@ var _ = Describe("Terraform controller", func() {
 
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, terraformLookupKey, createdTerraform)
-				if err != nil {
-					return false
-				}
-				return true
+				return err == nil
 			}, timeout, interval).Should(BeTrue())
 			Expect(createdTerraform.Status.Phase).Should(Equal(""))
 
 			job := batchv1.Job{}
 			Eventually(func() bool {
 				err := k8sClient.Get(ctx, terraformLookupKey, &job)
-				if err != nil {
-					return false
-				}
-				return true
+				return err == nil
+
 			}, timeout, interval).Should(BeTrue())
 
 			By("By checking that the Terraform phase updates when job has active pods")
@@ -116,3 +112,160 @@ var _ = Describe("Terraform controller", func() {
 		})
 	})
 })
+
+func TestGetParsedAddress(t *testing.T) {
+	var err error
+	// p, err = getParsedAddress("foo::git::http://foobar.com//boo/bar//bash?ref=a12994d&url=example.com/chke/diil")
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+	// p, err = getParsedAddress("git::ssh://git@github.com/user/repo//foo/bar/file?ref=12345632&sdf=http://go.com/ok")
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+	// p, err = getParsedAddress("http://foobar.com//boo/bar//bash?ref=a12994d&url=example.com/chke/diil")
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+	// p, err = getParsedAddress("github.com/user/repo.git//boo/bar//bash")
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+	// p, err = getParsedAddress("http://user:password@github.com/user/repo.git//boo/bar//bash")
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+	// p, err = getParsedAddress("s3://tf.isaaguilar.com/index//bash?ref=a12994d&url=example.com/chke/diil")
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+	// p, err = getParsedAddress("git@github.com:user/repo//my/favorite/file.txt?ref=12345632")
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+	// p, err = getParsedAddress("path/to/my/local.txt")
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+	// p, err = getParsedAddress("/my/abs/path.out")
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+	// p, err = getParsedAddress("../../up/a/directory.tf")
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+	// p, err = getParsedAddress("fee/fie/foe?ref=0.1.0")
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+	// p, err = getParsedAddress("example.com/awesomecorp/consul/happycloud")
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+	// p, err = getParsedAddress("github.com/isaaguilar/terraform-aws-multi-account-peering")
+	// if err != nil {
+	// 	t.Error(err)
+	// }
+	// scmdetecotor := scmDetector{hosts: []string{"github.com"}}
+	var b []byte
+	var p ParsedAddress
+	var exampleScmType scmType = "bar"
+
+	scmMap := map[string]scmType{
+		"github.com": gitScmType,
+		"foo.io":     exampleScmType,
+	}
+	p, err = getParsedAddress("github.com/hashicorp/example", "", false, scmMap)
+	if err != nil {
+		t.Error(err)
+	}
+	b, _ = json.MarshalIndent(p, "", " ")
+	fmt.Println(string(b))
+
+	p, err = getParsedAddress("git@github.com:hashicorp/example.git", "", false, scmMap)
+	if err != nil {
+		t.Error(err)
+	}
+	b, _ = json.MarshalIndent(p, "", " ")
+	fmt.Println(string(b))
+
+	p, err = getParsedAddress("https://github.com/hashicorp/example//path/to/a//abs/to/b//root/c?do=this&url=https://google.com/ohno/ok&ref=master", "", false, scmMap)
+	if err != nil {
+		t.Error(err)
+	}
+	b, _ = json.MarshalIndent(p, "", " ")
+	fmt.Println(string(b))
+
+	p, err = getParsedAddress("git::https://example.com/vpc.git", "", false, scmMap)
+	if err != nil {
+		t.Error(err)
+	}
+	b, _ = json.MarshalIndent(p, "", " ")
+	fmt.Println(string(b))
+
+	p, err = getParsedAddress("git::ssh://username@example.com/storage.git", "", false, scmMap)
+	if err != nil {
+		t.Error(err)
+	}
+	b, _ = json.MarshalIndent(p, "", " ")
+	fmt.Println(string(b))
+
+	p, err = getParsedAddress("git::username@example.com:storage.git", "", false, scmMap)
+	if err != nil {
+		t.Error(err)
+	}
+	b, _ = json.MarshalIndent(p, "", " ")
+	fmt.Println(string(b))
+
+	p, err = getParsedAddress("hg::http://example.com/vpc.hg", "", false, scmMap)
+	if err != nil {
+		t.Error(err)
+	}
+	b, _ = json.MarshalIndent(p, "", " ")
+	fmt.Println(string(b))
+
+	p, err = getParsedAddress("https://example.com/vpc-module.zip", "", false, scmMap)
+	if err != nil {
+		t.Error(err)
+	}
+	b, _ = json.MarshalIndent(p, "", " ")
+	fmt.Println(string(b))
+
+	p, err = getParsedAddress("s3::https://s3-eu-west-1.amazonaws.com/examplecorp-terraform-modules/vpc.zip", "", false, scmMap)
+	if err != nil {
+		t.Error(err)
+	}
+	b, _ = json.MarshalIndent(p, "", " ")
+	fmt.Println(string(b))
+
+	p, err = getParsedAddress("gcs::https://www.googleapis.com/storage/v1/modules/foomodule.zip", "", false, scmMap)
+	if err != nil {
+		t.Error(err)
+	}
+	b, _ = json.MarshalIndent(p, "", " ")
+	fmt.Println(string(b))
+
+	p, err = getParsedAddress("ssh://username@example.com/storage.git", "", false, scmMap)
+	if err != nil {
+		t.Error(err)
+	}
+	b, _ = json.MarshalIndent(p, "", " ")
+	fmt.Println(string(b))
+
+	p, err = getParsedAddress("username@example.com:storage.git", "", false, scmMap)
+	if err != nil {
+		t.Error(err)
+	}
+	b, _ = json.MarshalIndent(p, "", " ")
+	fmt.Println(string(b))
+
+	p, err = getParsedAddress("username@foo.io:myfavoriteuser/myfavoriterepo.goo?ref=7654321", "", false, scmMap)
+	if err != nil {
+		t.Error(err)
+	}
+	b, _ = json.MarshalIndent(p, "", " ")
+	fmt.Println(string(b))
+
+	// fmt.Printf("%+v", parsed)
+}

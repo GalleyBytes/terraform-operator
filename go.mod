@@ -15,22 +15,18 @@ go 1.15
 require (
 	github.com/MakeNowJust/heredoc v0.0.0-20170808103936-bb23615498cd
 	github.com/aws/aws-sdk-go v1.27.0 // indirect
-	github.com/cloudfoundry/go-socks5 v0.0.0-20180221174514-54f73bdb8a8e // indirect
-	github.com/cloudfoundry/socks5-proxy v0.2.0 // indirect
 	github.com/elliotchance/sshtunnel v1.1.1
 	github.com/go-logr/logr v0.3.0
 	github.com/go-openapi/spec v0.19.6
 	github.com/gobuffalo/envy v1.7.1 // indirect
 	github.com/hashicorp/go-getter v1.5.2
 	github.com/hashicorp/go-version v1.2.0 // indirect
-	github.com/isaaguilar/socks5-proxy v0.3.0
 	github.com/onsi/ginkgo v1.14.1
 	github.com/onsi/gomega v1.10.2
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/rogpeppe/go-internal v1.4.0 // indirect
-	github.com/whilp/git-urls v0.0.0-20191001220047-6db9661140c0
+	go.uber.org/zap v1.15.0
 	golang.org/x/crypto v0.0.0-20201002170205-7f63de1d35b0
-	golang.org/x/net v0.0.0-20201110031124-69a78807bb2b
 	golang.org/x/tools v0.0.0-20201014231627-1610a49f37af // indirect
 	google.golang.org/grpc v1.30.0 // indirect
 	gopkg.in/src-d/go-git.v4 v4.13.1
