@@ -1,6 +1,9 @@
+FROM alpine/k8s:1.20.7 as k8s
+
 FROM alpine/git:user
 USER root
 RUN apk add gettext jq bash
+COPY --from=k8s /usr/bin/kubectl /usr/local/bin/kubectl
 COPY backend.tf /backend.tf
 COPY setup.sh /runner/tfo_runner.sh
 

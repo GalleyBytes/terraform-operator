@@ -82,8 +82,28 @@ type TerraformSpec struct {
 	SetupRunnerPullPolicy     corev1.PullPolicy `json:"setupRunnerPullPolicy,omitempty"`
 
 	// TerraformModule is the terraform module scm address. Currently supports
-	// git protocol over SSH or HTTPS
-	TerraformModule string `json:"terraformModule"`
+	// git protocol over SSH or HTTPS.
+	//
+	// Precedence of "terraformModule*" to use as the main module is
+	// determined by the setup runner. See the runners/setup.sh for the
+	// module configuration.
+	TerraformModule string `json:"terraformModule,omitempty"`
+
+	// TerraformModuleConfigMap is the configMap that contains terraform module
+	// resources. The module will be fetched by the setup runner. In order
+	// for terraform to understand it's a module reosurce, the configmap keys
+	// must end in `.tf` or `.tf.json`.
+	TerraformModuleConfigMap *ConfigMapSelector `json:"terraformModuleConfigMap,omitempty"`
+
+	// TerraformModuleInline is an incline terraform module definition. The
+	// contents of the inline definition will be used to create
+	// `inline-module.tf`
+	TerraformModuleInline string `json:"terraformModuleInline,omitempty"`
+
+	// TODO:
+	// // TerraformOutputSecret will create a secret with the outputs of the
+	// // terraform module
+	// TerraformOuputSecret string `json:"terraformOutputSecret,omitempty"`
 
 	// ResourceDownloads defines other files to download into the module
 	// directory that can be used by the terraform workflow runners.
@@ -173,6 +193,14 @@ type TerraformSpec struct {
 
 	// SCMAuthMethods define multiple SCMs that require tokens/keys
 	SCMAuthMethods []SCMAuthMethod `json:"scmAuthMethods,omitempty"`
+}
+
+// A simple selector for configmaps that can select on the name of the configmap
+// with the optional key. The namespace is not an option since only runners
+// with a namespace'd role will utilize this map.
+type ConfigMapSelector struct {
+	Name string `json:"name"`
+	Key  string `json:"key,omitempty"`
 }
 
 // SCMAuthMethod definition of SCMs that require tokens/keys

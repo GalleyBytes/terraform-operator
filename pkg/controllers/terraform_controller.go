@@ -139,9 +139,9 @@ type RunOptions struct {
 	versionedName                           string
 	envVars                                 []corev1.EnvVar
 	credentials                             []tfv1alpha1.Credentials
-	stack                                   ParsedAddress
+	terraformModuleParsed                   ParsedAddress
 	serviceAccount                          string
-	configMapData                           map[string]string
+	mainModuleAddonData                     map[string]string
 	secretData                              map[string][]byte
 	terraformRunner                         string
 	terraformRunnerExecutionScriptConfigMap *corev1.ConfigMapKeySelector
@@ -176,7 +176,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 
 	setupRunner := "isaaguilar/setup-runner"
 	setupRunnerPullPolicy := corev1.PullIfNotPresent
-	setupRunnerVersion := "1.0.1"
+	setupRunnerVersion := "1.1.2"
 
 	runnerAnnotations := tf.Spec.RunnerAnnotations
 	runnerRules := tf.Spec.RunnerRules
@@ -233,7 +233,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 		terraformRunnerPullPolicy:               terraformRunnerPullPolicy,
 		runnerAnnotations:                       runnerAnnotations,
 		serviceAccount:                          serviceAccount,
-		configMapData:                           make(map[string]string),
+		mainModuleAddonData:                     make(map[string]string),
 		secretData:                              make(map[string][]byte),
 		scriptRunner:                            scriptRunner,
 		scriptRunnerPullPolicy:                  scriptRunnerPullPolicy,
@@ -882,9 +882,27 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Ter
 	}
 
 	runOpts := newRunOptions(tf)
-	runOpts.stack, err = getParsedAddress(tf.Spec.TerraformModule, "", false, scmMap)
-	if err != nil {
-		return err
+
+	if tf.Spec.TerraformModuleInline != "" {
+		// Add add inline to configmap and instruct the pod to fetch the
+		// configmap as the main module
+		runOpts.mainModuleAddonData["inline-module.tf"] = tf.Spec.TerraformModuleInline
+	}
+
+	if tf.Spec.TerraformModuleConfigMap != nil {
+		// Instruct the setup pod to fetch the configmap as the main module
+		b, err := json.Marshal(tf.Spec.TerraformModuleConfigMap)
+		if err != nil {
+			return err
+		}
+		runOpts.mainModuleAddonData[".__TFO__ConfigMapModule.json"] = string(b)
+	}
+
+	if tf.Spec.TerraformModule != "" {
+		runOpts.terraformModuleParsed, err = getParsedAddress(tf.Spec.TerraformModule, "", false, scmMap)
+		if err != nil {
+			return err
+		}
 	}
 
 	if isChanged {
@@ -945,59 +963,59 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Ter
 		}
 		resourceDownloads := string(b)
 
-		runOpts.configMapData[".__TFO__ResourceDownloads.json"] = resourceDownloads
+		runOpts.mainModuleAddonData[".__TFO__ResourceDownloads.json"] = resourceDownloads
 
 		// Override the backend.tf by inserting a custom backend
 		if tf.Spec.CustomBackend != "" {
-			runOpts.configMapData["backend_override.tf"] = tf.Spec.CustomBackend
+			runOpts.mainModuleAddonData["backend_override.tf"] = tf.Spec.CustomBackend
 		}
 
 		if tf.Spec.PreInitScript != "" {
-			runOpts.configMapData[string(tfv1alpha1.PodPreInit)] = tf.Spec.PreInitScript
+			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreInit)] = tf.Spec.PreInitScript
 		}
 
 		if tf.Spec.PostInitScript != "" {
-			runOpts.configMapData[string(tfv1alpha1.PodPostInit)] = tf.Spec.PostInitScript
+			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostInit)] = tf.Spec.PostInitScript
 		}
 
 		if tf.Spec.PrePlanScript != "" {
-			runOpts.configMapData[string(tfv1alpha1.PodPrePlan)] = tf.Spec.PrePlanScript
+			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPrePlan)] = tf.Spec.PrePlanScript
 		}
 
 		if tf.Spec.PostPlanScript != "" {
-			runOpts.configMapData[string(tfv1alpha1.PodPostPlan)] = tf.Spec.PostPlanScript
+			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostPlan)] = tf.Spec.PostPlanScript
 		}
 
 		if tf.Spec.PreApplyScript != "" {
-			runOpts.configMapData[string(tfv1alpha1.PodPreApply)] = tf.Spec.PreApplyScript
+			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreApply)] = tf.Spec.PreApplyScript
 		}
 
 		if tf.Spec.PostApplyScript != "" {
-			runOpts.configMapData[string(tfv1alpha1.PodPostApply)] = tf.Spec.PostApplyScript
+			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostApply)] = tf.Spec.PostApplyScript
 		}
 
 		if tf.Spec.PreInitDeleteScript != "" {
-			runOpts.configMapData[string(tfv1alpha1.PodPreInitDelete)] = tf.Spec.PreInitDeleteScript
+			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreInitDelete)] = tf.Spec.PreInitDeleteScript
 		}
 
 		if tf.Spec.PostInitDeleteScript != "" {
-			runOpts.configMapData[string(tfv1alpha1.PodPostInitDelete)] = tf.Spec.PostInitDeleteScript
+			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostInitDelete)] = tf.Spec.PostInitDeleteScript
 		}
 
 		if tf.Spec.PrePlanDeleteScript != "" {
-			runOpts.configMapData[string(tfv1alpha1.PodPrePlanDelete)] = tf.Spec.PrePlanDeleteScript
+			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPrePlanDelete)] = tf.Spec.PrePlanDeleteScript
 		}
 
 		if tf.Spec.PostPlanDeleteScript != "" {
-			runOpts.configMapData[string(tfv1alpha1.PodPostPlanDelete)] = tf.Spec.PostPlanDeleteScript
+			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostPlanDelete)] = tf.Spec.PostPlanDeleteScript
 		}
 
 		if tf.Spec.PreApplyDeleteScript != "" {
-			runOpts.configMapData[string(tfv1alpha1.PodPreApplyDelete)] = tf.Spec.PostApplyScript
+			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreApplyDelete)] = tf.Spec.PostApplyScript
 		}
 
 		if tf.Spec.PostApplyDeleteScript != "" {
-			runOpts.configMapData[string(tfv1alpha1.PodPostApplyDelete)] = tf.Spec.PostApplyDeleteScript
+			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostApplyDelete)] = tf.Spec.PostApplyDeleteScript
 		}
 	}
 
@@ -1337,7 +1355,7 @@ func (r RunOptions) generateConfigMap() *corev1.ConfigMap {
 			Name:      r.versionedName,
 			Namespace: r.namespace,
 		},
-		Data: r.configMapData,
+		Data: r.mainModuleAddonData,
 	}
 	return cm
 }
@@ -1387,7 +1405,7 @@ func (r RunOptions) generateRole() *rbacv1.Role {
 		APIGroups: []string{"coordination.k8s.io"},
 		Resources: []string{"leases"},
 	}
-	if r.configMapData["backend_override.tf"] != "" {
+	if r.mainModuleAddonData["backend_override.tf"] != "" {
 		// parse the backennd string the way most people write it
 		// example:
 		// terraform {
@@ -1395,7 +1413,7 @@ func (r RunOptions) generateRole() *rbacv1.Role {
 		//     ...
 		//   }
 		// }
-		s := strings.Split(r.configMapData["backend_override.tf"], "\n")
+		s := strings.Split(r.mainModuleAddonData["backend_override.tf"], "\n")
 		for _, line := range s {
 			// Assuming that config lines contain an equal sign
 			// All other lines are discarded
@@ -1536,61 +1554,48 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		Value: "/home/tfo-runner",
 	})
 
-	// Check if stack is in a subdir
+	if r.terraformModuleParsed.Repo != "" {
+		envs = append(envs, []corev1.EnvVar{
+			{
+				Name:  "TFO_MAIN_MODULE_REPO",
+				Value: r.terraformModuleParsed.Repo,
+			},
+			{
+				Name:  "TFO_MAIN_MODULE_REPO_REF",
+				Value: r.terraformModuleParsed.Hash,
+			},
+		}...)
 
-	// if r.stack.repo == "" {
-	// 	// TODO This is an error and should not be allowed
-	// 	//		Find out where this is not checked and error out
-	// 	//		and let the user know the repo is missing (maybe check repo
-	// 	// 		validitiy?)
-	// }
-
-	ref := r.stack.Hash
-	if ref == "" {
-		ref = "master"
-	}
-	envs = append(envs, []corev1.EnvVar{
-		{
-			Name:  "TFO_MAIN_MODULE_REPO",
-			Value: r.stack.Repo,
-		},
-		{
-			Name:  "TFO_MAIN_MODULE_REPO_REF",
-			Value: ref,
-		},
-	}...)
-
-	// r.tokenSecret.Name
-	// if r.token != "" {
-
-	// }
-	if len(r.stack.Files) > 0 {
-		value := r.stack.Files[0]
-		if value == "" {
-			value = "."
+		if len(r.terraformModuleParsed.Files) > 0 {
+			// The terraform module may be in a sub-directory of the repo
+			// Add this subdir value to envs so the pod can properly fetch it
+			value := r.terraformModuleParsed.Files[0]
+			if value == "" {
+				value = "."
+			}
+			envs = append(envs, []corev1.EnvVar{
+				{
+					Name:  "TFO_MAIN_MODULE_REPO_SUBDIR",
+					Value: value,
+				},
+			}...)
+		} else {
+			// TODO maybe set a default in r.stack.subdirs[0] so we can get rid
+			//		of this if statement
+			envs = append(envs, []corev1.EnvVar{
+				{
+					Name:  "TFO_MAIN_MODULE_REPO_SUBDIR",
+					Value: ".",
+				},
+			}...)
 		}
-		envs = append(envs, []corev1.EnvVar{
-			{
-				Name:  "TFO_MAIN_MODULE_REPO_SUBDIR",
-				Value: value,
-			},
-		}...)
-	} else {
-		// TODO maybe set a default in r.stack.subdirs[0] so we can get rid
-		//		of this if statement
-		envs = append(envs, []corev1.EnvVar{
-			{
-				Name:  "TFO_MAIN_MODULE_REPO_SUBDIR",
-				Value: ".",
-			},
-		}...)
 	}
 
-	downloadsVol := "downloads"
-	downloadsPath := "/tmp/downloads"
+	mainModuleAddonsConfigMapName := "main-module-addons"
+	mainModuleAddonsConfigMapPath := "/tmp/main-module-addons"
 	volumes = append(volumes, []corev1.Volume{
 		{
-			Name: downloadsVol,
+			Name: mainModuleAddonsConfigMapName,
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{
@@ -1602,14 +1607,14 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 	}...)
 	volumeMounts = append(volumeMounts, []corev1.VolumeMount{
 		{
-			Name:      downloadsVol,
-			MountPath: downloadsPath,
+			Name:      mainModuleAddonsConfigMapName,
+			MountPath: mainModuleAddonsConfigMapPath,
 		},
 	}...)
 	envs = append(envs, []corev1.EnvVar{
 		{
-			Name:  "TFO_DOWNLOADS",
-			Value: downloadsPath,
+			Name:  "TFO_MAIN_MODULE_ADDONS",
+			Value: mainModuleAddonsConfigMapPath,
 		},
 	}...)
 
@@ -2244,6 +2249,9 @@ func getParsedAddress(address, path string, useAsVar bool, scmMap map[string]scm
 		return ParsedAddress{}, err
 	}
 	hash := y.Get("ref")
+	if hash == "" {
+		hash = "master"
+	}
 
 	// subdir can contain a list seperated by double slashes
 	files := strings.Split(filesSource, "//")
@@ -2338,7 +2346,7 @@ func (r *ReconcileTerraform) exportRepo(ctx context.Context, tf *tfv1alpha1.Terr
 		}
 
 		runOpts := newRunOptions(tf)
-		runOpts.stack, err = getParsedAddress(tf.Spec.TerraformModule, "", false, scmMap)
+		runOpts.terraformModuleParsed, err = getParsedAddress(tf.Spec.TerraformModule, "", false, scmMap)
 		if err != nil {
 			r.Recorder.Event(tf, "Warning", "ConfigError", err.Error())
 			return err
