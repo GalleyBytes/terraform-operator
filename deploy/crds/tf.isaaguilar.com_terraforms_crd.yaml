@@ -557,8 +557,27 @@ spec:
               - sshKeySecretRef
               type: object
             terraformModule:
-              description: TerraformModule is the terraform module scm address. Currently
-                supports git protocol over SSH or HTTPS
+              description: "TerraformModule is the terraform module scm address. Currently
+                supports git protocol over SSH or HTTPS. \n Precedence of \"terraformModule*\"
+                to use as the main module is determined by the setup runner. See the
+                runners/setup.sh for the module configuration."
+              type: string
+            terraformModuleConfigMap:
+              description: TerraformModuleConfigMap is the configMap that contains
+                terraform module resources. The module will be fetched by the setup
+                runner. In order for terraform to understand it's a module reosurce,
+                the configmap keys must end in `.tf` or `.tf.json`.
+              properties:
+                key:
+                  type: string
+                name:
+                  type: string
+              required:
+              - name
+              type: object
+            terraformModuleInline:
+              description: TerraformModuleInline is an incline terraform module definition.
+                The contents of the inline definition will be used to create `inline-module.tf`
               type: string
             terraformRunner:
               description: TerraformRunner gives the user the ability to inject their
@@ -594,8 +613,6 @@ spec:
               description: TerraformVersion helps the operator decide which image
                 tag to pull for the terraform runner. Defaults to "0.11.14"
               type: string
-          required:
-          - terraformModule
           type: object
         status:
           description: TerraformStatus defines the observed state of Terraform

@@ -203,8 +203,20 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 					},
 					"terraformModule": {
 						SchemaProps: spec.SchemaProps{
-							Description: "TerraformModule is the terraform module scm address. Currently supports git protocol over SSH or HTTPS",
-							Default:     "",
+							Description: "TerraformModule is the terraform module scm address. Currently supports git protocol over SSH or HTTPS.\n\nPrecedence of \"terraformModule*\" to use as the main module is determined by the setup runner. See the runners/setup.sh for the module configuration.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"terraformModuleConfigMap": {
+						SchemaProps: spec.SchemaProps{
+							Description: "TerraformModuleConfigMap is the configMap that contains terraform module resources. The module will be fetched by the setup runner. In order for terraform to understand it's a module reosurce, the configmap keys must end in `.tf` or `.tf.json`.",
+							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ConfigMapSelector"),
+						},
+					},
+					"terraformModuleInline": {
+						SchemaProps: spec.SchemaProps{
+							Description: "TerraformModuleInline is an incline terraform module definition. The contents of the inline definition will be used to create `inline-module.tf`",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -399,11 +411,10 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 						},
 					},
 				},
-				Required: []string{"terraformModule"},
 			},
 		},
 		Dependencies: []string{
-			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Credentials", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ExportRepo", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ReconcileTerraformDeployment", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ResourceDownload", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod", "k8s.io/api/core/v1.ConfigMapKeySelector", "k8s.io/api/core/v1.EnvVar", "k8s.io/api/rbac/v1.PolicyRule"},
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ConfigMapSelector", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.Credentials", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ExportRepo", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ReconcileTerraformDeployment", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.ResourceDownload", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1.SCMAuthMethod", "k8s.io/api/core/v1.ConfigMapKeySelector", "k8s.io/api/core/v1.EnvVar", "k8s.io/api/rbac/v1.PolicyRule"},
 	}
 }
 
