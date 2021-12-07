@@ -1,5 +1,8 @@
+FROM alpine/k8s:1.20.7 as k8s
+
 FROM hashicorp/terraform:${TF_IMAGE}
-RUN apk add bash
+RUN apk add bash jq
+COPY --from=k8s /usr/bin/kubectl /usr/local/bin/kubectl
 COPY tf.sh /runner/tfo_runner.sh
 
 ENV TFO_RUNNER_SCRIPT=/runner/tfo_runner.sh \

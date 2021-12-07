@@ -1,13 +1,13 @@
 #!/bin/bash -e
 
 function join_by {
-	local d="$1" f=${2:-$(</dev/stdin)};
-	if [[ -z "$f" ]]; then return 1; fi
-	if shift 2; then
-		printf %s "$f" "${@/#/$d}"
-	else
-	  join_by "$d" $f
-	fi
+  local d="$1" f=${2:-$(</dev/stdin)};
+  if [[ -z "$f" ]]; then return 1; fi
+  if shift 2; then
+    printf %s "$f" "${@/#/$d}"
+  else
+    join_by "$d" $f
+  fi
 }
 
 function version_gt_or_eq {
@@ -47,4 +47,33 @@ case "$TFO_RUNNER" in
         ;;
 esac
 
-exit ${PIPESTATUS[0]}
+if [[ ${PIPESTATUS[0]} -gt 0 ]];then exit ${PIPESTATUS[0]};fi
+
+if [[ "$TFO_RUNNER" == "apply" ]] && [[ "$TFO_SAVE_OUTPUTS" == "true" ]]; then
+  # On sccessful apply, save outputs as k8s-secret
+  data=$(mktemp)
+  printf '[
+    {"op":"replace","path":"/data","value":{}}
+  ]' > "$data"
+  t=$(mktemp)
+  include=( $(echo "$TFO_OUTPUTS_TO_INCLUDE" | tr "," " ") )
+  omit=( $(echo "$TFO_OUTPUTS_TO_OMIT" | tr "," " ") )
+  jsonoutput=$(terraform output -json)
+  keys=( $(jq -r '.|keys[]' <<< $jsonoutput) )
+  for key in ${keys[@]}; do
+    if [[ "${#include[@]}" -gt 0 ]] && [[ ! " ${include[*]} " =~ " $key " ]]; then
+      echo "Skipping $key"
+      continue
+    fi
+    if [[ "${#omit[@]}" -gt 0 ]] && [[ " ${omit[*]} " =~ " $key " ]]; then
+      echo "Omitting $key"
+      continue
+    fi
+    b64value=$(jq -r --arg key $key '.[$key]' <<< $jsonoutput|base64|tr -d '[:space:]')
+    jq -Mc --arg key $key --arg value $b64value '. += [
+      {"op":"add","path":"/data/\($key)","value":"\($value)"}
+    ]' "$data" > "$t"
+    cp "$t" "$data"
+  done
+  kubectl patch secret "$TFO_OUTPUTS_SECRET_NAME" --type json --patch-file "$data"
+fi

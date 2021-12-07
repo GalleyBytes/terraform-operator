@@ -259,6 +259,23 @@ spec:
               description: KeepCompletedPods when true will keep completed pods. Default
                 is false and completed pods are removed.
               type: boolean
+            outputsSecret:
+              description: OutputsSecret will create a secret with the outputs from
+                the module. All outputs from the module will be written to the secret
+                unless the user defines "outputsToInclude" or "outputsToOmit".
+              type: string
+            outputsToInclude:
+              description: OutputsToInclude is a whitelist of outputs to write when
+                writing the outputs to kubernetes.
+              items:
+                type: string
+              type: array
+            outputsToOmit:
+              description: OutputsToOmit is a blacklist of outputs to omit when writing
+                the outputs to kubernetes.
+              items:
+                type: string
+              type: array
             postApplyDeleteScript:
               type: string
             postApplyScript:
@@ -613,6 +630,10 @@ spec:
               description: TerraformVersion helps the operator decide which image
                 tag to pull for the terraform runner. Defaults to "0.11.14"
               type: string
+            writeOutputsToStatus:
+              description: WriteOutputsToStatus will add the outputs from the module
+                to the status of the Terraform CustomResource.
+              type: boolean
           type: object
         status:
           description: TerraformStatus defines the observed state of Terraform
@@ -622,13 +643,19 @@ spec:
             lastCompletedGeneration:
               format: int64
               type: integer
+            outputs:
+              additionalProperties:
+                type: string
+              type: object
             phase:
               type: string
             podNamePrefix:
-              description: 'INSERT ADDITIONAL STATUS FIELD - define observed state
-                of cluster Important: Run "operator-sdk generate k8s" to regenerate
-                code after modifying this file Add custom validation using kubebuilder
-                tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html'
+              description: PodNamePrefix is used to identify this installation of
+                the resource. For very long resource names, like those greater than
+                220 characters, the prefix ensures resource uniqueness for runners
+                and other resources used by the runner. Another case for the pod name
+                prefix is when rapidly deleteing a resource and recreating it, the
+                chance of recycling existing resources is reduced to virtually nil.
               type: string
             stages:
               items:
