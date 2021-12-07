@@ -100,10 +100,22 @@ type TerraformSpec struct {
 	// `inline-module.tf`
 	TerraformModuleInline string `json:"terraformModuleInline,omitempty"`
 
-	// TODO:
-	// // TerraformOutputSecret will create a secret with the outputs of the
-	// // terraform module
-	// TerraformOuputSecret string `json:"terraformOutputSecret,omitempty"`
+	// OutputsSecret will create a secret with the outputs from the module. All
+	// outputs from the module will be written to the secret unless the user
+	// defines "outputsToInclude" or "outputsToOmit".
+	OutputsSecret string `json:"outputsSecret,omitempty"`
+
+	// OutputsToInclude is a whitelist of outputs to write when writing the
+	// outputs to kubernetes.
+	OutputsToInclude []string `json:"outputsToInclude,omitempty"`
+
+	// OutputsToOmit is a blacklist of outputs to omit when writing the
+	// outputs to kubernetes.
+	OutputsToOmit []string `json:"outputsToOmit,omitempty"`
+
+	// WriteOutputsToStatus will add the outputs from the module to the status
+	// of the Terraform CustomResource.
+	WriteOutputsToStatus bool `json:"writeOutputsToStatus,omitempty"`
 
 	// ResourceDownloads defines other files to download into the module
 	// directory that can be used by the terraform workflow runners.
@@ -393,11 +405,20 @@ type TerraformStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
 	// Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html
-	PodNamePrefix           string      `json:"podNamePrefix"`
-	Phase                   StatusPhase `json:"phase"`
-	LastCompletedGeneration int64       `json:"lastCompletedGeneration"`
-	Stages                  []Stage     `json:"stages"`
-	Exported                Exported    `json:"exported,omitempty"`
+
+	// PodNamePrefix is used to identify this installation of the resource. For
+	// very long resource names, like those greater than 220 characters, the
+	// prefix ensures resource uniqueness for runners and other resources used
+	// by the runner.
+	// Another case for the pod name prefix is when rapidly deleteing a resource
+	// and recreating it, the chance of recycling existing resources is reduced
+	// to virtually nil.
+	PodNamePrefix           string            `json:"podNamePrefix"`
+	Phase                   StatusPhase       `json:"phase"`
+	LastCompletedGeneration int64             `json:"lastCompletedGeneration"`
+	Outputs                 map[string]string `json:"outputs,omitempty"`
+	Stages                  []Stage           `json:"stages"`
+	Exported                Exported          `json:"exported,omitempty"`
 }
 
 type Exported string
