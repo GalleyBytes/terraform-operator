@@ -425,6 +425,17 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 				if err != nil {
 					reqLogger.Error(err, fmt.Sprintf("failed to load secret '%s'", runOpts.outputsSecretName))
 				}
+				// Get a list of outputs to clean up any removed outputs
+				keysInOutputs := []string{}
+				for key := range secret.Data {
+					keysInOutputs = append(keysInOutputs, key)
+				}
+				for key := range tf.Status.Outputs {
+					if !utils.ListContainsStr(keysInOutputs, key) {
+						// remove the key if its not in the new list of outputs
+						delete(tf.Status.Outputs, key)
+					}
+				}
 				for key, value := range secret.Data {
 					if tf.Status.Outputs == nil {
 						tf.Status.Outputs = make(map[string]string)
