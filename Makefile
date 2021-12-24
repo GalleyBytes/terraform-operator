@@ -7,6 +7,7 @@ VERSION ?= $(shell git ls-remote .|grep $$(git rev-parse HEAD).*tags|head -n1|se
 ifeq ($(VERSION),)
 VERSION := v0.0.0
 endif
+IMG ?= ${IMG}
 OS := $(shell uname -s | tr A-Z a-z)
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -90,14 +91,14 @@ client-gen: client-gen-bin
 k8s-gen: crds generate openapi-gen client-gen
 
 docker-build:
-	docker build -t ${DOCKER_REPO}/${IMAGE_NAME}:${VERSION} -f build/Dockerfile .
+	docker build -t ${IMG} -f build/Dockerfile .
 
 docker-build-local:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -v -o build/_output/manager cmd/manager/main.go
-	docker build -t ${DOCKER_REPO}/${IMAGE_NAME}:${VERSION} -f build/Dockerfile.local build/
+	docker build -t ${IMG} -f build/Dockerfile.local build/
 
 docker-push:
-	docker push ${DOCKER_REPO}/${IMAGE_NAME}:${VERSION}
+	docker push ${IMG}
 
 docker-build-job:
 	DOCKER_REPO=${DOCKER_REPO} /bin/bash docker/terraform/build.sh
