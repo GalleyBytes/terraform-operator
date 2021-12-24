@@ -173,7 +173,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	versionedName := name + "-v" + fmt.Sprint(tf.Generation)
 	terraformRunner := "isaaguilar/tf-runner-v5alpha6"
 	terraformRunnerPullPolicy := corev1.PullIfNotPresent
-	terraformVersion := "1.1.0"
+	terraformVersion := "1.1.2"
 
 	scriptRunner := "isaaguilar/script-runner"
 	scriptRunnerPullPolicy := corev1.PullIfNotPresent

@@ -221,6 +221,50 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 							Format:      "",
 						},
 					},
+					"outputsSecret": {
+						SchemaProps: spec.SchemaProps{
+							Description: "OutputsSecret will create a secret with the outputs from the module. All outputs from the module will be written to the secret unless the user defines \"outputsToInclude\" or \"outputsToOmit\".",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"outputsToInclude": {
+						SchemaProps: spec.SchemaProps{
+							Description: "OutputsToInclude is a whitelist of outputs to write when writing the outputs to kubernetes.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"outputsToOmit": {
+						SchemaProps: spec.SchemaProps{
+							Description: "OutputsToOmit is a blacklist of outputs to omit when writing the outputs to kubernetes.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"writeOutputsToStatus": {
+						SchemaProps: spec.SchemaProps{
+							Description: "WriteOutputsToStatus will add the outputs from the module to the status of the Terraform CustomResource.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
 					"resourceDownloads": {
 						SchemaProps: spec.SchemaProps{
 							Description: "ResourceDownloads defines other files to download into the module directory that can be used by the terraform workflow runners. The `tfvar` type will also be fetched by the `exportRepo` option (if defined) to aggregate the set of tfvars to save to an scm system.",
@@ -427,7 +471,7 @@ func schema_pkg_apis_tf_v1alpha1_TerraformStatus(ref common.ReferenceCallback) c
 				Properties: map[string]spec.Schema{
 					"podNamePrefix": {
 						SchemaProps: spec.SchemaProps{
-							Description: "INSERT ADDITIONAL STATUS FIELD - define observed state of cluster Important: Run \"operator-sdk generate k8s\" to regenerate code after modifying this file Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html",
+							Description: "PodNamePrefix is used to identify this installation of the resource. For very long resource names, like those greater than 220 characters, the prefix ensures resource uniqueness for runners and other resources used by the runner. Another case for the pod name prefix is when rapidly deleteing a resource and recreating it, the chance of recycling existing resources is reduced to virtually nil.",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
@@ -445,6 +489,21 @@ func schema_pkg_apis_tf_v1alpha1_TerraformStatus(ref common.ReferenceCallback) c
 							Default: 0,
 							Type:    []string{"integer"},
 							Format:  "int64",
+						},
+					},
+					"outputs": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
 						},
 					},
 					"stages": {
