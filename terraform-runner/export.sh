@@ -1,4 +1,15 @@
 #!/bin/bash
+
+# TODO
+#   sshfix is a hack that is called just before running ssh commands to make
+#   sure the ~/.ssh/ permissions are correct. Another method to do this is to
+#   properly handle permissions errors and retrying.
+function sshfix {
+    if stat "$TFO_ROOT_PATH"/.ssh/* >/dev/null 2>/dev/null; then
+        chmod -R 0600 "$TFO_ROOT_PATH"/.ssh/*
+    fi
+}
+
 function join_by {
 	local d="$1" f=${2:-$(</dev/stdin)};
 	if [[ -z "$f" ]]; then return 1; fi
@@ -16,7 +27,8 @@ set -o pipefail
 if [[ -d "$TFO_EXPORT_REPO_PATH" ]]; then
     rm -rf "$TFO_EXPORT_REPO_PATH"
 fi
-git clone "$TFO_EXPORT_REPO" "$TFO_EXPORT_REPO_PATH" || exit $?
+
+sshfix; git clone "$TFO_EXPORT_REPO" "$TFO_EXPORT_REPO_PATH" || exit $?
 cd "$TFO_EXPORT_REPO_PATH"
 git checkout "$TFO_EXPORT_REPO_REF"
 git config --global user.email "$TFO_EXPORT_REPO_AUTOMATED_USER_EMAIL"
@@ -54,4 +66,4 @@ if [[ $RET -gt 0 ]]; then
     exit 2
 fi
 
-git push origin "$TFO_EXPORT_REPO_REF"
+sshfix; git push origin "$TFO_EXPORT_REPO_REF"
