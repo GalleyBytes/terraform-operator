@@ -101,7 +101,7 @@ AVAILABLE_HASHICORP_TERRAFORM_IMAGES=($(
     done
 ))
 
-KNOWN_BROKEN_TAGS=( "0.11.3" "0.11.2" )  # Generally due to base image not being compatible with the package installs
+KNOWN_BROKEN_TAGS=( "0.11.3" "0.11.2" "0.11.0-beta1" "0.11.0" "0.11.1" "0.11.4" "0.11.5" "0.11.6" "0.11.7" )  # Generally due to base image not being compatible with the package installs
 
 for TF_IMAGE in ${AVAILABLE_HASHICORP_TERRAFORM_IMAGES[@]};do
     major=$(cut -d'.' -f1 <<< $TF_IMAGE|sed -E "/^[a-zA-Z+]/d")

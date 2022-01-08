@@ -5,16 +5,6 @@
 > A Kubernetes CRD and Controller to handle Terraform operations by generating k8s jobs catered to perform Terraform workflows
 
 <hr/>
-<center>:warning: :warning: :warning:</center>
-
-**master branch is currently under heavy development.** The Official documentation page is moving to [http://tf.isaaguilar.com](http://tf.isaaguilar.com). Docs and examples for version of Terraform Operator < `v0.4.0` can be found in branch: https://github.com/isaaguilar/terraform-operator/tree/master-v0.3.x/docs
-
-Still trying to get a road map.
-
-**Stay tuned!**
-
-<hr/>
-
 
 ## What is terraform-operator?
 
@@ -32,4 +22,4 @@ This project is not:
 
 ## Docs
 
-Visit [http://tf.isaaguilar.com](http://tf.isaaguilar.com) for docs for version >= `v0.4.x`.
+Visit [http://tf.isaaguilar.com](http://tf.isaaguilar.com) for docs for version >= `v0.5.x`.
