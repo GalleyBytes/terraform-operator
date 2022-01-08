@@ -71,7 +71,7 @@ fi
 ##
 ## Build tf-runner(s)
 ##
-TF_RUNNER_IMAGE_NAME="tf-runner-v5alpha6"
+TF_RUNNER_IMAGE_NAME="tf-runner-v5beta1"
 printf "\n\n----------------\nFetching available hashicorp/terraform versions"
 i=0
 BUILT_TF_RUNNER_IMAGES=($(

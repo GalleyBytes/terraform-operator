@@ -46,8 +46,8 @@ case "$TFO_RUNNER" in
         terraform apply tfplan 2>&1 | tee "$out"/"$TFO_RUNNER".out
         ;;
 esac
-
-if [[ ${PIPESTATUS[0]} -gt 0 ]];then exit ${PIPESTATUS[0]};fi
+status=${PIPESTATUS[0]}
+if [[ $status -gt 0 ]];then exit $status;fi
 
 if [[ "$TFO_RUNNER" == "apply" ]] && [[ "$TFO_SAVE_OUTPUTS" == "true" ]]; then
   # On sccessful apply, save outputs as k8s-secret
