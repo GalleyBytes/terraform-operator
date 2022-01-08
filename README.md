@@ -11,7 +11,7 @@
 This project is:
 
 - A way to run Terraform in Kubernetes by defining Terraform deployments as Kubernetes manifests
-- A controller that configures and starts [Terraform Workflows](#link-tbd) when it sees changes to the Kubernetes manifest
+- A controller that configures and starts [Terraform Workflows](http://tf.isaaguilar.com/docs/architecture/workflow/) when it sees changes to the Kubernetes manifest
 - Workflow runner pods that execute Terraform plan/apply and other user-defined scripts
 
 This project is not:
