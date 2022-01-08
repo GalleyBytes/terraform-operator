@@ -7,7 +7,7 @@ VERSION ?= $(shell git ls-remote .|grep $$(git rev-parse HEAD).*tags|head -n1|se
 ifeq ($(VERSION),)
 VERSION := v0.0.0
 endif
-IMG ?= ${IMG}
+IMG ?= ${DOCKER_REPO}/${IMAGE_NAME}:${VERSION}
 OS := $(shell uname -s | tr A-Z a-z)
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
