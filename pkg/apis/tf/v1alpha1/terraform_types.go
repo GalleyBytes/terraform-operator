@@ -136,21 +136,6 @@ type TerraformSpec struct {
 	// providers
 	Credentials []Credentials `json:"credentials,omitempty"`
 
-	// ApplyOnCreate is used to apply any planned changes when the resource is
-	// first created. Omitting this or setting it to false will resort to
-	// on demand apply. Defaults to false.
-	ApplyOnCreate bool `json:"applyOnCreate,omitempty"`
-
-	// ApplyOnUpdate is used to apply any planned changes when the resource is
-	// updated. Omitting this or setting it to false will resort to
-	// on demand apply. Defaults to false.
-	ApplyOnUpdate bool `json:"applyOnUpdate,omitempty"`
-
-	// ApplyOnDelete is used to apply the destroy plan when the terraform
-	// resource is being deleted. Omitting this or setting it to false will
-	// require "on-demand" apply. Defaults to false.
-	ApplyOnDelete bool `json:"applyOnDelete,omitempty"`
-
 	// IgnoreDelete will bypass the finalization process and remove the tf
 	// resource without running any delete jobs.
 	IgnoreDelete bool `json:"ignoreDelete,omitempty"`

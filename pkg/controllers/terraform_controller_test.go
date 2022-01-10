@@ -59,7 +59,6 @@ var _ = Describe("Terraform controller", func() {
 				},
 				Spec: tfv1alpha1.TerraformSpec{
 					TerraformModule: "https://github.com/cloudposse/terraform-example-module.git?ref=master",
-					ApplyOnCreate:   true,
 				},
 			}
 			Expect(k8sClient.Create(ctx, &terraform)).Should(Succeed())

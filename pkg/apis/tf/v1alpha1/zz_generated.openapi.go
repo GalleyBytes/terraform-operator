@@ -313,27 +313,6 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 							},
 						},
 					},
-					"applyOnCreate": {
-						SchemaProps: spec.SchemaProps{
-							Description: "ApplyOnCreate is used to apply any planned changes when the resource is first created. Omitting this or setting it to false will resort to on demand apply. Defaults to false.",
-							Type:        []string{"boolean"},
-							Format:      "",
-						},
-					},
-					"applyOnUpdate": {
-						SchemaProps: spec.SchemaProps{
-							Description: "ApplyOnUpdate is used to apply any planned changes when the resource is updated. Omitting this or setting it to false will resort to on demand apply. Defaults to false.",
-							Type:        []string{"boolean"},
-							Format:      "",
-						},
-					},
-					"applyOnDelete": {
-						SchemaProps: spec.SchemaProps{
-							Description: "ApplyOnDelete is used to apply the destroy plan when the terraform resource is being deleted. Omitting this or setting it to false will require \"on-demand\" apply. Defaults to false.",
-							Type:        []string{"boolean"},
-							Format:      "",
-						},
-					},
 					"ignoreDelete": {
 						SchemaProps: spec.SchemaProps{
 							Description: "IgnoreDelete will bypass the finalization process and remove the tf resource without running any delete jobs.",
