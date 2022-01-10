@@ -1,10 +1,12 @@
+# Terraform Operator 
+
+> A Kubernetes CRD and Controller to handle Terraform operations by generating k8s jobs catered to perform Terraform workflows
+
 <p align="center">
 <img src="https://s3.amazonaws.com/classic.isaaguilar.com/tfo-workflow-diagram.png" alt="Terraform Operator Workflow Diagram"></img>
 </p>
 
-> A Kubernetes CRD and Controller to handle Terraform operations by generating k8s jobs catered to perform Terraform workflows
 
-<hr/>
 
 ## What is terraform-operator?
 
