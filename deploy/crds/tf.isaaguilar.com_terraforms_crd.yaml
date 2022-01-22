@@ -42,21 +42,6 @@ spec:
         spec:
           description: TerraformSpec defines the desired state of Terraform
           properties:
-            applyOnCreate:
-              description: ApplyOnCreate is used to apply any planned changes when
-                the resource is first created. Omitting this or setting it to false
-                will resort to on demand apply. Defaults to false.
-              type: boolean
-            applyOnDelete:
-              description: ApplyOnDelete is used to apply the destroy plan when the
-                terraform resource is being deleted. Omitting this or setting it to
-                false will require "on-demand" apply. Defaults to false.
-              type: boolean
-            applyOnUpdate:
-              description: ApplyOnUpdate is used to apply any planned changes when
-                the resource is updated. Omitting this or setting it to false will
-                resort to on demand apply. Defaults to false.
-              type: boolean
             credentials:
               description: Credentials is an array of credentials generally used for
                 Terraform providers
@@ -476,11 +461,6 @@ spec:
                     type: object
                   host:
                     type: string
-                  timeout:
-                    description: Timeout In seconds is the time before giving up trying
-                      to fetch a repo
-                    format: int64
-                    type: integer
                 required:
                 - host
                 type: object
