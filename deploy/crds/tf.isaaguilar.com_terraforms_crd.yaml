@@ -1,6 +1,6 @@
 
 ---
-apiVersion: apiextensions.k8s.io/v1beta1
+apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
@@ -8,10 +8,6 @@ metadata:
   creationTimestamp: null
   name: terraforms.tf.isaaguilar.com
 spec:
-  additionalPrinterColumns:
-  - JSONPath: .metadata.creationTimestamp
-    name: Age
-    type: date
   group: tf.isaaguilar.com
   names:
     kind: Terraform
@@ -21,664 +17,678 @@ spec:
     - tf
     singular: terraform
   scope: Namespaced
-  subresources:
-    status: {}
-  validation:
-    openAPIV3Schema:
-      description: Terraform is the Schema for the terraforms API
-      properties:
-        apiVersion:
-          description: 'APIVersion defines the versioned schema of this representation
-            of an object. Servers should convert recognized schemas to the latest
-            internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
-          type: string
-        kind:
-          description: 'Kind is a string value representing the REST resource this
-            object represents. Servers may infer this from the endpoint the client
-            submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
-          type: string
-        metadata:
-          type: object
-        spec:
-          description: TerraformSpec defines the desired state of Terraform
-          properties:
-            credentials:
-              description: Credentials is an array of credentials generally used for
-                Terraform providers
-              items:
-                description: Credentials are used for adding credentials for terraform
-                  providers. For example, in AWS, the AWS Terraform Provider uses
-                  the default credential chain of the AWS SDK, one of which are environment
-                  variables (eg AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Terraform is the Schema for the terraforms API
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: TerraformSpec defines the desired state of Terraform
+            properties:
+              credentials:
+                description: Credentials is an array of credentials generally used
+                  for Terraform providers
+                items:
+                  description: Credentials are used for adding credentials for terraform
+                    providers. For example, in AWS, the AWS Terraform Provider uses
+                    the default credential chain of the AWS SDK, one of which are
+                    environment variables (eg AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)
+                  properties:
+                    aws:
+                      description: AWSCredentials contains the different methods to
+                        load AWS credentials for the Terraform AWS Provider. If using
+                        AWS_ACCESS_KEY_ID and/or environment variables for credentials,
+                        use fromEnvs.
+                      properties:
+                        irsa:
+                          description: "IRSA requires the irsa role-arn as the string
+                            input. This will create a serice account named tf-<resource-name>.
+                            In order for the pod to be able to use this role, the
+                            \"Trusted Entity\" of the IAM role must allow this serice
+                            account name and namespace. \n Using a TrustEntity policy
+                            that includes \"StringEquals\" setting it as the serivce
+                            account name is the most secure way to use IRSA. \n However,
+                            for a reusable policy consider \"StringLike\" with a few
+                            wildcards to make the irsa role usable by pods created
+                            by terraform-operator. The example below is pretty liberal,
+                            but will work for any pod created by the terraform-operator.
+                            \n {   \"Version\": \"2012-10-17\",   \"Statement\": [
+                            \    {       \"Effect\": \"Allow\",       \"Principal\":
+                            {         \"Federated\": \"${OIDC_ARN}\"       },       \"Action\":
+                            \"sts:AssumeRoleWithWebIdentity\",       \"Condition\":
+                            {         \"StringLike\": {           \"${OIDC_URL}:sub\":
+                            \"system:serviceaccount:*:tf-*\"         }       }     }
+                            \  ] }"
+                          type: string
+                        kiam:
+                          description: KIAM requires the kiam role-name as the string
+                            input. This will add the correct annotation to the terraform
+                            execution pod
+                          type: string
+                      type: object
+                    secretNameRef:
+                      description: SecretNameRef will load environment variables into
+                        the terraform runner from a kubernetes secret
+                      properties:
+                        key:
+                          description: Key of the secret
+                          type: string
+                        name:
+                          description: Name of the secret
+                          type: string
+                        namespace:
+                          description: Namespace of the secret; Defaults to namespace
+                            of the tf resource
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    serviceAccountAnnotations:
+                      additionalProperties:
+                        type: string
+                      description: ServiceAccountAnnotations allows the service account
+                        to be annotated with cloud IAM roles such as Workload Identity
+                        on GCP
+                      type: object
+                  type: object
+                type: array
+              customBackend:
+                description: CustomBackend will allow the user to configure the backend
+                  of their choice. If this is omitted, the default consul template
+                  will be used.
+                type: string
+              env:
+                description: Env is used to define a common set of environment variables
+                  into the workflow runners. The `TF_VAR_` prefix will also be used
+                  by the `exportRepo` option.
+                items:
+                  description: EnvVar represents an environment variable present in
+                    a Container.
+                  properties:
+                    name:
+                      description: Name of the environment variable. Must be a C_IDENTIFIER.
+                      type: string
+                    value:
+                      description: 'Variable references $(VAR_NAME) are expanded using
+                        the previous defined environment variables in the container
+                        and any service environment variables. If a variable cannot
+                        be resolved, the reference in the input string will be unchanged.
+                        The $(VAR_NAME) syntax can be escaped with a double $$, ie:
+                        $$(VAR_NAME). Escaped references will never be expanded, regardless
+                        of whether the variable exists or not. Defaults to "".'
+                      type: string
+                    valueFrom:
+                      description: Source for the environment variable's value. Cannot
+                        be used if value is not empty.
+                      properties:
+                        configMapKeyRef:
+                          description: Selects a key of a ConfigMap.
+                          properties:
+                            key:
+                              description: The key to select.
+                              type: string
+                            name:
+                              description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                TODO: Add other useful fields. apiVersion, kind, uid?'
+                              type: string
+                            optional:
+                              description: Specify whether the ConfigMap or its key
+                                must be defined
+                              type: boolean
+                          required:
+                          - key
+                          type: object
+                        fieldRef:
+                          description: 'Selects a field of the pod: supports metadata.name,
+                            metadata.namespace, `metadata.labels[''<KEY>'']`, `metadata.annotations[''<KEY>'']`,
+                            spec.nodeName, spec.serviceAccountName, status.hostIP,
+                            status.podIP, status.podIPs.'
+                          properties:
+                            apiVersion:
+                              description: Version of the schema the FieldPath is
+                                written in terms of, defaults to "v1".
+                              type: string
+                            fieldPath:
+                              description: Path of the field to select in the specified
+                                API version.
+                              type: string
+                          required:
+                          - fieldPath
+                          type: object
+                        resourceFieldRef:
+                          description: 'Selects a resource of the container: only
+                            resources limits and requests (limits.cpu, limits.memory,
+                            limits.ephemeral-storage, requests.cpu, requests.memory
+                            and requests.ephemeral-storage) are currently supported.'
+                          properties:
+                            containerName:
+                              description: 'Container name: required for volumes,
+                                optional for env vars'
+                              type: string
+                            divisor:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              description: Specifies the output format of the exposed
+                                resources, defaults to "1"
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            resource:
+                              description: 'Required: resource to select'
+                              type: string
+                          required:
+                          - resource
+                          type: object
+                        secretKeyRef:
+                          description: Selects a key of a secret in the pod's namespace
+                          properties:
+                            key:
+                              description: The key of the secret to select from.  Must
+                                be a valid secret key.
+                              type: string
+                            name:
+                              description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                TODO: Add other useful fields. apiVersion, kind, uid?'
+                              type: string
+                            optional:
+                              description: Specify whether the Secret or its key must
+                                be defined
+                              type: boolean
+                          required:
+                          - key
+                          type: object
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
+              exportRepo:
+                description: ExportRepo allows the user to define
                 properties:
-                  aws:
-                    description: AWSCredentials contains the different methods to
-                      load AWS credentials for the Terraform AWS Provider. If using
-                      AWS_ACCESS_KEY_ID and/or environment variables for credentials,
-                      use fromEnvs.
-                    properties:
-                      irsa:
-                        description: "IRSA requires the irsa role-arn as the string
-                          input. This will create a serice account named tf-<resource-name>.
-                          In order for the pod to be able to use this role, the \"Trusted
-                          Entity\" of the IAM role must allow this serice account
-                          name and namespace. \n Using a TrustEntity policy that includes
-                          \"StringEquals\" setting it as the serivce account name
-                          is the most secure way to use IRSA. \n However, for a reusable
-                          policy consider \"StringLike\" with a few wildcards to make
-                          the irsa role usable by pods created by terraform-operator.
-                          The example below is pretty liberal, but will work for any
-                          pod created by the terraform-operator. \n {   \"Version\":
-                          \"2012-10-17\",   \"Statement\": [     {       \"Effect\":
-                          \"Allow\",       \"Principal\": {         \"Federated\":
-                          \"${OIDC_ARN}\"       },       \"Action\": \"sts:AssumeRoleWithWebIdentity\",
-                          \      \"Condition\": {         \"StringLike\": {           \"${OIDC_URL}:sub\":
-                          \"system:serviceaccount:*:tf-*\"         }       }     }
-                          \  ] }"
+                  address:
+                    description: Address is the git repo to save to. At this time,
+                      only SSH is allowed
+                    type: string
+                  confFile:
+                    description: ConfFile is the full path relative to the root of
+                      the repo
+                    type: string
+                  tfvarsFile:
+                    description: TFVarsFile is the full path relative to the root
+                      of the repo
+                    type: string
+                required:
+                - address
+                type: object
+              ignoreDelete:
+                description: IgnoreDelete will bypass the finalization process and
+                  remove the tf resource without running any delete jobs.
+                type: boolean
+              keepCompletedPods:
+                description: KeepCompletedPods when true will keep completed pods.
+                  Default is false and completed pods are removed.
+                type: boolean
+              outputsSecret:
+                description: OutputsSecret will create a secret with the outputs from
+                  the module. All outputs from the module will be written to the secret
+                  unless the user defines "outputsToInclude" or "outputsToOmit".
+                type: string
+              outputsToInclude:
+                description: OutputsToInclude is a whitelist of outputs to write when
+                  writing the outputs to kubernetes.
+                items:
+                  type: string
+                type: array
+              outputsToOmit:
+                description: OutputsToOmit is a blacklist of outputs to omit when
+                  writing the outputs to kubernetes.
+                items:
+                  type: string
+                type: array
+              postApplyDeleteScript:
+                type: string
+              postApplyScript:
+                description: "PostApplyScript lets the user define a script that will
+                  run after terraform commands are executed on the terraform-execution
+                  pod. The pod will have already set up cloudProfile (eg cloud credentials)
+                  so the script can make use of it. \n Setting this field will create
+                  a key in the tfvars configmap called \"postrun.sh\". This means
+                  the user can alternatively pass in a posterun.sh file via config
+                  \"Sources\"."
+                type: string
+              postInitDeleteScript:
+                type: string
+              postInitScript:
+                type: string
+              postPlanDeleteScript:
+                type: string
+              postPlanScript:
+                type: string
+              preApplyDeleteScript:
+                type: string
+              preApplyScript:
+                type: string
+              preInitDeleteScript:
+                type: string
+              preInitScript:
+                description: "PreInitScript lets the user define a script that will
+                  run before terraform commands are executed on the terraform-execution
+                  pod. The pod will have already set up cloudProfile (eg cloud credentials)
+                  so the script can make use of it. \n Setting this field will create
+                  a key in the tfvars configmap called \"prerun.sh\". This means the
+                  user can also pass in a prerun.sh file via config \"Sources\"."
+                type: string
+              prePlanDeleteScript:
+                type: string
+              prePlanScript:
+                type: string
+              reconcile:
+                description: Reconcile are the settings used for auto-reconciliation
+                properties:
+                  enable:
+                    description: Enable used to turn on the auto reconciliation of
+                      tfstate to actual provisions. Default to false
+                    type: boolean
+                  syncPeriod:
+                    description: SyncPeriod can be used to set a custom time to check
+                      actual provisions to tfstate. Defaults to 60 minutes
+                    format: int64
+                    type: integer
+                required:
+                - enable
+                type: object
+              resourceDownloads:
+                description: ResourceDownloads defines other files to download into
+                  the module directory that can be used by the terraform workflow
+                  runners. The `tfvar` type will also be fetched by the `exportRepo`
+                  option (if defined) to aggregate the set of tfvars to save to an
+                  scm system.
+                items:
+                  description: 'ResourceDownload (formerly SrcOpts) defines a resource
+                    to fetch using one of the configured protocols: ssh|http|https
+                    (eg git::SSH or git::HTTPS)'
+                  properties:
+                    address:
+                      description: Address defines the source address resources to
+                        fetch.
+                      type: string
+                    path:
+                      description: Path will download the resources into this path
+                        which is relative to the main module directory.
+                      type: string
+                    useAsVar:
+                      description: UseAsVar will add the file as a tfvar via the -var-file
+                        flag of the terraform plan command. The downloaded resource
+                        must not be a directory.
+                      type: boolean
+                  required:
+                  - address
+                  type: object
+                type: array
+              runnerAnnotations:
+                additionalProperties:
+                  type: string
+                description: RunnerAnnotations are annotations that will be added
+                  to all runner pods.
+                type: object
+              runnerRules:
+                description: RunnerRules are RBAC rules that will be added to all
+                  runner pods.
+                items:
+                  description: PolicyRule holds information that describes a policy
+                    rule, but does not contain information about who the rule applies
+                    to or which namespace the rule applies to.
+                  properties:
+                    apiGroups:
+                      description: APIGroups is the name of the APIGroup that contains
+                        the resources.  If multiple API groups are specified, any
+                        action requested against one of the enumerated resources in
+                        any API group will be allowed.
+                      items:
                         type: string
-                      kiam:
-                        description: KIAM requires the kiam role-name as the string
-                          input. This will add the correct annotation to the terraform
-                          execution pod
+                      type: array
+                    nonResourceURLs:
+                      description: NonResourceURLs is a set of partial urls that a
+                        user should have access to.  *s are allowed, but only as the
+                        full, final step in the path Since non-resource URLs are not
+                        namespaced, this field is only applicable for ClusterRoles
+                        referenced from a ClusterRoleBinding. Rules can either apply
+                        to API resources (such as "pods" or "secrets") or non-resource
+                        URL paths (such as "/api"),  but not both.
+                      items:
                         type: string
-                    type: object
-                  secretNameRef:
-                    description: SecretNameRef will load environment variables into
-                      the terraform runner from a kubernetes secret
+                      type: array
+                    resourceNames:
+                      description: ResourceNames is an optional white list of names
+                        that the rule applies to.  An empty set means that everything
+                        is allowed.
+                      items:
+                        type: string
+                      type: array
+                    resources:
+                      description: Resources is a list of resources this rule applies
+                        to.  ResourceAll represents all resources.
+                      items:
+                        type: string
+                      type: array
+                    verbs:
+                      description: Verbs is a list of Verbs that apply to ALL the
+                        ResourceKinds and AttributeRestrictions contained in this
+                        rule.  VerbAll represents all kinds.
+                      items:
+                        type: string
+                      type: array
+                  required:
+                  - verbs
+                  type: object
+                type: array
+              scmAuthMethods:
+                description: SCMAuthMethods define multiple SCMs that require tokens/keys
+                items:
+                  description: SCMAuthMethod definition of SCMs that require tokens/keys
+                  properties:
+                    git:
+                      description: Git configuration options for auth methods of git
+                      properties:
+                        https:
+                          description: GitHTTPS configures the setup for git over
+                            https using tokens. Proxy is not supported in the terraform
+                            job pod at this moment TODO HTTPS Proxy support
+                          properties:
+                            requireProxy:
+                              type: boolean
+                            tokenSecretRef:
+                              description: TokenSecretRef defines the token or password
+                                that can be used to log into a system (eg git)
+                              properties:
+                                key:
+                                  description: Key in the secret ref. Default to `token`
+                                  type: string
+                                name:
+                                  description: Name the secret name that has the token
+                                    or password
+                                  type: string
+                                namespace:
+                                  description: Namespace of the secret; Default is
+                                    the namespace of the terraform resource
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                          required:
+                          - tokenSecretRef
+                          type: object
+                        ssh:
+                          description: GitSSH configurs the setup for git over ssh
+                            with optional proxy
+                          properties:
+                            requireProxy:
+                              type: boolean
+                            sshKeySecretRef:
+                              description: SSHKeySecretRef defines the secret where
+                                the SSH key (for the proxy, git, etc) is stored
+                              properties:
+                                key:
+                                  description: Key in the secret ref. Default to `id_rsa`
+                                  type: string
+                                name:
+                                  description: Name the secret name that has the SSH
+                                    key
+                                  type: string
+                                namespace:
+                                  description: Namespace of the secret; Default is
+                                    the namespace of the terraform resource
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                          required:
+                          - sshKeySecretRef
+                          type: object
+                      type: object
+                    host:
+                      type: string
+                  required:
+                  - host
+                  type: object
+                type: array
+              scriptRunner:
+                type: string
+              scriptRunnerExecutionScriptConfigMap:
+                description: ScriptRunnerExecutionScriptConfigMap allows the user
+                  to define a custom terraform runner script that gets executed instead
+                  of the default script built into the runner image. The configmap
+                  "name" and "key" are required.
+                properties:
+                  key:
+                    description: The key to select.
+                    type: string
+                  name:
+                    description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      TODO: Add other useful fields. apiVersion, kind, uid?'
+                    type: string
+                  optional:
+                    description: Specify whether the ConfigMap or its key must be
+                      defined
+                    type: boolean
+                required:
+                - key
+                type: object
+              scriptRunnerPullPolicy:
+                description: PullPolicy describes a policy for if/when to pull a container
+                  image
+                type: string
+              scriptRunnerVersion:
+                type: string
+              serviceAccount:
+                description: ServiceAccount use a specific kubernetes ServiceAccount
+                  for running the create + destroy pods. If not specified we create
+                  a new ServiceAccount per Terraform
+                type: string
+              setupRunner:
+                type: string
+              setupRunnerExecutionScriptConfigMap:
+                description: SetupRunnerExecutionScriptConfigMap allows the user to
+                  define a custom terraform runner script that gets executed instead
+                  of the default script built into the runner image. The configmap
+                  "name" and "key" are required.
+                properties:
+                  key:
+                    description: The key to select.
+                    type: string
+                  name:
+                    description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      TODO: Add other useful fields. apiVersion, kind, uid?'
+                    type: string
+                  optional:
+                    description: Specify whether the ConfigMap or its key must be
+                      defined
+                    type: boolean
+                required:
+                - key
+                type: object
+              setupRunnerPullPolicy:
+                description: PullPolicy describes a policy for if/when to pull a container
+                  image
+                type: string
+              setupRunnerVersion:
+                type: string
+              sshTunnel:
+                description: SSHTunnel can be defined for pulling from scm sources
+                  that cannot be accessed by the network the operator/runner runs
+                  in. An example is Enterprise Github servers running on a private
+                  network.
+                properties:
+                  host:
+                    type: string
+                  sshKeySecretRef:
+                    description: SSHKeySecretRef defines the secret where the SSH
+                      key (for the proxy, git, etc) is stored
                     properties:
                       key:
-                        description: Key of the secret
+                        description: Key in the secret ref. Default to `id_rsa`
                         type: string
                       name:
-                        description: Name of the secret
+                        description: Name the secret name that has the SSH key
                         type: string
                       namespace:
-                        description: Namespace of the secret; Defaults to namespace
-                          of the tf resource
+                        description: Namespace of the secret; Default is the namespace
+                          of the terraform resource
                         type: string
                     required:
                     - name
                     type: object
-                  serviceAccountAnnotations:
-                    additionalProperties:
-                      type: string
-                    description: ServiceAccountAnnotations allows the service account
-                      to be annotated with cloud IAM roles such as Workload Identity
-                      on GCP
-                    type: object
+                  user:
+                    type: string
+                required:
+                - sshKeySecretRef
                 type: object
-              type: array
-            customBackend:
-              description: CustomBackend will allow the user to configure the backend
-                of their choice. If this is omitted, the default consul template will
-                be used.
-              type: string
-            env:
-              description: Env is used to define a common set of environment variables
-                into the workflow runners. The `TF_VAR_` prefix will also be used
-                by the `exportRepo` option.
-              items:
-                description: EnvVar represents an environment variable present in
-                  a Container.
+              terraformModule:
+                description: "TerraformModule is the terraform module scm address.
+                  Currently supports git protocol over SSH or HTTPS. \n Precedence
+                  of \"terraformModule*\" to use as the main module is determined
+                  by the setup runner. See the runners/setup.sh for the module configuration."
+                type: string
+              terraformModuleConfigMap:
+                description: TerraformModuleConfigMap is the configMap that contains
+                  terraform module resources. The module will be fetched by the setup
+                  runner. In order for terraform to understand it's a module reosurce,
+                  the configmap keys must end in `.tf` or `.tf.json`.
                 properties:
+                  key:
+                    type: string
                   name:
-                    description: Name of the environment variable. Must be a C_IDENTIFIER.
                     type: string
-                  value:
-                    description: 'Variable references $(VAR_NAME) are expanded using
-                      the previous defined environment variables in the container
-                      and any service environment variables. If a variable cannot
-                      be resolved, the reference in the input string will be unchanged.
-                      The $(VAR_NAME) syntax can be escaped with a double $$, ie:
-                      $$(VAR_NAME). Escaped references will never be expanded, regardless
-                      of whether the variable exists or not. Defaults to "".'
-                    type: string
-                  valueFrom:
-                    description: Source for the environment variable's value. Cannot
-                      be used if value is not empty.
-                    properties:
-                      configMapKeyRef:
-                        description: Selects a key of a ConfigMap.
-                        properties:
-                          key:
-                            description: The key to select.
-                            type: string
-                          name:
-                            description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                              TODO: Add other useful fields. apiVersion, kind, uid?'
-                            type: string
-                          optional:
-                            description: Specify whether the ConfigMap or its key
-                              must be defined
-                            type: boolean
-                        required:
-                        - key
-                        type: object
-                      fieldRef:
-                        description: 'Selects a field of the pod: supports metadata.name,
-                          metadata.namespace, `metadata.labels[''<KEY>'']`, `metadata.annotations[''<KEY>'']`,
-                          spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP,
-                          status.podIPs.'
-                        properties:
-                          apiVersion:
-                            description: Version of the schema the FieldPath is written
-                              in terms of, defaults to "v1".
-                            type: string
-                          fieldPath:
-                            description: Path of the field to select in the specified
-                              API version.
-                            type: string
-                        required:
-                        - fieldPath
-                        type: object
-                      resourceFieldRef:
-                        description: 'Selects a resource of the container: only resources
-                          limits and requests (limits.cpu, limits.memory, limits.ephemeral-storage,
-                          requests.cpu, requests.memory and requests.ephemeral-storage)
-                          are currently supported.'
-                        properties:
-                          containerName:
-                            description: 'Container name: required for volumes, optional
-                              for env vars'
-                            type: string
-                          divisor:
-                            anyOf:
-                            - type: integer
-                            - type: string
-                            description: Specifies the output format of the exposed
-                              resources, defaults to "1"
-                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                            x-kubernetes-int-or-string: true
-                          resource:
-                            description: 'Required: resource to select'
-                            type: string
-                        required:
-                        - resource
-                        type: object
-                      secretKeyRef:
-                        description: Selects a key of a secret in the pod's namespace
-                        properties:
-                          key:
-                            description: The key of the secret to select from.  Must
-                              be a valid secret key.
-                            type: string
-                          name:
-                            description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                              TODO: Add other useful fields. apiVersion, kind, uid?'
-                            type: string
-                          optional:
-                            description: Specify whether the Secret or its key must
-                              be defined
-                            type: boolean
-                        required:
-                        - key
-                        type: object
-                    type: object
                 required:
                 - name
                 type: object
-              type: array
-            exportRepo:
-              description: ExportRepo allows the user to define
-              properties:
-                address:
-                  description: Address is the git repo to save to. At this time, only
-                    SSH is allowed
-                  type: string
-                confFile:
-                  description: ConfFile is the full path relative to the root of the
-                    repo
-                  type: string
-                tfvarsFile:
-                  description: TFVarsFile is the full path relative to the root of
-                    the repo
-                  type: string
-              required:
-              - address
-              type: object
-            ignoreDelete:
-              description: IgnoreDelete will bypass the finalization process and remove
-                the tf resource without running any delete jobs.
-              type: boolean
-            keepCompletedPods:
-              description: KeepCompletedPods when true will keep completed pods. Default
-                is false and completed pods are removed.
-              type: boolean
-            outputsSecret:
-              description: OutputsSecret will create a secret with the outputs from
-                the module. All outputs from the module will be written to the secret
-                unless the user defines "outputsToInclude" or "outputsToOmit".
-              type: string
-            outputsToInclude:
-              description: OutputsToInclude is a whitelist of outputs to write when
-                writing the outputs to kubernetes.
-              items:
+              terraformModuleInline:
+                description: TerraformModuleInline is an incline terraform module
+                  definition. The contents of the inline definition will be used to
+                  create `inline-module.tf`
                 type: string
-              type: array
-            outputsToOmit:
-              description: OutputsToOmit is a blacklist of outputs to omit when writing
-                the outputs to kubernetes.
-              items:
+              terraformRunner:
+                description: TerraformRunner gives the user the ability to inject
+                  their own container image to execute terraform. This is very helpful
+                  for users who need to have a certain toolset installed on their
+                  images, or who can't pull public images, such as the default image
+                  "isaaguilar/tfops".
                 type: string
-              type: array
-            postApplyDeleteScript:
-              type: string
-            postApplyScript:
-              description: "PostApplyScript lets the user define a script that will
-                run after terraform commands are executed on the terraform-execution
-                pod. The pod will have already set up cloudProfile (eg cloud credentials)
-                so the script can make use of it. \n Setting this field will create
-                a key in the tfvars configmap called \"postrun.sh\". This means the
-                user can alternatively pass in a posterun.sh file via config \"Sources\"."
-              type: string
-            postInitDeleteScript:
-              type: string
-            postInitScript:
-              type: string
-            postPlanDeleteScript:
-              type: string
-            postPlanScript:
-              type: string
-            preApplyDeleteScript:
-              type: string
-            preApplyScript:
-              type: string
-            preInitDeleteScript:
-              type: string
-            preInitScript:
-              description: "PreInitScript lets the user define a script that will
-                run before terraform commands are executed on the terraform-execution
-                pod. The pod will have already set up cloudProfile (eg cloud credentials)
-                so the script can make use of it. \n Setting this field will create
-                a key in the tfvars configmap called \"prerun.sh\". This means the
-                user can also pass in a prerun.sh file via config \"Sources\"."
-              type: string
-            prePlanDeleteScript:
-              type: string
-            prePlanScript:
-              type: string
-            reconcile:
-              description: Reconcile are the settings used for auto-reconciliation
-              properties:
-                enable:
-                  description: Enable used to turn on the auto reconciliation of tfstate
-                    to actual provisions. Default to false
-                  type: boolean
-                syncPeriod:
-                  description: SyncPeriod can be used to set a custom time to check
-                    actual provisions to tfstate. Defaults to 60 minutes
-                  format: int64
-                  type: integer
-              required:
-              - enable
-              type: object
-            resourceDownloads:
-              description: ResourceDownloads defines other files to download into
-                the module directory that can be used by the terraform workflow runners.
-                The `tfvar` type will also be fetched by the `exportRepo` option (if
-                defined) to aggregate the set of tfvars to save to an scm system.
-              items:
-                description: 'ResourceDownload (formerly SrcOpts) defines a resource
-                  to fetch using one of the configured protocols: ssh|http|https (eg
-                  git::SSH or git::HTTPS)'
+              terraformRunnerExecutionScriptConfigMap:
+                description: TerraformRunnerExecutionScriptConfigMap allows the user
+                  to define a custom terraform runner script that gets executed instead
+                  of the default script built into the runner image. The configmap
+                  "name" and "key" are required.
                 properties:
-                  address:
-                    description: Address defines the source address resources to fetch.
+                  key:
+                    description: The key to select.
                     type: string
-                  path:
-                    description: Path will download the resources into this path which
-                      is relative to the main module directory.
+                  name:
+                    description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      TODO: Add other useful fields. apiVersion, kind, uid?'
                     type: string
-                  useAsVar:
-                    description: UseAsVar will add the file as a tfvar via the -var-file
-                      flag of the terraform plan command. The downloaded resource
-                      must not be a directory.
+                  optional:
+                    description: Specify whether the ConfigMap or its key must be
+                      defined
                     type: boolean
                 required:
-                - address
+                - key
                 type: object
-              type: array
-            runnerAnnotations:
-              additionalProperties:
+              terraformRunnerPullPolicy:
+                description: TerraformRunnerPullPolicy describes a policy for if/when
+                  to pull the TerraformRunner image. Acceptable values are "Always",
+                  "Never", or "IfNotPresent".
                 type: string
-              description: RunnerAnnotations are annotations that will be added to
-                all runner pods.
-              type: object
-            runnerRules:
-              description: RunnerRules are RBAC rules that will be added to all runner
-                pods.
-              items:
-                description: PolicyRule holds information that describes a policy
-                  rule, but does not contain information about who the rule applies
-                  to or which namespace the rule applies to.
-                properties:
-                  apiGroups:
-                    description: APIGroups is the name of the APIGroup that contains
-                      the resources.  If multiple API groups are specified, any action
-                      requested against one of the enumerated resources in any API
-                      group will be allowed.
-                    items:
-                      type: string
-                    type: array
-                  nonResourceURLs:
-                    description: NonResourceURLs is a set of partial urls that a user
-                      should have access to.  *s are allowed, but only as the full,
-                      final step in the path Since non-resource URLs are not namespaced,
-                      this field is only applicable for ClusterRoles referenced from
-                      a ClusterRoleBinding. Rules can either apply to API resources
-                      (such as "pods" or "secrets") or non-resource URL paths (such
-                      as "/api"),  but not both.
-                    items:
-                      type: string
-                    type: array
-                  resourceNames:
-                    description: ResourceNames is an optional white list of names
-                      that the rule applies to.  An empty set means that everything
-                      is allowed.
-                    items:
-                      type: string
-                    type: array
-                  resources:
-                    description: Resources is a list of resources this rule applies
-                      to.  ResourceAll represents all resources.
-                    items:
-                      type: string
-                    type: array
-                  verbs:
-                    description: Verbs is a list of Verbs that apply to ALL the ResourceKinds
-                      and AttributeRestrictions contained in this rule.  VerbAll represents
-                      all kinds.
-                    items:
-                      type: string
-                    type: array
-                required:
-                - verbs
+              terraformVersion:
+                description: TerraformVersion helps the operator decide which image
+                  tag to pull for the terraform runner. Defaults to "0.11.14"
+                type: string
+              writeOutputsToStatus:
+                description: WriteOutputsToStatus will add the outputs from the module
+                  to the status of the Terraform CustomResource.
+                type: boolean
+            type: object
+          status:
+            description: TerraformStatus defines the observed state of Terraform
+            properties:
+              exported:
+                type: string
+              lastCompletedGeneration:
+                format: int64
+                type: integer
+              outputs:
+                additionalProperties:
+                  type: string
                 type: object
-              type: array
-            scmAuthMethods:
-              description: SCMAuthMethods define multiple SCMs that require tokens/keys
-              items:
-                description: SCMAuthMethod definition of SCMs that require tokens/keys
-                properties:
-                  git:
-                    description: Git configuration options for auth methods of git
-                    properties:
-                      https:
-                        description: GitHTTPS configures the setup for git over https
-                          using tokens. Proxy is not supported in the terraform job
-                          pod at this moment TODO HTTPS Proxy support
-                        properties:
-                          requireProxy:
-                            type: boolean
-                          tokenSecretRef:
-                            description: TokenSecretRef defines the token or password
-                              that can be used to log into a system (eg git)
-                            properties:
-                              key:
-                                description: Key in the secret ref. Default to `token`
-                                type: string
-                              name:
-                                description: Name the secret name that has the token
-                                  or password
-                                type: string
-                              namespace:
-                                description: Namespace of the secret; Default is the
-                                  namespace of the terraform resource
-                                type: string
-                            required:
-                            - name
-                            type: object
-                        required:
-                        - tokenSecretRef
-                        type: object
-                      ssh:
-                        description: GitSSH configurs the setup for git over ssh with
-                          optional proxy
-                        properties:
-                          requireProxy:
-                            type: boolean
-                          sshKeySecretRef:
-                            description: SSHKeySecretRef defines the secret where
-                              the SSH key (for the proxy, git, etc) is stored
-                            properties:
-                              key:
-                                description: Key in the secret ref. Default to `id_rsa`
-                                type: string
-                              name:
-                                description: Name the secret name that has the SSH
-                                  key
-                                type: string
-                              namespace:
-                                description: Namespace of the secret; Default is the
-                                  namespace of the terraform resource
-                                type: string
-                            required:
-                            - name
-                            type: object
-                        required:
-                        - sshKeySecretRef
-                        type: object
-                    type: object
-                  host:
-                    type: string
-                required:
-                - host
-                type: object
-              type: array
-            scriptRunner:
-              type: string
-            scriptRunnerExecutionScriptConfigMap:
-              description: ScriptRunnerExecutionScriptConfigMap allows the user to
-                define a custom terraform runner script that gets executed instead
-                of the default script built into the runner image. The configmap "name"
-                and "key" are required.
-              properties:
-                key:
-                  description: The key to select.
-                  type: string
-                name:
-                  description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                    TODO: Add other useful fields. apiVersion, kind, uid?'
-                  type: string
-                optional:
-                  description: Specify whether the ConfigMap or its key must be defined
-                  type: boolean
-              required:
-              - key
-              type: object
-            scriptRunnerPullPolicy:
-              description: PullPolicy describes a policy for if/when to pull a container
-                image
-              type: string
-            scriptRunnerVersion:
-              type: string
-            serviceAccount:
-              description: ServiceAccount use a specific kubernetes ServiceAccount
-                for running the create + destroy pods. If not specified we create
-                a new ServiceAccount per Terraform
-              type: string
-            setupRunner:
-              type: string
-            setupRunnerExecutionScriptConfigMap:
-              description: SetupRunnerExecutionScriptConfigMap allows the user to
-                define a custom terraform runner script that gets executed instead
-                of the default script built into the runner image. The configmap "name"
-                and "key" are required.
-              properties:
-                key:
-                  description: The key to select.
-                  type: string
-                name:
-                  description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                    TODO: Add other useful fields. apiVersion, kind, uid?'
-                  type: string
-                optional:
-                  description: Specify whether the ConfigMap or its key must be defined
-                  type: boolean
-              required:
-              - key
-              type: object
-            setupRunnerPullPolicy:
-              description: PullPolicy describes a policy for if/when to pull a container
-                image
-              type: string
-            setupRunnerVersion:
-              type: string
-            sshTunnel:
-              description: SSHTunnel can be defined for pulling from scm sources that
-                cannot be accessed by the network the operator/runner runs in. An
-                example is Enterprise Github servers running on a private network.
-              properties:
-                host:
-                  type: string
-                sshKeySecretRef:
-                  description: SSHKeySecretRef defines the secret where the SSH key
-                    (for the proxy, git, etc) is stored
+              phase:
+                type: string
+              podNamePrefix:
+                description: PodNamePrefix is used to identify this installation of
+                  the resource. For very long resource names, like those greater than
+                  220 characters, the prefix ensures resource uniqueness for runners
+                  and other resources used by the runner. Another case for the pod
+                  name prefix is when rapidly deleteing a resource and recreating
+                  it, the chance of recycling existing resources is reduced to virtually
+                  nil.
+                type: string
+              stages:
+                items:
                   properties:
-                    key:
-                      description: Key in the secret ref. Default to `id_rsa`
+                    generation:
+                      format: int64
+                      type: integer
+                    interruptible:
+                      description: Interruptible is set to false when the pod should
+                        not be terminated such as when doing a terraform apply
+                      type: boolean
+                    podType:
                       type: string
-                    name:
-                      description: Name the secret name that has the SSH key
+                    reason:
                       type: string
-                    namespace:
-                      description: Namespace of the secret; Default is the namespace
-                        of the terraform resource
+                    startTime:
+                      format: date-time
+                      type: string
+                    state:
+                      type: string
+                    stopTime:
+                      format: date-time
                       type: string
                   required:
-                  - name
+                  - generation
+                  - interruptible
+                  - podType
+                  - reason
+                  - state
                   type: object
-                user:
-                  type: string
-              required:
-              - sshKeySecretRef
-              type: object
-            terraformModule:
-              description: "TerraformModule is the terraform module scm address. Currently
-                supports git protocol over SSH or HTTPS. \n Precedence of \"terraformModule*\"
-                to use as the main module is determined by the setup runner. See the
-                runners/setup.sh for the module configuration."
-              type: string
-            terraformModuleConfigMap:
-              description: TerraformModuleConfigMap is the configMap that contains
-                terraform module resources. The module will be fetched by the setup
-                runner. In order for terraform to understand it's a module reosurce,
-                the configmap keys must end in `.tf` or `.tf.json`.
-              properties:
-                key:
-                  type: string
-                name:
-                  type: string
-              required:
-              - name
-              type: object
-            terraformModuleInline:
-              description: TerraformModuleInline is an incline terraform module definition.
-                The contents of the inline definition will be used to create `inline-module.tf`
-              type: string
-            terraformRunner:
-              description: TerraformRunner gives the user the ability to inject their
-                own container image to execute terraform. This is very helpful for
-                users who need to have a certain toolset installed on their images,
-                or who can't pull public images, such as the default image "isaaguilar/tfops".
-              type: string
-            terraformRunnerExecutionScriptConfigMap:
-              description: TerraformRunnerExecutionScriptConfigMap allows the user
-                to define a custom terraform runner script that gets executed instead
-                of the default script built into the runner image. The configmap "name"
-                and "key" are required.
-              properties:
-                key:
-                  description: The key to select.
-                  type: string
-                name:
-                  description: 'Name of the referent. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                    TODO: Add other useful fields. apiVersion, kind, uid?'
-                  type: string
-                optional:
-                  description: Specify whether the ConfigMap or its key must be defined
-                  type: boolean
-              required:
-              - key
-              type: object
-            terraformRunnerPullPolicy:
-              description: TerraformRunnerPullPolicy describes a policy for if/when
-                to pull the TerraformRunner image. Acceptable values are "Always",
-                "Never", or "IfNotPresent".
-              type: string
-            terraformVersion:
-              description: TerraformVersion helps the operator decide which image
-                tag to pull for the terraform runner. Defaults to "0.11.14"
-              type: string
-            writeOutputsToStatus:
-              description: WriteOutputsToStatus will add the outputs from the module
-                to the status of the Terraform CustomResource.
-              type: boolean
-          type: object
-        status:
-          description: TerraformStatus defines the observed state of Terraform
-          properties:
-            exported:
-              type: string
-            lastCompletedGeneration:
-              format: int64
-              type: integer
-            outputs:
-              additionalProperties:
-                type: string
-              type: object
-            phase:
-              type: string
-            podNamePrefix:
-              description: PodNamePrefix is used to identify this installation of
-                the resource. For very long resource names, like those greater than
-                220 characters, the prefix ensures resource uniqueness for runners
-                and other resources used by the runner. Another case for the pod name
-                prefix is when rapidly deleteing a resource and recreating it, the
-                chance of recycling existing resources is reduced to virtually nil.
-              type: string
-            stages:
-              items:
-                properties:
-                  generation:
-                    format: int64
-                    type: integer
-                  interruptible:
-                    description: Interruptible is set to false when the pod should
-                      not be terminated such as when doing a terraform apply
-                    type: boolean
-                  podType:
-                    type: string
-                  reason:
-                    type: string
-                  startTime:
-                    format: date-time
-                    type: string
-                  state:
-                    type: string
-                  stopTime:
-                    format: date-time
-                    type: string
-                required:
-                - generation
-                - interruptible
-                - podType
-                - reason
-                - state
-                type: object
-              type: array
-          required:
-          - lastCompletedGeneration
-          - phase
-          - podNamePrefix
-          - stages
-          type: object
-      type: object
-  version: v1alpha1
-  versions:
-  - name: v1alpha1
+                type: array
+            required:
+            - lastCompletedGeneration
+            - phase
+            - podNamePrefix
+            - stages
+            type: object
+        type: object
     served: true
     storage: true
+    subresources:
+      status: {}
 status:
   acceptedNames:
     kind: ""
