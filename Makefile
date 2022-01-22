@@ -20,7 +20,7 @@ endif
 all: build
 
 # Produce CRDs that work back to Kubernetes 1.11 (no version conversion)
-CRD_OPTIONS ?= "crd:trivialVersions=true"
+CRD_OPTIONS ?= "crd:trivialVersions=true,crdVersions=v1"
 
 # find or download controller-gen
 # download controller-gen if necessary
