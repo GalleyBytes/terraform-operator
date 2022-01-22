@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/MakeNowJust/heredoc"
-	"github.com/elliotchance/sshtunnel"
 	"github.com/go-logr/logr"
 	getter "github.com/hashicorp/go-getter"
 	tfv1alpha1 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1"
@@ -121,7 +120,6 @@ type GitRepoAccessOptions struct {
 	Extras         []string
 	SCMAuthMethods []tfv1alpha1.SCMAuthMethod
 	SSHProxy       tfv1alpha1.ProxyOpts
-	tunnel         *sshtunnel.SSHTunnel
 	ParsedAddress
 }
 
@@ -849,16 +847,6 @@ func (r ReconcileTerraform) PodStatus(ctx context.Context, tf tfv1alpha1.Terrafo
 func IsJobFinished(job *batchv1.Job) bool {
 	BackoffLimit := job.Spec.BackoffLimit
 	return job.Status.CompletionTime != nil || (job.Status.Active == 0 && BackoffLimit != nil && job.Status.Failed >= *BackoffLimit)
-}
-
-func (d GitRepoAccessOptions) TunnelClose(reqLogger logr.Logger) {
-	reqLogger.V(1).Info("Closing tunnel")
-	if d.tunnel != nil {
-		d.tunnel.Close()
-		reqLogger.V(1).Info("Closed tunnel")
-		return
-	}
-	reqLogger.V(1).Info("TunnelClose called but could not find tunnel to close")
 }
 
 func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, instance *tfv1alpha1.Terraform, k8sclient client.Client) (map[string][]byte, error) {

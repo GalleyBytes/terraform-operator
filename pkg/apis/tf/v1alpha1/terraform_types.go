@@ -204,9 +204,6 @@ type ConfigMapSelector struct {
 type SCMAuthMethod struct {
 	Host string `json:"host"`
 
-	// Timeout In seconds is the time before giving up trying to fetch a repo
-	Timeout int64 `json:"timeout,omitempty"`
-
 	// Git configuration options for auth methods of git
 	Git *GitSCM `json:"git,omitempty"`
 }

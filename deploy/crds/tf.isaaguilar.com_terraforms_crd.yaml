@@ -461,11 +461,6 @@ spec:
                     type: object
                   host:
                     type: string
-                  timeout:
-                    description: Timeout In seconds is the time before giving up trying
-                      to fetch a repo
-                    format: int64
-                    type: integer
                 required:
                 - host
                 type: object
