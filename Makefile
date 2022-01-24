@@ -97,8 +97,15 @@ docker-build-local:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -v -o build/_output/manager cmd/manager/main.go
 	docker build -t ${IMG} -f build/Dockerfile.local build/
 
+docker-build-local-arm:
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GO111MODULE=on go build -v -o build/_output/manager cmd/manager/main.go
+	docker build -t ${IMG}-arm64 -f build/Dockerfile.local build/
+
 docker-push:
 	docker push ${IMG}
+
+docker-push-arm:
+	docker push ${IMG}-arm64
 
 docker-build-job:
 	DOCKER_REPO=${DOCKER_REPO} /bin/bash docker/terraform/build.sh

@@ -19,7 +19,6 @@ apt-get update
 apt-cache policy docker-ce
 apt-get install -y \
     kubectl \
-    docker-ce \
     git \
     zip \
     unzip \
