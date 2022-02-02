@@ -3,7 +3,7 @@
 > A Kubernetes CRD and Controller to handle Terraform operations by generating k8s jobs catered to perform Terraform workflows
 
 <p align="center">
-<img src="https://s3.amazonaws.com/classic.isaaguilar.com/tfo-workflow-diagram.png" alt="Terraform Operator Workflow Diagram"></img>
+<img src="https://s3.amazonaws.com/classic.isaaguilar.com/tfo-worm-logo-text.png" alt="Terraform Operator Logo"></img>
 </p>
 
 
@@ -25,3 +25,7 @@ This project is not:
 ## Docs
 
 Visit [http://tf.isaaguilar.com](http://tf.isaaguilar.com) for docs for version >= `v0.5.x`.
+
+<p align="center">
+<img src="https://s3.amazonaws.com/classic.isaaguilar.com/tfo-workflow-diagram.png" alt="Terraform Operator Workflow Diagram"></img>
+</p>
