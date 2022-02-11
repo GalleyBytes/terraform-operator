@@ -96,6 +96,7 @@ function fetch_git {
     relpath="$2"
     files="$3"
     tfvar="$4"
+    branch="$5"
     path="$TFO_MAIN_MODULE/$relpath"
     if [[ "$files" == "." ]] && ( [[ "$relpath" == "." ]] || [[ "$relpath" == "" ]] ); then
     a=$(basename $repo)
@@ -107,6 +108,7 @@ function fetch_git {
     echo "Downloading resources from $repo"
     git clone "$repo" "$temp"
     cd "$temp" # All files are relative to the root of the repo
+    git checkout "$branch"
     # printf -- "cp -r $files $path\n"
     cp -r $files $path
 
@@ -132,7 +134,8 @@ for i in $(seq 0 $((LENGTH - 1))); do
     files=$(jq -r '.files[]' $DATA | join_by "  ")
     path=$(jq -r '.path' $DATA)
     tfvar=$(jq -r '.useAsVar' $DATA)
+    branch=$(jq -r '.hash' $DATA)
     if [[ "$fetchtype" == "git" ]];then
-        fetch_git "$repo" "$path" "$files" "$tfvar"
+        fetch_git "$repo" "$path" "$files" "$tfvar" "$branch"
     fi
 done
