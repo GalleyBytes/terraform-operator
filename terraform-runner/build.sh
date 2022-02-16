@@ -15,7 +15,7 @@ function cleanup {
 ## Build setup-runner
 ##
 SETUP_RUNNER_IMAGE_NAME="setup-runner"
-SETUP_RUNNER_TAG="1.1.2"
+SETUP_RUNNER_TAG="1.1.3"
 export USER_UID=2000
 export DOCKER_IMAGE="$DOCKER_REPO/$SETUP_RUNNER_IMAGE_NAME:$SETUP_RUNNER_TAG"
 i=0
@@ -143,9 +143,6 @@ BUILT_TF_RUNNER_IMAGES=($(
     done
 ))
 
-pushedfile=/tmp/pushed
-touch $pushedfile
-BUILT_TF_RUNNER_IMAGES=($(cat $pushedfile|tr '\n' ' '))
 for TF_IMAGE in ${AVAILABLE_HASHICORP_TERRAFORM_IMAGES[@]};do
     major=$(cut -d'.' -f1 <<< $TF_IMAGE|sed -E "/^[a-zA-Z+]/d")
     minor=$(cut -d'.' -f2 <<< $TF_IMAGE|sed -E "/^[a-zA-Z+]/d")
