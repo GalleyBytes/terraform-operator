@@ -1,10 +1,9 @@
-
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.3.0
+    controller-gen.kubebuilder.io/version: v0.8.0
   creationTimestamp: null
   name: terraforms.tf.isaaguilar.com
 spec:
@@ -73,13 +72,11 @@ spec:
                             wildcards to make the irsa role usable by pods created
                             by terraform-operator. The example below is pretty liberal,
                             but will work for any pod created by the terraform-operator.
-                            \n {   \"Version\": \"2012-10-17\",   \"Statement\": [
-                            \    {       \"Effect\": \"Allow\",       \"Principal\":
-                            {         \"Federated\": \"${OIDC_ARN}\"       },       \"Action\":
-                            \"sts:AssumeRoleWithWebIdentity\",       \"Condition\":
-                            {         \"StringLike\": {           \"${OIDC_URL}:sub\":
-                            \"system:serviceaccount:*:tf-*\"         }       }     }
-                            \  ] }"
+                            \n { \"Version\": \"2012-10-17\", \"Statement\": [ { \"Effect\":
+                            \"Allow\", \"Principal\": { \"Federated\": \"${OIDC_ARN}\"
+                            }, \"Action\": \"sts:AssumeRoleWithWebIdentity\", \"Condition\":
+                            { \"StringLike\": { \"${OIDC_URL}:sub\": \"system:serviceaccount:*:tf-*\"
+                            } } } ] }"
                           type: string
                         kiam:
                           description: KIAM requires the kiam role-name as the string
