@@ -59,8 +59,7 @@ fi
 # Will not copy over "hidden" files (files that begin with '.').
 # Do not overwrite configmap
 mkdir -p $TFO_MAIN_MODULE
-
-cp -Lr "$TFO_MAIN_MODULE_ADDONS"/* "$TFO_MAIN_MODULE" 2>/dev/null | true
+false | cp -iLr "$TFO_MAIN_MODULE_ADDONS"/* "$TFO_MAIN_MODULE" 2>/dev/null || true
 
 cd "$TFO_MAIN_MODULE"
 
