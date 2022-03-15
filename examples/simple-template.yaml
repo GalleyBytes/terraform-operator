@@ -3,12 +3,12 @@ kind: Terraform
 metadata:
   name: simple-template-example
 spec:
-  terraformVersion: 0.13.6
+  terraformVersion: 1.0.0
   terraformRunnerPullPolicy: IfNotPresent
   # Pull this module to execute
   terraformModule: https://github.com/cloudposse/terraform-example-module.git?ref=main
 
-  # Use kubernetes as a backend which is available for terraform >= v0.13
+  # Use kubernetes as a backend which is available for terraform >= v1.0.0
   customBackend: |-
     terraform {
       backend "kubernetes" {
