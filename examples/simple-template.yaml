@@ -8,7 +8,7 @@ spec:
   # Pull this module to execute
   terraformModule: https://github.com/cloudposse/terraform-example-module.git?ref=main
 
-  # Use kubernetes as a backend which is available for terraform >= v1.0.0
+  # Use kubernetes as a backend which is available for terraform >= v0.13
   customBackend: |-
     terraform {
       backend "kubernetes" {
