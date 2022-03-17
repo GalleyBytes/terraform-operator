@@ -179,7 +179,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 
 	setupRunner := "isaaguilar/setup-runner"
 	setupRunnerPullPolicy := corev1.PullIfNotPresent
-	setupRunnerVersion := "1.1.3"
+	setupRunnerVersion := "1.1.4"
 
 	runnerAnnotations := tf.Spec.RunnerAnnotations
 	runnerRules := tf.Spec.RunnerRules
