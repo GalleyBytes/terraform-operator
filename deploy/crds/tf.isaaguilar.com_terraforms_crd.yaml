@@ -42,6 +42,10 @@ spec:
           spec:
             description: TerraformSpec defines the desired state of Terraform
             properties:
+              cleanupDisk:
+                description: CleanupDisk will clear out previous terraform run data
+                  from the persistent volume.
+                type: boolean
               credentials:
                 description: Credentials is an array of credentials generally used
                   for Terraform providers

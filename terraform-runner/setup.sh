@@ -9,6 +9,9 @@ fi
 
 out="$TFO_ROOT_PATH"/generations/$TFO_GENERATION
 vardir="$out/tfvars"
+if [[ "$TFO_CLEANUP_DISK" == "true" ]]; then
+    rm -rf "$TFO_ROOT_PATH"/generations/*
+fi
 mkdir -p "$out"
 mkdir -p "$vardir"
 

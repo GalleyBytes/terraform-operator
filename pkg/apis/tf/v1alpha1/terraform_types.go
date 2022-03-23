@@ -36,6 +36,10 @@ type TerraformSpec struct {
 	// and completed pods are removed.
 	KeepCompletedPods bool `json:"keepCompletedPods,omitempty"`
 
+	// CleanupDisk will clear out previous terraform run data from the
+	// persistent volume.
+	CleanupDisk bool `json:"cleanupDisk,omitempty"`
+
 	// RunnerRules are RBAC rules that will be added to all runner pods.
 	RunnerRules []rbacv1.PolicyRule `json:"runnerRules,omitempty"`
 

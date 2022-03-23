@@ -15,7 +15,7 @@ function cleanup {
 ## Build setup-runner
 ##
 SETUP_RUNNER_IMAGE_NAME="setup-runner"
-SETUP_RUNNER_TAG="1.1.4"
+SETUP_RUNNER_TAG="1.1.6"
 export USER_UID=2000
 export DOCKER_IMAGE="$DOCKER_REPO/$SETUP_RUNNER_IMAGE_NAME:$SETUP_RUNNER_TAG"
 i=0
