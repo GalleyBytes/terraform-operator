@@ -132,6 +132,10 @@ type ExportOptions struct {
 	retryOnFailure bool
 }
 
+type SetupOptions struct {
+	cleanupDisk bool
+}
+
 type RunOptions struct {
 	namespace                               string
 	tfName                                  string
@@ -155,6 +159,7 @@ type RunOptions struct {
 	setupRunnerExecutionScriptConfigMap     *corev1.ConfigMapKeySelector
 	setupRunnerPullPolicy                   corev1.PullPolicy
 	setupRunnerVersion                      string
+	setupOptions                            SetupOptions
 	runnerAnnotations                       map[string]string
 	runnerRules                             []rbacv1.PolicyRule
 	exportOptions                           ExportOptions
@@ -172,7 +177,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	versionedName := name + "-v" + fmt.Sprint(tf.Generation)
 	terraformRunner := "isaaguilar/tf-runner-v5beta1"
 	terraformRunnerPullPolicy := corev1.PullIfNotPresent
-	terraformVersion := "1.1.4"
+	terraformVersion := "1.1.5"
 
 	scriptRunner := "isaaguilar/script-runner"
 	scriptRunnerPullPolicy := corev1.PullIfNotPresent
@@ -180,7 +185,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 
 	setupRunner := "isaaguilar/setup-runner"
 	setupRunnerPullPolicy := corev1.PullIfNotPresent
-	setupRunnerVersion := "1.1.4"
+	setupRunnerVersion := "1.1.6"
 
 	runnerAnnotations := tf.Spec.RunnerAnnotations
 	runnerRules := tf.Spec.RunnerRules
@@ -237,6 +242,10 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	outputsToInclude := tf.Spec.OutputsToInclude
 	outputsToOmit := tf.Spec.OutputsToOmit
 
+	setupOptions := SetupOptions{
+		cleanupDisk: tf.Spec.CleanupDisk,
+	}
+
 	return RunOptions{
 		namespace:                               tf.Namespace,
 		tfName:                                  tfName,
@@ -260,6 +269,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 		setupRunnerPullPolicy:                   setupRunnerPullPolicy,
 		setupRunnerExecutionScriptConfigMap:     tf.Spec.SetupRunnerExecutionScriptConfigMap,
 		setupRunnerVersion:                      setupRunnerVersion,
+		setupOptions:                            setupOptions,
 		runnerRules:                             runnerRules,
 		outputsSecretName:                       outputsSecretName,
 		saveOutputs:                             saveOutputs,
@@ -1946,6 +1956,12 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 			Name:  "TFO_RUNNER",
 			Value: string(podType),
 		})
+		if r.setupOptions.cleanupDisk {
+			setupRunnerEnvs = append(setupRunnerEnvs, corev1.EnvVar{
+				Name:  "TFO_CLEANUP_DISK",
+				Value: "true",
+			})
+		}
 		containers = append(containers, corev1.Container{
 			Name:            "tfo-setup",
 			SecurityContext: securityContext,
