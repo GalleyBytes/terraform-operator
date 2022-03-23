@@ -230,6 +230,20 @@ spec:
                     description: ConfFile is the full path relative to the root of
                       the repo
                     type: string
+                  gitEmail:
+                    description: GitEmail is the email of the user who pushes to git.
+                      This email is typically an automation user and probably the
+                      user whose token or sshkey is configured in scmAuthMethod
+                    type: string
+                  gitUsername:
+                    description: GitUsername is the name of the user who pushes to
+                      git. This name is typically an automation user and probably
+                      the user whose token or sshkey is configured in scmAuthMethod
+                    type: string
+                  retryOnFailure:
+                    description: RetryOnFailure sets the export pod's restartPolicy
+                      to "OnFailure"
+                    type: boolean
                   tfvarsFile:
                     description: TFVarsFile is the full path relative to the root
                       of the repo

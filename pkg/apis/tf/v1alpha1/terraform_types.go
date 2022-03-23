@@ -249,6 +249,19 @@ type ExportRepo struct {
 
 	// ConfFile is the full path relative to the root of the repo
 	ConfFile string `json:"confFile,omitempty"`
+
+	// GitEmail is the email of the user who pushes to git. This email is
+	// typically an automation user and probably the user whose token or sshkey
+	// is configured in scmAuthMethod
+	GitEmail string `json:"gitEmail,omitempty"`
+
+	// GitUsername is the name of the user who pushes to git. This name is
+	// typically an automation user and probably the user whose token or sshkey
+	// is configured in scmAuthMethod
+	GitUsername string `json:"gitUsername,omitempty"`
+
+	// RetryOnFailure sets the export pod's restartPolicy to "OnFailure"
+	RetryOnFailure bool `json:"retryOnFailure,omitempty"`
 }
 
 // ReconcileTerraformDeployment is used to configure auto watching the resources
