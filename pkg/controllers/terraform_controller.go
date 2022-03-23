@@ -124,11 +124,12 @@ type GitRepoAccessOptions struct {
 }
 
 type ExportOptions struct {
-	stack       ParsedAddress
-	confPath    string
-	tfvarsPath  string
-	gitUsername string
-	gitEmail    string
+	stack          ParsedAddress
+	confPath       string
+	tfvarsPath     string
+	gitUsername    string
+	gitEmail       string
+	retryOnFailure bool
 }
 
 type RunOptions struct {
@@ -1937,6 +1938,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		RunAsGroup:   &group,
 		RunAsNonRoot: &runAsNonRoot,
 	}
+	restartPolicy := corev1.RestartPolicyNever
 
 	if podType == tfv1alpha1.PodSetup || podType == tfv1alpha1.PodSetupDelete {
 		// setup once per generation
@@ -2037,6 +2039,9 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 			// Command:         []string{"/bin/sleep"},
 			// Args:            []string{"3600"},
 		})
+		if r.exportOptions.retryOnFailure {
+			restartPolicy = corev1.RestartPolicyOnFailure
+		}
 	} else {
 		scriptRunnerEnvs = append(scriptRunnerEnvs, corev1.EnvVar{
 			Name:  "TFO_SCRIPT",
@@ -2065,7 +2070,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		Spec: corev1.PodSpec{
 			SecurityContext:    &podSecurityContext,
 			ServiceAccountName: r.serviceAccount,
-			RestartPolicy:      corev1.RestartPolicyNever,
+			RestartPolicy:      restartPolicy,
 			InitContainers:     initContainers,
 			Containers:         containers,
 			Volumes:            volumes,
@@ -2442,8 +2447,17 @@ func (r *ReconcileTerraform) exportRepo(ctx context.Context, tf *tfv1alpha1.Terr
 		}
 		runOpts.exportOptions.confPath = tf.Spec.ExportRepo.ConfFile
 		runOpts.exportOptions.tfvarsPath = tf.Spec.ExportRepo.TFVarsFile
-		runOpts.exportOptions.gitEmail = "terraform-operator@example.com"
-		runOpts.exportOptions.gitUsername = "Terraform Operator"
+		runOpts.exportOptions.retryOnFailure = tf.Spec.ExportRepo.RetryOnFailure
+		if tf.Spec.ExportRepo.GitEmail != "" {
+			runOpts.exportOptions.gitEmail = tf.Spec.ExportRepo.GitEmail
+		} else {
+			runOpts.exportOptions.gitEmail = "terraform-operator@example.com"
+		}
+		if tf.Spec.ExportRepo.GitUsername != "" {
+			runOpts.exportOptions.gitUsername = tf.Spec.ExportRepo.GitUsername
+		} else {
+			runOpts.exportOptions.gitUsername = "Terraform Operator"
+		}
 
 		err = r.run(ctx, reqLogger, tf, runOpts, false, false, tfv1alpha1.PodExport, generation)
 		if err != nil {

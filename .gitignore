@@ -115,3 +115,5 @@ tags
 
 bin
 .builds
+# my release management dir
+.rmgmt
