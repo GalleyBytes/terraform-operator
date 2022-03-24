@@ -280,6 +280,15 @@ spec:
                 items:
                   type: string
                 type: array
+              persistentVolumeSize:
+                anyOf:
+                - type: integer
+                - type: string
+                description: PersistentVolumeSize define the size of the disk used
+                  to store terraform run data. If not defined, a default of "2Gi"
+                  is used.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
               postApplyDeleteScript:
                 type: string
               postApplyScript:
