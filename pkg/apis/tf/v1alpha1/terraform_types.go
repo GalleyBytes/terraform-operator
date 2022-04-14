@@ -51,6 +51,9 @@ type TerraformSpec struct {
 	// RunnerAnnotations are annotations that will be added to all runner pods.
 	RunnerAnnotations map[string]string `json:"runnerAnnotations,omitempty"`
 
+	// RunnerLabels key/value pairs that will be added as labels to runner pods
+	RunnerLabels map[string]string `json:"runnerLabels,omitempty"`
+
 	// TerraformVersion helps the operator decide which image tag to pull for
 	// the terraform runner. Defaults to "0.11.14"
 	TerraformVersion    string `json:"terraformVersion,omitempty"`

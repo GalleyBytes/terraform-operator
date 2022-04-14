@@ -376,6 +376,13 @@ func (in *TerraformSpec) DeepCopyInto(out *TerraformSpec) {
 			(*out)[key] = val
 		}
 	}
+	if in.RunnerLabels != nil {
+		in, out := &in.RunnerLabels, &out.RunnerLabels
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.TerraformRunnerExecutionScriptConfigMap != nil {
 		in, out := &in.TerraformRunnerExecutionScriptConfigMap, &out.TerraformRunnerExecutionScriptConfigMap
 		*out = new(corev1.ConfigMapKeySelector)
