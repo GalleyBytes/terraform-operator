@@ -375,6 +375,12 @@ spec:
                 description: RunnerAnnotations are annotations that will be added
                   to all runner pods.
                 type: object
+              runnerLabels:
+                additionalProperties:
+                  type: string
+                description: RunnerLabels key/value pairs that will be added as labels
+                  to runner pods
+                type: object
               runnerRules:
                 description: RunnerRules are RBAC rules that will be added to all
                   runner pods.

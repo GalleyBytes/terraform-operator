@@ -167,6 +167,7 @@ type RunOptions struct {
 	saveOutputs                             bool
 	outputsToInclude                        []string
 	outputsToOmit                           []string
+	runnerLabels                            map[string]string
 }
 
 func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
@@ -246,6 +247,10 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 		cleanupDisk: tf.Spec.CleanupDisk,
 	}
 
+	runnerLabels := make(map[string]string)
+	if len(tf.Spec.RunnerLabels) > 0 {
+		runnerLabels = tf.Spec.RunnerLabels
+	}
 	return RunOptions{
 		namespace:                               tf.Namespace,
 		tfName:                                  tfName,
@@ -275,6 +280,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 		saveOutputs:                             saveOutputs,
 		outputsToInclude:                        outputsToInclude,
 		outputsToOmit:                           outputsToOmit,
+		runnerLabels:                            runnerLabels,
 	}
 }
 
@@ -1929,7 +1935,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		}
 	}
 
-	labels := make(map[string]string)
+	labels := r.runnerLabels
 	labels["terraforms.tf.isaaguilar.com/generation"] = fmt.Sprintf("%d", generation)
 	labels["terraforms.tf.isaaguilar.com/resourceName"] = r.tfName
 	labels["terraforms.tf.isaaguilar.com/podPrefix"] = r.name

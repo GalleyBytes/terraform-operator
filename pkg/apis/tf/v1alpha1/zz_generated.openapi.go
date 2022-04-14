@@ -139,6 +139,22 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 							},
 						},
 					},
+					"runnerLabels": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RunnerLabels key/value pairs that will be added as labels to runner pods",
+							Type:        []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
 					"terraformVersion": {
 						SchemaProps: spec.SchemaProps{
 							Description: "TerraformVersion helps the operator decide which image tag to pull for the terraform runner. Defaults to \"0.11.14\"",
