@@ -1094,10 +1094,18 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Ter
 	}
 
 	if isChanged {
+		// Set up the HTTPS token to use if defined
 		for _, m := range tf.Spec.SCMAuthMethods {
-			// I think Terraform only allows for one git token. Add the first one
-			// to the job's env vars as GIT_PASSWORD.
+			// This loop is used to find the first HTTPS token-based
+			// authentication which gets added to all runners' "GIT_ASKPASS"
+			// script/env var.
+			// TODO
+			//		Is there a way to allow multiple tokens for HTTPS access
+			//		to git scm?
 			if m.Git.HTTPS != nil {
+				if _, found := runOpts.secretData["gitAskpass"]; found {
+					continue
+				}
 				tokenSecret := *m.Git.HTTPS.TokenSecretRef
 				if tokenSecret.Key == "" {
 					tokenSecret.Key = "token"
@@ -1109,22 +1117,16 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Ter
 				runOpts.secretData["gitAskpass"] = gitAskpass
 
 			}
-			if m.Git.SSH != nil {
-				sshConfigData, err := formatJobSSHConfig(ctx, reqLogger, tf, r.Client)
-				if err != nil {
-					r.Recorder.Event(tf, "Warning", "SSHConfigError", fmt.Errorf("%v", err).Error())
-					return fmt.Errorf("error setting up sshconfig: %v", err)
-				}
-				for k, v := range sshConfigData {
-					runOpts.secretData[k] = v
-				}
+		}
 
-			}
-			if m.Git.HTTPS == nil && m.Git.SSH == nil {
-				continue
-			} else {
-				break
-			}
+		// Set up the SSH keys to use if defined
+		sshConfigData, err := formatJobSSHConfig(ctx, reqLogger, tf, r.Client)
+		if err != nil {
+			r.Recorder.Event(tf, "Warning", "SSHConfigError", fmt.Errorf("%v", err).Error())
+			return fmt.Errorf("error setting up sshconfig: %v", err)
+		}
+		for k, v := range sshConfigData {
+			runOpts.secretData[k] = v
 		}
 
 		resourceDownloadItems := []ParsedAddress{}
