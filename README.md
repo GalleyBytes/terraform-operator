@@ -1,4 +1,4 @@
-# Terraform Operator 
+# Terraform Operator
 
 > A Kubernetes CRD and Controller to handle Terraform operations by generating k8s jobs catered to perform Terraform workflows
 
@@ -29,3 +29,31 @@ Visit [http://tf.isaaguilar.com](http://tf.isaaguilar.com) for docs for version 
 <p align="center">
 <img src="https://s3.amazonaws.com/classic.isaaguilar.com/tfo-workflow-diagram.png" alt="Terraform Operator Workflow Diagram"></img>
 </p>
+
+
+## Debug With `tfo` CLI
+
+Terraform is great, but every now and then, a module takes a turn for the worse and the workflow fails. When this happens, a terraform workflow will need to be "debugged."
+
+Fortunately, the `tfo` cli (https://github.com/isaaguilar/terraform-operator-cli) can be used to start a debug pod which is connected directly to the same terraform session the workflow runs.  It does so by reading the TFO resource and generates a pod with the same environment vars, ConfigMaps, Secrets, and ServiceAccount as a regular workflow pod. Then it drops the user in a shell directly in the main module.
+
+```bash
+tfo debug my-tfo-resource --namespace default
+```
+
+The user should be ready to rock-n-roll and show off their mad debugging skills.
+
+```bash
+Connecting to my-tfo-resource-ca6ajn94-v2-debug-qmjd5.....
+
+Try running 'terraform init'
+
+/home/tfo-runner/generations/2/main$
+```
+
+Happy debugging!
+
+## Join the Community
+
+Currently, I'm experimenting with a Discord channel. It may be tough when taking into account juggling a full time job and full time parenting, but I'll see what comes of it. Join the channel https://discord.gg/J5vRmT2PWg
+
