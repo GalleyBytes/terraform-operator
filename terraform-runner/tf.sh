@@ -17,6 +17,16 @@ function version_gt_or_eq {
     return 1
   fi
 }
+if [[ -s "$AWS_WEB_IDENTITY_TOKEN_FILE" ]] && [[ -n "$AWS_ROLE_ARN" ]]; then
+  # Terraform's go-getter has a problem with IRSA roles. The irsa-tokengen
+  # freezes the credentials from IRSA to static AWS_ACCESS_KEY_ID creds.
+  # These creds are only valid for a short period of time, 1 hour.
+  #
+  # If the command irsa-tokengen fails, the script should exit
+  temp="$(mktemp)"
+  irsa-tokengen > "$temp" || exit $?
+  export $(cat "$temp")
+fi
 terraform_version=$(terraform version | head -n1 |sed "s/^.*v//")
 module=""
 if ! version_gt_or_eq "0.15.0" "$terraform_version"; then

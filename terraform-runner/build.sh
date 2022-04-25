@@ -15,7 +15,7 @@ function cleanup {
 ## Build setup-runner
 ##
 SETUP_RUNNER_IMAGE_NAME="setup-runner"
-SETUP_RUNNER_TAG="1.1.6"
+SETUP_RUNNER_TAG="1.1.7"
 export USER_UID=2000
 export DOCKER_IMAGE="$DOCKER_REPO/$SETUP_RUNNER_IMAGE_NAME:$SETUP_RUNNER_TAG"
 i=0
@@ -175,7 +175,7 @@ done
 ##
 ## Build tf-runner(s)
 ##
-TF_RUNNER_IMAGE_NAME="tf-runner-v5beta1"
+TF_RUNNER_IMAGE_NAME="tf-runner-v5beta2"
 printf "\n\n----------------\nFetching available hashicorp/terraform versions"
 i=0
 BUILT_TF_RUNNER_IMAGES=($(
