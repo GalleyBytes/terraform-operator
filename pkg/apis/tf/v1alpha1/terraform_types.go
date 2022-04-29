@@ -33,6 +33,11 @@ type TerraformSpec struct {
 	// Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
 	// Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html
 
+	// KeepLatestPodsOnly when true will keep only the pods that match the
+	// current generation of the terraform k8s-resource. This overrides the
+	// behavior of `keepCompletedPods`.
+	KeepLatestPodsOnly bool `json:"keepLatestPodsOnly,omitempty"`
+
 	// KeepCompletedPods when true will keep completed pods. Default is false
 	// and completed pods are removed.
 	KeepCompletedPods bool `json:"keepCompletedPods,omitempty"`

@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -399,6 +400,9 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		if err != nil {
 			reqLogger.V(1).Info(err.Error())
 		}
+		if tf.Spec.KeepLatestPodsOnly {
+			go r.backgroundReapOldGenerationPods(tf)
+		}
 		return reconcile.Result{}, nil
 	}
 
@@ -481,11 +485,11 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	f := fields.Set{
 		"metadata.generateName": fmt.Sprintf("%s-%s-", tf.Status.PodNamePrefix+"-v"+fmt.Sprint(generation), podType),
 	}
-	labels := map[string]string{
+	labelSelector := map[string]string{
 		"terraforms.tf.isaaguilar.com/generation": fmt.Sprintf("%d", generation),
 	}
 	matchingFields := client.MatchingFields(f)
-	matchingLabels := client.MatchingLabels(labels)
+	matchingLabels := client.MatchingLabels(labelSelector)
 	pods := &corev1.PodList{}
 	err = r.Client.List(ctx, pods, inNamespace, matchingFields, matchingLabels)
 	if err != nil {
@@ -570,7 +574,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			reqLogger.V(1).Info(err.Error())
 			return reconcile.Result{}, err
 		}
-		if !tf.Spec.KeepCompletedPods {
+		if !tf.Spec.KeepCompletedPods && !tf.Spec.KeepLatestPodsOnly {
 			err := r.Client.Delete(ctx, &pods.Items[0])
 			if err != nil {
 				reqLogger.V(1).Info(err.Error())
@@ -805,6 +809,33 @@ func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
 		addNewStage(tf, podType, reason, interruptible, stageState)
 	}
 	return isNewStage
+}
+
+func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1alpha1.Terraform) {
+	logger := r.Log.WithName("Reaper").WithValues("Terraform", fmt.Sprintf("%s/%s", tf.Namespace, tf.Name))
+	podList := corev1.PodList{}
+	labelSelector, err := labels.Parse(fmt.Sprintf("terraforms.tf.isaaguilar.com/generation!=%d,terraforms.tf.isaaguilar.com/resourceName=%s", tf.Generation, tf.Name))
+	if err != nil {
+		logger.Error(err, "Could not parse labels")
+	}
+	fieldSelector, err := fields.ParseSelector("status.phase!=Running")
+	if err != nil {
+		logger.Error(err, "Could not parse fields")
+	}
+	err = r.Client.List(context.TODO(), &podList)
+	if err != nil {
+		logger.Error(err, "Could not list pods to reap")
+	}
+	err = r.Client.DeleteAllOf(context.TODO(), &corev1.Pod{}, &client.DeleteAllOfOptions{
+		ListOptions: client.ListOptions{
+			LabelSelector: labelSelector,
+			Namespace:     tf.Namespace,
+			FieldSelector: fieldSelector,
+		},
+	})
+	if err != nil {
+		logger.Error(err, "Could not reap old generation pods")
+	}
 }
 
 // updateFinalizer sets and unsets the finalizer on the tf resource. When
@@ -1935,15 +1966,15 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		}
 	}
 
-	labels := r.runnerLabels
-	labels["terraforms.tf.isaaguilar.com/generation"] = fmt.Sprintf("%d", generation)
-	labels["terraforms.tf.isaaguilar.com/resourceName"] = r.tfName
-	labels["terraforms.tf.isaaguilar.com/podPrefix"] = r.name
-	labels["terraforms.tf.isaaguilar.com/terraformVersion"] = r.terraformVersion
-	labels["app.kubernetes.io/name"] = "terraform-operator"
-	labels["app.kubernetes.io/component"] = "terraform-operator-runner"
-	labels["app.kubernetes.io/instance"] = string(podType)
-	labels["app.kubernetes.io/created-by"] = "controller"
+	runnerLabels := r.runnerLabels
+	runnerLabels["terraforms.tf.isaaguilar.com/generation"] = fmt.Sprintf("%d", generation)
+	runnerLabels["terraforms.tf.isaaguilar.com/resourceName"] = r.tfName
+	runnerLabels["terraforms.tf.isaaguilar.com/podPrefix"] = r.name
+	runnerLabels["terraforms.tf.isaaguilar.com/terraformVersion"] = r.terraformVersion
+	runnerLabels["app.kubernetes.io/name"] = "terraform-operator"
+	runnerLabels["app.kubernetes.io/component"] = "terraform-operator-runner"
+	runnerLabels["app.kubernetes.io/instance"] = string(podType)
+	runnerLabels["app.kubernetes.io/created-by"] = "controller"
 
 	initContainers := []corev1.Container{}
 	containers := []corev1.Container{}
@@ -2090,7 +2121,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: generateName,
 			Namespace:    r.namespace,
-			Labels:       labels,
+			Labels:       runnerLabels,
 			Annotations:  annotations,
 		},
 		Spec: corev1.PodSpec{
@@ -2429,11 +2460,11 @@ func (r *ReconcileTerraform) exportRepo(ctx context.Context, tf *tfv1alpha1.Terr
 	f := fields.Set{
 		"metadata.generateName": fmt.Sprintf("%s-%s-", tf.Status.PodNamePrefix+"-v"+fmt.Sprint(generation), exportPodType),
 	}
-	labels := map[string]string{
+	labelSelector := map[string]string{
 		"terraforms.tf.isaaguilar.com/generation": fmt.Sprintf("%d", generation),
 	}
 	matchingFields := client.MatchingFields(f)
-	matchingLabels := client.MatchingLabels(labels)
+	matchingLabels := client.MatchingLabels(labelSelector)
 	pods := &corev1.PodList{}
 	err = r.Client.List(ctx, pods, inNamespace, matchingFields, matchingLabels)
 	if err != nil {
@@ -2500,7 +2531,7 @@ func (r *ReconcileTerraform) exportRepo(ctx context.Context, tf *tfv1alpha1.Terr
 
 		if pods.Items[0].Status.Phase == corev1.PodSucceeded {
 			exportedStatus = tfv1alpha1.ExportedTrue
-			if !tf.Spec.KeepCompletedPods {
+			if !tf.Spec.KeepCompletedPods && !tf.Spec.KeepLatestPodsOnly {
 				err := r.Client.Delete(ctx, &pods.Items[0])
 				if err != nil {
 					reqLogger.V(1).Info(err.Error())
