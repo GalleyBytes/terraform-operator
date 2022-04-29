@@ -90,6 +90,13 @@ func schema_pkg_apis_tf_v1alpha1_TerraformSpec(ref common.ReferenceCallback) com
 				Description: "TerraformSpec defines the desired state of Terraform",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
+					"keepLatestPodsOnly": {
+						SchemaProps: spec.SchemaProps{
+							Description: "KeepLatestPodsOnly when true will keep only the pods that match the current generation of the terraform k8s-resource. This overrides the behavior of `keepCompletedPods`.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
 					"keepCompletedPods": {
 						SchemaProps: spec.SchemaProps{
 							Description: "KeepCompletedPods when true will keep completed pods. Default is false and completed pods are removed.",
