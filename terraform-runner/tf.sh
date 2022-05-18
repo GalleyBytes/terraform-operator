@@ -79,7 +79,7 @@ if [[ "$TFO_RUNNER" == "apply" ]] && [[ "$TFO_SAVE_OUTPUTS" == "true" ]]; then
       echo "Omitting $key"
       continue
     fi
-    b64value=$(jq -r --arg key $key '.[$key]' <<< $jsonoutput|base64|tr -d '[:space:]')
+    b64value=$(jq -r --arg key $key '.[$key].value' <<< $jsonoutput|base64|tr -d '[:space:]')
     jq -Mc --arg key $key --arg value $b64value '. += [
       {"op":"add","path":"/data/\($key)","value":"\($value)"}
     ]' "$data" > "$t"
