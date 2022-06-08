@@ -169,6 +169,7 @@ type RunOptions struct {
 	outputsToInclude                        []string
 	outputsToOmit                           []string
 	runnerLabels                            map[string]string
+	resourceLabels                          map[string]string
 }
 
 func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
@@ -252,6 +253,8 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	if len(tf.Spec.RunnerLabels) > 0 {
 		runnerLabels = tf.Spec.RunnerLabels
 	}
+
+	resourceLabels := make(map[string]string)
 	return RunOptions{
 		namespace:                               tf.Namespace,
 		tfName:                                  tfName,
@@ -282,6 +285,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 		outputsToInclude:                        outputsToInclude,
 		outputsToOmit:                           outputsToOmit,
 		runnerLabels:                            runnerLabels,
+		resourceLabels:                          resourceLabels,
 	}
 }
 
@@ -401,7 +405,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			reqLogger.V(1).Info(err.Error())
 		}
 		if tf.Spec.KeepLatestPodsOnly {
-			go r.backgroundReapOldGenerationPods(tf)
+			go r.backgroundReapOldGenerationPods(tf, 0)
 		}
 		return reconcile.Result{}, nil
 	}
@@ -811,9 +815,14 @@ func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
 	return isNewStage
 }
 
-func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1alpha1.Terraform) {
+func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1alpha1.Terraform, attempt int) {
 	logger := r.Log.WithName("Reaper").WithValues("Terraform", fmt.Sprintf("%s/%s", tf.Namespace, tf.Name))
-	podList := corev1.PodList{}
+	if attempt > 20 {
+		// TODO explain what and way resources cannot be reaped
+		logger.Info("Could not reap resources: Max attempts to reap old-generation resources")
+		return
+	}
+
 	labelSelector, err := labels.Parse(fmt.Sprintf("terraforms.tf.isaaguilar.com/generation!=%d,terraforms.tf.isaaguilar.com/resourceName=%s", tf.Generation, tf.Name))
 	if err != nil {
 		logger.Error(err, "Could not parse labels")
@@ -822,10 +831,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1alpha1.Terra
 	if err != nil {
 		logger.Error(err, "Could not parse fields")
 	}
-	err = r.Client.List(context.TODO(), &podList)
-	if err != nil {
-		logger.Error(err, "Could not list pods to reap")
-	}
+
 	err = r.Client.DeleteAllOf(context.TODO(), &corev1.Pod{}, &client.DeleteAllOfOptions{
 		ListOptions: client.ListOptions{
 			LabelSelector: labelSelector,
@@ -835,6 +841,76 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1alpha1.Terra
 	})
 	if err != nil {
 		logger.Error(err, "Could not reap old generation pods")
+	}
+
+	// Wait for all the pods of the previous generations to be gone. Only after
+	// the pods are cleaned up, clean up other associated resources like roles
+	// and rolebindings.
+	podList := corev1.PodList{}
+	err = r.Client.List(context.TODO(), &podList, &client.ListOptions{
+		LabelSelector: labelSelector,
+		Namespace:     tf.Namespace,
+	})
+	if err != nil {
+		logger.Error(err, "Could not list pods to reap")
+	}
+	if len(podList.Items) > 0 {
+		// There are still some pods from a previous generation hanging around
+		// for some reason. Wait some time and try to reap again later.
+		time.Sleep(30 * time.Second)
+		attempt++
+		go r.backgroundReapOldGenerationPods(tf, attempt)
+	} else {
+		// All old pods are gone and the other resouces will now be removed
+		err = r.Client.DeleteAllOf(context.TODO(), &corev1.ConfigMap{}, &client.DeleteAllOfOptions{
+			ListOptions: client.ListOptions{
+				LabelSelector: labelSelector,
+				Namespace:     tf.Namespace,
+			},
+		})
+		if err != nil {
+			logger.Error(err, "Could not reap old generation configmaps")
+		}
+
+		err = r.Client.DeleteAllOf(context.TODO(), &corev1.Secret{}, &client.DeleteAllOfOptions{
+			ListOptions: client.ListOptions{
+				LabelSelector: labelSelector,
+				Namespace:     tf.Namespace,
+			},
+		})
+		if err != nil {
+			logger.Error(err, "Could not reap old generation secrets")
+		}
+
+		err = r.Client.DeleteAllOf(context.TODO(), &rbacv1.Role{}, &client.DeleteAllOfOptions{
+			ListOptions: client.ListOptions{
+				LabelSelector: labelSelector,
+				Namespace:     tf.Namespace,
+			},
+		})
+		if err != nil {
+			logger.Error(err, "Could not reap old generation roles")
+		}
+
+		err = r.Client.DeleteAllOf(context.TODO(), &rbacv1.RoleBinding{}, &client.DeleteAllOfOptions{
+			ListOptions: client.ListOptions{
+				LabelSelector: labelSelector,
+				Namespace:     tf.Namespace,
+			},
+		})
+		if err != nil {
+			logger.Error(err, "Could not reap old generation roleBindings")
+		}
+
+		err = r.Client.DeleteAllOf(context.TODO(), &corev1.ServiceAccount{}, &client.DeleteAllOfOptions{
+			ListOptions: client.ListOptions{
+				LabelSelector: labelSelector,
+				Namespace:     tf.Namespace,
+			},
+		})
+		if err != nil {
+			logger.Error(err, "Could not reap old generation serviceAccounts")
+		}
 	}
 }
 
@@ -1131,6 +1207,14 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Ter
 		}
 	}
 
+	runOpts.resourceLabels["terraforms.tf.isaaguilar.com/generation"] = fmt.Sprintf("%d", generation)
+	runOpts.resourceLabels["terraforms.tf.isaaguilar.com/resourceName"] = runOpts.tfName
+	runOpts.resourceLabels["terraforms.tf.isaaguilar.com/podPrefix"] = runOpts.name
+	runOpts.resourceLabels["terraforms.tf.isaaguilar.com/terraformVersion"] = runOpts.terraformVersion
+	runOpts.resourceLabels["app.kubernetes.io/name"] = "terraform-operator"
+	runOpts.resourceLabels["app.kubernetes.io/component"] = "terraform-operator-runner"
+	runOpts.resourceLabels["app.kubernetes.io/created-by"] = "controller"
+
 	// RUN
 	err = r.run(ctx, reqLogger, tf, runOpts, isNewGeneration, isFirstInstall, podType, generation)
 	if err != nil {
@@ -1258,10 +1342,10 @@ func (r ReconcileTerraform) deleteSecretIfExists(ctx context.Context, name, name
 	return nil
 }
 
-func (r ReconcileTerraform) createSecret(ctx context.Context, tf *tfv1alpha1.Terraform, name, namespace string, data map[string][]byte, recreate bool) error {
+func (r ReconcileTerraform) createSecret(ctx context.Context, tf *tfv1alpha1.Terraform, name, namespace string, data map[string][]byte, recreate bool, runOpts RunOptions) error {
 	kind := "Secret"
 
-	resource := generateSecret(name, namespace, data)
+	resource := runOpts.generateSecret(name, namespace, data)
 	controllerutil.SetControllerReference(tf, resource, r.Scheme)
 
 	if recreate {
@@ -1478,6 +1562,7 @@ func (r RunOptions) generateConfigMap() *corev1.ConfigMap {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.versionedName,
 			Namespace: r.namespace,
+			Labels:    r.resourceLabels,
 		},
 		Data: r.mainModuleAddonData,
 	}
@@ -1501,6 +1586,7 @@ func (r RunOptions) generateServiceAccount() *corev1.ServiceAccount {
 			Name:        r.serviceAccount, // "tf-" + r.versionedName
 			Namespace:   r.namespace,
 			Annotations: annotations,
+			Labels:      r.resourceLabels,
 		},
 	}
 	return sa
@@ -1556,6 +1642,7 @@ func (r RunOptions) generateRole() *rbacv1.Role {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.versionedName,
 			Namespace: r.namespace,
+			Labels:    r.resourceLabels,
 		},
 		Rules: rules,
 	}
@@ -1567,6 +1654,7 @@ func (r RunOptions) generateRoleBinding() *rbacv1.RoleBinding {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.versionedName,
 			Namespace: r.namespace,
+			Labels:    r.resourceLabels,
 		},
 		Subjects: []rbacv1.Subject{
 			{
@@ -1589,6 +1677,7 @@ func (r RunOptions) generatePVC(size resource.Quantity) *corev1.PersistentVolume
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.name,
 			Namespace: r.namespace,
+			Labels:    r.resourceLabels,
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{
@@ -1967,14 +2056,10 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 	}
 
 	runnerLabels := r.runnerLabels
-	runnerLabels["terraforms.tf.isaaguilar.com/generation"] = fmt.Sprintf("%d", generation)
-	runnerLabels["terraforms.tf.isaaguilar.com/resourceName"] = r.tfName
-	runnerLabels["terraforms.tf.isaaguilar.com/podPrefix"] = r.name
-	runnerLabels["terraforms.tf.isaaguilar.com/terraformVersion"] = r.terraformVersion
-	runnerLabels["app.kubernetes.io/name"] = "terraform-operator"
-	runnerLabels["app.kubernetes.io/component"] = "terraform-operator-runner"
+	for key, value := range r.resourceLabels {
+		runnerLabels[key] = value
+	}
 	runnerLabels["app.kubernetes.io/instance"] = string(podType)
-	runnerLabels["app.kubernetes.io/created-by"] = "controller"
 
 	initContainers := []corev1.Container{}
 	containers := []corev1.Container{}
@@ -2144,7 +2229,7 @@ func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *
 			return err
 		}
 
-		if err := r.createSecret(ctx, tf, runOpts.versionedName, runOpts.namespace, runOpts.secretData, true); err != nil {
+		if err := r.createSecret(ctx, tf, runOpts.versionedName, runOpts.namespace, runOpts.secretData, true, runOpts); err != nil {
 			return err
 		}
 
@@ -2167,7 +2252,7 @@ func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *
 			}
 		}
 
-		if err := r.createSecret(ctx, tf, runOpts.outputsSecretName, runOpts.namespace, map[string][]byte{}, false); err != nil {
+		if err := r.createSecret(ctx, tf, runOpts.outputsSecretName, runOpts.namespace, map[string][]byte{}, false, runOpts); err != nil {
 			return err
 		}
 
@@ -2262,11 +2347,12 @@ func (r ReconcileTerraform) loadSecret(ctx context.Context, name, namespace stri
 	return secret, nil
 }
 
-func generateSecret(name, namespace string, data map[string][]byte) *corev1.Secret {
+func (r RunOptions) generateSecret(name, namespace string, data map[string][]byte) *corev1.Secret {
 	secretObject := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
+			Labels:    r.resourceLabels,
 		},
 		Data: data,
 		Type: corev1.SecretTypeOpaque,
