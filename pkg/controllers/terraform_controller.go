@@ -178,7 +178,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	tfName := tf.Name
 	name := tf.Status.PodNamePrefix
 	versionedName := name + "-v" + fmt.Sprint(tf.Generation)
-	terraformRunner := "isaaguilar/tf-runner-v5beta3"
+	terraformRunner := "isaaguilar/tf-runner-v5beta4"
 	terraformRunnerPullPolicy := corev1.PullIfNotPresent
 	terraformVersion := "1.1.9"
 
