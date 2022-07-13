@@ -160,3 +160,18 @@ func TruncateResourceName(s string, i int) string {
 	}
 	return name
 }
+
+func IsSeq(arr []int, start *int) bool {
+	cursor := 0
+	if start != nil {
+		cursor = *start
+	}
+	for _, i := range arr {
+		if i == cursor {
+			cursor++
+		} else {
+			return false
+		}
+	}
+	return true
+}

@@ -953,7 +953,42 @@ func (r ReconcileTerraform) update(ctx context.Context, tf *tfv1alpha1.Terraform
 	return nil
 }
 
+func removeStageIndex(slice []tfv1alpha1.Stage, s int) []tfv1alpha1.Stage {
+	return append(slice[:s], slice[s+1:]...)
+}
+
 func (r ReconcileTerraform) updateStatus(ctx context.Context, tf *tfv1alpha1.Terraform) error {
+	// To attempt to keep the etcd resource size under the max allowed, clean up
+	// status.stages to the last N generations only.
+	// TODO
+	//		If anyone needs this feature to hold a greater history, N can be
+	//		exposed as a config. For now, it's hard-coded to 50 for simplicity
+	//		and is probably more than enough for any user.
+	if tf.Status.Stages != nil {
+		if len(tf.Status.Stages) > 0 {
+			totalGenerationsToKeep := int64(49)
+			lastGenerationInStatus := tf.Status.Stages[len(tf.Status.Stages)-1].Generation
+			stagesToPop := []int{}
+			for index, stage := range tf.Status.Stages {
+				if stage.Generation < lastGenerationInStatus-totalGenerationsToKeep {
+					stagesToPop = append(stagesToPop, index)
+				}
+			}
+			// Save time and check if stagesToPop is sequential starting from 0
+			if utils.IsSeq(stagesToPop, nil) {
+				// The length of stagesToPop will be removed from current status.stages
+				tf.Status.Stages = tf.Status.Stages[len(stagesToPop):]
+			} else {
+				for i, stageIndex := range stagesToPop {
+					// On each iteration, the slice is modified by one index so we
+					// subtract i from the index we pop from the slice.
+					// This is a very expensive operation but it should be used or at
+					// least its used seldom
+					tf.Status.Stages = removeStageIndex(tf.Status.Stages, stageIndex-i)
+				}
+			}
+		}
+	}
 	err := r.Client.Status().Update(ctx, tf)
 	if err != nil {
 		return fmt.Errorf("failed to update tf status: %s", err)
