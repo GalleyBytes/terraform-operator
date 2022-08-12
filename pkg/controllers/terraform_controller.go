@@ -166,6 +166,7 @@ type RunOptions struct {
 	exportOptions                           ExportOptions
 	outputsSecretName                       string
 	saveOutputs                             bool
+	stripGenerationLabelOnOutputsSecret     bool
 	outputsToInclude                        []string
 	outputsToOmit                           []string
 	runnerLabels                            map[string]string
@@ -236,9 +237,11 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	// as the Terraform CustomResource by adding the ownership metadata
 	outputsSecretName := name + "-outputs"
 	saveOutputs := false
+	stripGenerationLabelOnOutputsSecret := false
 	if tf.Spec.OutputsSecret != "" {
 		outputsSecretName = tf.Spec.OutputsSecret
 		saveOutputs = true
+		stripGenerationLabelOnOutputsSecret = true
 	} else if tf.Spec.WriteOutputsToStatus {
 		saveOutputs = true
 	}
@@ -282,6 +285,7 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 		runnerRules:                             runnerRules,
 		outputsSecretName:                       outputsSecretName,
 		saveOutputs:                             saveOutputs,
+		stripGenerationLabelOnOutputsSecret:     stripGenerationLabelOnOutputsSecret,
 		outputsToInclude:                        outputsToInclude,
 		outputsToOmit:                           outputsToOmit,
 		runnerLabels:                            runnerLabels,
@@ -823,7 +827,12 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1alpha1.Terra
 		return
 	}
 
-	labelSelector, err := labels.Parse(fmt.Sprintf("terraforms.tf.isaaguilar.com/generation!=%d,terraforms.tf.isaaguilar.com/resourceName=%s", tf.Generation, tf.Name))
+	// The labels required are read as:
+	// 1. The terraforms.tf.isaaguilar.com/generation key MUST exist
+	// 2. The terraforms.tf.isaaguilar.com/generation value MUST match the current resource generation
+	// 3. The terraforms.tf.isaaguilar.com/resourceName key MUST exist
+	// 4. The terraforms.tf.isaaguilar.com/resourceName value MUST match the resource name
+	labelSelector, err := labels.Parse(fmt.Sprintf("terraforms.tf.isaaguilar.com/generation,terraforms.tf.isaaguilar.com/generation!=%d,terraforms.tf.isaaguilar.com/resourceName,terraforms.tf.isaaguilar.com/resourceName=%s", tf.Generation, tf.Name))
 	if err != nil {
 		logger.Error(err, "Could not parse labels")
 	}
@@ -1379,10 +1388,20 @@ func (r ReconcileTerraform) deleteSecretIfExists(ctx context.Context, name, name
 	return nil
 }
 
-func (r ReconcileTerraform) createSecret(ctx context.Context, tf *tfv1alpha1.Terraform, name, namespace string, data map[string][]byte, recreate bool, runOpts RunOptions) error {
+func (r ReconcileTerraform) createSecret(ctx context.Context, tf *tfv1alpha1.Terraform, name, namespace string, data map[string][]byte, recreate bool, labelsToOmit []string, runOpts RunOptions) error {
 	kind := "Secret"
 
-	resource := runOpts.generateSecret(name, namespace, data)
+	// Must make a clean map of labels since the memory address is shared
+	// for the entire RunOptions struct
+	labels := make(map[string]string)
+	for key, value := range runOpts.resourceLabels {
+		labels[key] = value
+	}
+	for _, labelKey := range labelsToOmit {
+		delete(labels, labelKey)
+	}
+
+	resource := runOpts.generateSecret(name, namespace, data, labels)
 	controllerutil.SetControllerReference(tf, resource, r.Scheme)
 
 	if recreate {
@@ -2266,7 +2285,7 @@ func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *
 			return err
 		}
 
-		if err := r.createSecret(ctx, tf, runOpts.versionedName, runOpts.namespace, runOpts.secretData, true, runOpts); err != nil {
+		if err := r.createSecret(ctx, tf, runOpts.versionedName, runOpts.namespace, runOpts.secretData, true, []string{}, runOpts); err != nil {
 			return err
 		}
 
@@ -2289,7 +2308,11 @@ func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *
 			}
 		}
 
-		if err := r.createSecret(ctx, tf, runOpts.outputsSecretName, runOpts.namespace, map[string][]byte{}, false, runOpts); err != nil {
+		labelsToOmit := []string{}
+		if runOpts.stripGenerationLabelOnOutputsSecret {
+			labelsToOmit = append(labelsToOmit, "terraforms.tf.isaaguilar.com/generation")
+		}
+		if err := r.createSecret(ctx, tf, runOpts.outputsSecretName, runOpts.namespace, map[string][]byte{}, false, labelsToOmit, runOpts); err != nil {
 			return err
 		}
 
@@ -2384,12 +2407,12 @@ func (r ReconcileTerraform) loadSecret(ctx context.Context, name, namespace stri
 	return secret, nil
 }
 
-func (r RunOptions) generateSecret(name, namespace string, data map[string][]byte) *corev1.Secret {
+func (r RunOptions) generateSecret(name, namespace string, data map[string][]byte, labels map[string]string) *corev1.Secret {
 	secretObject := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
-			Labels:    r.resourceLabels,
+			Labels:    labels,
 		},
 		Data: data,
 		Type: corev1.SecretTypeOpaque,
