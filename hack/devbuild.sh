@@ -11,14 +11,20 @@ gitshort=$(git rev-list HEAD --abbrev-commit --max-count 1)
 repo="isaaguilar/$PROJECT"
 
 LATEST_TAG="v0.0.0" # default for new projects or a fallback in case logic breaks
+if [[ -z "$DESIRED_VERSION" ]]; then
 if git tag --sort=version:refname --sort=-creatordate | head -n1; then
 LATEST_TAG=$(git tag --sort=version:refname --sort=-creatordate | head -n1)
 fi
+fi
 
-CURRENT_VERSION=${LATEST_TAG}
+# Dev builds are usually for a new version that has not been tagged yet.
+# In order to make this easy, allow an environment var to define the desired
+# version.
+CURRENT_VERSION=${DESIRED_VERSION:-LATEST_TAG}
 if [[ "$CURRENT_VERSION" != "v"* ]]; then
 exit 1
 fi
+
 CURRENT_VERSION=${CURRENT_VERSION#v}
 CURRENT_VERSION=${CURRENT_VERSION%-*}
 major=$(echo $CURRENT_VERSION|cut -d'.' -f1)
