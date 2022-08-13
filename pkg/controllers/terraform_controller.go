@@ -730,14 +730,24 @@ func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
 		case tfv1alpha1.PodPlan:
 			if tf.Spec.PostPlanScript != "" {
 				podType = tfv1alpha1.PodPostPlan
+			} else if tf.Spec.TerraformDryRun {
+				reason = "COMPLETED_TERRAFORM_DRY_RUN"
+				podType = tfv1alpha1.PodNil
+				stageState = tfv1alpha1.StateComplete
 			} else {
 				podType = tfv1alpha1.PodApply
 				interruptible = tfv1alpha1.CanNotBeInterrupt
 			}
 
 		case tfv1alpha1.PodPostPlan:
-			podType = tfv1alpha1.PodApply
-			interruptible = tfv1alpha1.CanNotBeInterrupt
+			if tf.Spec.TerraformDryRun {
+				reason = "COMPLETED_TERRAFORM_DRY_RUN"
+				podType = tfv1alpha1.PodNil
+				stageState = tfv1alpha1.StateComplete
+			} else {
+				podType = tfv1alpha1.PodApply
+				interruptible = tfv1alpha1.CanNotBeInterrupt
+			}
 
 		//
 		// apply types
@@ -782,14 +792,20 @@ func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
 		case tfv1alpha1.PodPlanDelete:
 			if tf.Spec.PostPlanDeleteScript != "" {
 				podType = tfv1alpha1.PodPostPlanDelete
+			} else if tf.Spec.TerraformDryRun {
+				podType = tfv1alpha1.PodNil
 			} else {
 				podType = tfv1alpha1.PodApplyDelete
 				interruptible = tfv1alpha1.CanNotBeInterrupt
 			}
 
 		case tfv1alpha1.PodPostPlanDelete:
-			podType = tfv1alpha1.PodApplyDelete
-			interruptible = tfv1alpha1.CanNotBeInterrupt
+			if tf.Spec.TerraformDryRun {
+				podType = tfv1alpha1.PodNil
+			} else {
+				podType = tfv1alpha1.PodApplyDelete
+				interruptible = tfv1alpha1.CanNotBeInterrupt
+			}
 
 		//
 		// apply (delete) types

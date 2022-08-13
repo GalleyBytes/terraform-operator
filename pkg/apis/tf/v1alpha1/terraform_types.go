@@ -117,6 +117,10 @@ type TerraformSpec struct {
 	// `inline-module.tf`
 	TerraformModuleInline string `json:"terraformModuleInline,omitempty"`
 
+	// TerraformDryRun when true will run all stages except apply. Default is false
+	// and all stages including apply are run.
+	TerraformDryRun bool `json:"terraformDryRun,omitempty"`
+
 	// OutputsSecret will create a secret with the outputs from the module. All
 	// outputs from the module will be written to the secret unless the user
 	// defines "outputsToInclude" or "outputsToOmit".
