@@ -20,8 +20,8 @@ package fake
 
 import (
 	clientset "github.com/isaaguilar/terraform-operator/pkg/client/clientset/versioned"
-	tfv1alpha1 "github.com/isaaguilar/terraform-operator/pkg/client/clientset/versioned/typed/tf/v1alpha1"
-	faketfv1alpha1 "github.com/isaaguilar/terraform-operator/pkg/client/clientset/versioned/typed/tf/v1alpha1/fake"
+	tfv1alpha2 "github.com/isaaguilar/terraform-operator/pkg/client/clientset/versioned/typed/tf/v1alpha2"
+	faketfv1alpha2 "github.com/isaaguilar/terraform-operator/pkg/client/clientset/versioned/typed/tf/v1alpha2/fake"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"
@@ -76,7 +76,7 @@ func (c *Clientset) Tracker() testing.ObjectTracker {
 
 var _ clientset.Interface = &Clientset{}
 
-// TfV1alpha1 retrieves the TfV1alpha1Client
-func (c *Clientset) TfV1alpha1() tfv1alpha1.TfV1alpha1Interface {
-	return &faketfv1alpha1.FakeTfV1alpha1{Fake: &c.Fake}
+// TfV1alpha2 retrieves the TfV1alpha2Client
+func (c *Clientset) TfV1alpha2() tfv1alpha2.TfV1alpha2Interface {
+	return &faketfv1alpha2.FakeTfV1alpha2{Fake: &c.Fake}
 }

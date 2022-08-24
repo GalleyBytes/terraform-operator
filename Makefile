@@ -84,9 +84,11 @@ generate: controller-gen
 
 openapi-gen: openapi-gen-bin
 	$(OPENAPI_GEN) --logtostderr=true -o "" -i github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1 -O zz_generated.openapi -p pkg/apis/tf/v1alpha1 -h ./hack/boilerplate.go.txt -r "-"
+	$(OPENAPI_GEN) --logtostderr=true -o "" -i github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2 -O zz_generated.openapi -p pkg/apis/tf/v1alpha2 -h ./hack/boilerplate.go.txt -r "-"
 
 client-gen: client-gen-bin
 	$(CLIENT_GEN) -n versioned --input-base ""  --input ${PKG}/pkg/apis/tf/v1alpha1 -p ${PKG}/pkg/client/clientset -h ./hack/boilerplate.go.txt
+	$(CLIENT_GEN) -n versioned --input-base ""  --input ${PKG}/pkg/apis/tf/v1alpha2 -p ${PKG}/pkg/client/clientset -h ./hack/boilerplate.go.txt
 
 k8s-gen: crds generate openapi-gen client-gen
 
@@ -131,7 +133,7 @@ install: crds
 
 # Run against the configured Kubernetes cluster in ~/.kube/config
 run: fmt vet
-	go run cmd/manager/main.go --max-concurrent-reconciles 10
+	go run cmd/manager/main.go --max-concurrent-reconciles 10 --zap-log-level=5
 
 # Run tests
 ENVTEST_ASSETS_DIR=$(shell pwd)/testbin

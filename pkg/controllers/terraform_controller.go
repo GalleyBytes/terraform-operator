@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,8 +15,7 @@ import (
 	"github.com/MakeNowJust/heredoc"
 	"github.com/go-logr/logr"
 	getter "github.com/hashicorp/go-getter"
-	tfv1alpha1 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1"
-	"github.com/isaaguilar/terraform-operator/pkg/gitclient"
+	tfv1alpha2 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2"
 	"github.com/isaaguilar/terraform-operator/pkg/utils"
 	localcache "github.com/patrickmn/go-cache"
 	batchv1 "k8s.io/api/batch/v1"
@@ -44,11 +45,20 @@ func (r *ReconcileTerraform) SetupWithManager(mgr ctrl.Manager) error {
 		MaxConcurrentReconciles: r.MaxConcurrentReconciles,
 	}
 
+	if os.Getenv("DO_NOT_RECONCILE") != "" {
+		/*
+
+			Webhooks only! useful for testing
+
+		*/
+		return nil
+	}
+	// only listedn to v1alpha2
 	err := ctrl.NewControllerManagedBy(mgr).
-		For(&tfv1alpha1.Terraform{}).
+		For(&tfv1alpha2.Terraform{}).
 		Watches(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForOwner{
 			IsController: true,
-			OwnerType:    &tfv1alpha1.Terraform{},
+			OwnerType:    &tfv1alpha2.Terraform{},
 		}).
 		WithOptions(controllerOptions).
 		Complete(r)
@@ -113,86 +123,176 @@ type ParsedAddress struct {
 	Repo string `json:"repo"`
 }
 
-type GitRepoAccessOptions struct {
-	ClientGitRepo  gitclient.GitRepo
-	Timeout        int64
-	Address        string
-	Directory      string
-	Extras         []string
-	SCMAuthMethods []tfv1alpha1.SCMAuthMethod
-	SSHProxy       tfv1alpha1.ProxyOpts
-	ParsedAddress
-}
-
-type ExportOptions struct {
-	stack          ParsedAddress
-	confPath       string
-	tfvarsPath     string
-	gitUsername    string
-	gitEmail       string
-	retryOnFailure bool
-}
-
-type SetupOptions struct {
-	cleanupDisk bool
-}
-
 type RunOptions struct {
-	namespace                               string
-	tfName                                  string
-	name                                    string
-	versionedName                           string
-	envVars                                 []corev1.EnvVar
-	credentials                             []tfv1alpha1.Credentials
-	terraformModuleParsed                   ParsedAddress
-	serviceAccount                          string
-	mainModuleAddonData                     map[string]string
-	secretData                              map[string][]byte
-	terraformRunner                         string
-	terraformRunnerExecutionScriptConfigMap *corev1.ConfigMapKeySelector
-	terraformRunnerPullPolicy               corev1.PullPolicy
-	terraformVersion                        string
-	scriptRunner                            string
-	scriptRunnerExecutionScriptConfigMap    *corev1.ConfigMapKeySelector
-	scriptRunnerPullPolicy                  corev1.PullPolicy
-	scriptRunnerVersion                     string
-	setupRunner                             string
-	setupRunnerExecutionScriptConfigMap     *corev1.ConfigMapKeySelector
-	setupRunnerPullPolicy                   corev1.PullPolicy
-	setupRunnerVersion                      string
-	setupOptions                            SetupOptions
-	runnerAnnotations                       map[string]string
-	runnerRules                             []rbacv1.PolicyRule
-	exportOptions                           ExportOptions
-	outputsSecretName                       string
-	saveOutputs                             bool
-	stripGenerationLabelOnOutputsSecret     bool
-	outputsToInclude                        []string
-	outputsToOmit                           []string
-	runnerLabels                            map[string]string
-	resourceLabels                          map[string]string
+	annotations                         map[string]string
+	configMapSourceName                 string
+	configMapSourceKey                  string
+	credentials                         []tfv1alpha2.Credentials
+	env                                 []corev1.EnvVar
+	envFrom                             []corev1.EnvFromSource
+	generation                          int64
+	image                               string
+	imagePullPolicy                     corev1.PullPolicy
+	labels                              map[string]string
+	mainModuleAddonData                 map[string]string
+	namespace                           string
+	outputsSecretName                   string
+	outputsToInclude                    []string
+	outputsToOmit                       []string
+	policyRules                         []rbacv1.PolicyRule
+	prefixedName                        string
+	resourceLabels                      map[string]string
+	resourceName                        string
+	runType                             tfv1alpha2.TaskType
+	saveOutputs                         bool
+	secretData                          map[string][]byte
+	serviceAccount                      string
+	cleanupDisk                         bool
+	stripGenerationLabelOnOutputsSecret bool
+	terraformModuleParsed               ParsedAddress
+	terraformVersion                    string
+	urlSource                           string
+	versionedName                       string
 }
 
-func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
+func newRunOptions(tf *tfv1alpha2.Terraform, runType tfv1alpha2.TaskType, generation int64) RunOptions {
 	// TODO Read the tfstate and decide IF_NEW_RESOURCE based on that
 	// applyAction := false
-	tfName := tf.Name
-	name := tf.Status.PodNamePrefix
-	versionedName := name + "-v" + fmt.Sprint(tf.Generation)
-	terraformRunner := "isaaguilar/tf-runner-v5beta4"
-	terraformRunnerPullPolicy := corev1.PullIfNotPresent
-	terraformVersion := "1.1.9"
+	resourceName := tf.Name
+	prefixedName := tf.Status.PodNamePrefix
+	versionedName := prefixedName + "-v" + fmt.Sprint(tf.Generation)
+	terraformVersion := tf.Spec.TerraformVersion
+	if terraformVersion == "" {
+		terraformVersion = "latest"
+	}
 
-	scriptRunner := "isaaguilar/script-runner"
-	scriptRunnerPullPolicy := corev1.PullIfNotPresent
-	scriptRunnerVersion := "1.0.2"
+	image := ""
+	imagePullPolicy := corev1.PullAlways
+	policyRules := []rbacv1.PolicyRule{}
+	labels := make(map[string]string)
+	annotations := make(map[string]string)
+	env := []corev1.EnvVar{}
+	envFrom := []corev1.EnvFromSource{}
+	cleanupDisk := false
+	urlSource := ""
+	configMapSourceName := ""
+	configMapSourceKey := ""
 
-	setupRunner := "isaaguilar/setup-runner"
-	setupRunnerPullPolicy := corev1.PullIfNotPresent
-	setupRunnerVersion := "1.1.7"
+	// TaskOptions have data for all the tasks but since we're only interested
+	// in the ones for this taskType, extract and add them to RunOptions
+	for _, taskOption := range tf.Spec.TaskOptions {
+		if tfv1alpha2.ListContainsRunType(taskOption.TaskTypes, runType) ||
+			tfv1alpha2.ListContainsRunType(taskOption.TaskTypes, "*") {
+			policyRules = append(policyRules, taskOption.PolicyRules...)
+			for key, value := range taskOption.Annotations {
+				annotations[key] = value
+			}
+			for key, value := range taskOption.Labels {
+				labels[key] = value
+			}
+			env = append(env, taskOption.Env...)
+			envFrom = append(envFrom, taskOption.EnvFrom...)
+		}
+		if tfv1alpha2.ListContainsRunType(taskOption.TaskTypes, runType) {
+			urlSource = taskOption.Script.Source
+			if configMapSelector := taskOption.Script.ConfigMapSelector; configMapSelector != nil {
+				configMapSourceName = configMapSelector.Name
+				configMapSourceKey = configMapSelector.Key
+			}
+		}
+	}
 
-	runnerAnnotations := tf.Spec.RunnerAnnotations
-	runnerRules := tf.Spec.RunnerRules
+	images := tf.Spec.Images
+	if images == nil {
+		// setup default images
+		images = &tfv1alpha2.Images{}
+	}
+
+	if images.Terraform == nil {
+		images.Terraform = &tfv1alpha2.ImageConfig{
+			ImagePullPolicy: corev1.PullIfNotPresent,
+		}
+	}
+
+	if images.Terraform.Image == "" {
+		images.Terraform.Image = fmt.Sprintf("ghcr.io/galleybytes/terraform-operator-tftaskv1:%s", terraformVersion)
+	} else {
+		terraformImage := images.Terraform.Image
+		splitImage := strings.Split(images.Terraform.Image, ":")
+		if length := len(splitImage); length > 1 {
+			terraformImage = strings.Join(splitImage[:length-1], ":")
+		}
+		images.Terraform.Image = fmt.Sprintf("%s:%s", terraformImage, terraformVersion)
+	}
+
+	if images.Setup == nil {
+		images.Setup = &tfv1alpha2.ImageConfig{
+			ImagePullPolicy: corev1.PullIfNotPresent,
+		}
+	}
+
+	if images.Setup.Image == "" {
+		images.Setup.Image = "ghcr.io/galleybytes/terraform-operator-setup:1.0.0"
+	}
+
+	if images.Script == nil {
+		images.Script = &tfv1alpha2.ImageConfig{
+			ImagePullPolicy: corev1.PullIfNotPresent,
+		}
+	}
+
+	if images.Script.Image == "" {
+		images.Script.Image = "ghcr.io/galleybytes/terraform-operator-script:1.0.0"
+	}
+
+	terraformRunTypes := []tfv1alpha2.TaskType{
+		tfv1alpha2.RunInit,
+		tfv1alpha2.RunInitDelete,
+		tfv1alpha2.RunPlan,
+		tfv1alpha2.RunPlanDelete,
+		tfv1alpha2.RunApply,
+		tfv1alpha2.RunApplyDelete,
+	}
+
+	scriptRunTypes := []tfv1alpha2.TaskType{
+		tfv1alpha2.RunPreInit,
+		tfv1alpha2.RunPreInitDelete,
+		tfv1alpha2.RunPostInit,
+		tfv1alpha2.RunPostInitDelete,
+		tfv1alpha2.RunPrePlan,
+		tfv1alpha2.RunPrePlanDelete,
+		tfv1alpha2.RunPostPlan,
+		tfv1alpha2.RunPostPlanDelete,
+		tfv1alpha2.RunPreApply,
+		tfv1alpha2.RunPreApplyDelete,
+		tfv1alpha2.RunPostApply,
+		tfv1alpha2.RunPostApplyDelete,
+	}
+
+	setupRunTypes := []tfv1alpha2.TaskType{
+		tfv1alpha2.RunSetup,
+		tfv1alpha2.RunSetupDelete,
+	}
+
+	if tfv1alpha2.ListContainsRunType(terraformRunTypes, runType) {
+		image = images.Terraform.Image
+		imagePullPolicy = images.Terraform.ImagePullPolicy
+		if urlSource == "" {
+			urlSource = "https://raw.githubusercontent.com/GalleyBytes/terraform-operator-tasks/master/tf.sh"
+		}
+	} else if tfv1alpha2.ListContainsRunType(scriptRunTypes, runType) {
+		image = images.Script.Image
+		imagePullPolicy = images.Script.ImagePullPolicy
+		if urlSource == "" {
+			urlSource = "https://raw.githubusercontent.com/GalleyBytes/terraform-operator-tasks/master/noop.sh"
+		}
+	} else if tfv1alpha2.ListContainsRunType(setupRunTypes, runType) {
+		image = images.Setup.Image
+		imagePullPolicy = images.Setup.ImagePullPolicy
+		if urlSource == "" {
+			urlSource = "https://raw.githubusercontent.com/GalleyBytes/terraform-operator-tasks/master/setup.sh"
+		}
+	}
 
 	// sshConfig := utils.TruncateResourceName(tf.Name, 242) + "-ssh-config"
 	serviceAccount := tf.Spec.ServiceAccount
@@ -202,40 +302,11 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 		serviceAccount = "tf-" + versionedName
 	}
 
-	if tf.Spec.TerraformRunner != "" {
-		terraformRunner = tf.Spec.TerraformRunner
-	}
-	if tf.Spec.TerraformRunnerPullPolicy != "" {
-		terraformRunnerPullPolicy = tf.Spec.TerraformRunnerPullPolicy
-	}
-	if tf.Spec.TerraformVersion != "" {
-		terraformVersion = tf.Spec.TerraformVersion
-	}
-
-	if tf.Spec.ScriptRunner != "" {
-		scriptRunner = tf.Spec.ScriptRunner
-	}
-	if tf.Spec.ScriptRunnerPullPolicy != "" {
-		scriptRunnerPullPolicy = tf.Spec.ScriptRunnerPullPolicy
-	}
-	if tf.Spec.ScriptRunnerVersion != "" {
-		scriptRunnerVersion = tf.Spec.ScriptRunnerVersion
-	}
-
-	if tf.Spec.SetupRunner != "" {
-		setupRunner = tf.Spec.SetupRunner
-	}
-	if tf.Spec.SetupRunnerPullPolicy != "" {
-		setupRunnerPullPolicy = tf.Spec.SetupRunnerPullPolicy
-	}
-	if tf.Spec.SetupRunnerVersion != "" {
-		setupRunnerVersion = tf.Spec.SetupRunnerVersion
-	}
 	credentials := tf.Spec.Credentials
 
 	// Outputs will be saved as a secret that will have the same lifecycle
 	// as the Terraform CustomResource by adding the ownership metadata
-	outputsSecretName := name + "-outputs"
+	outputsSecretName := prefixedName + "-outputs"
 	saveOutputs := false
 	stripGenerationLabelOnOutputsSecret := false
 	if tf.Spec.OutputsSecret != "" {
@@ -248,48 +319,41 @@ func newRunOptions(tf *tfv1alpha1.Terraform) RunOptions {
 	outputsToInclude := tf.Spec.OutputsToInclude
 	outputsToOmit := tf.Spec.OutputsToOmit
 
-	setupOptions := SetupOptions{
-		cleanupDisk: tf.Spec.CleanupDisk,
-	}
-
-	runnerLabels := make(map[string]string)
-	if len(tf.Spec.RunnerLabels) > 0 {
-		runnerLabels = tf.Spec.RunnerLabels
-	}
-
 	resourceLabels := make(map[string]string)
+
+	if tf.Spec.Setup != nil {
+		cleanupDisk = tf.Spec.Setup.CleanupDisk
+	}
+
 	return RunOptions{
-		namespace:                               tf.Namespace,
-		tfName:                                  tfName,
-		name:                                    name,
-		versionedName:                           versionedName,
-		envVars:                                 tf.Spec.Env,
-		credentials:                             credentials,
-		terraformVersion:                        terraformVersion,
-		terraformRunner:                         terraformRunner,
-		terraformRunnerExecutionScriptConfigMap: tf.Spec.TerraformRunnerExecutionScriptConfigMap,
-		terraformRunnerPullPolicy:               terraformRunnerPullPolicy,
-		runnerAnnotations:                       runnerAnnotations,
-		serviceAccount:                          serviceAccount,
-		mainModuleAddonData:                     make(map[string]string),
-		secretData:                              make(map[string][]byte),
-		scriptRunner:                            scriptRunner,
-		scriptRunnerPullPolicy:                  scriptRunnerPullPolicy,
-		scriptRunnerExecutionScriptConfigMap:    tf.Spec.ScriptRunnerExecutionScriptConfigMap,
-		scriptRunnerVersion:                     scriptRunnerVersion,
-		setupRunner:                             setupRunner,
-		setupRunnerPullPolicy:                   setupRunnerPullPolicy,
-		setupRunnerExecutionScriptConfigMap:     tf.Spec.SetupRunnerExecutionScriptConfigMap,
-		setupRunnerVersion:                      setupRunnerVersion,
-		setupOptions:                            setupOptions,
-		runnerRules:                             runnerRules,
-		outputsSecretName:                       outputsSecretName,
-		saveOutputs:                             saveOutputs,
-		stripGenerationLabelOnOutputsSecret:     stripGenerationLabelOnOutputsSecret,
-		outputsToInclude:                        outputsToInclude,
-		outputsToOmit:                           outputsToOmit,
-		runnerLabels:                            runnerLabels,
-		resourceLabels:                          resourceLabels,
+		env:                                 env,
+		generation:                          generation,
+		configMapSourceName:                 configMapSourceName,
+		configMapSourceKey:                  configMapSourceKey,
+		envFrom:                             envFrom,
+		policyRules:                         policyRules,
+		annotations:                         annotations,
+		labels:                              labels,
+		imagePullPolicy:                     imagePullPolicy,
+		namespace:                           tf.Namespace,
+		resourceName:                        resourceName,
+		prefixedName:                        prefixedName,
+		versionedName:                       versionedName,
+		credentials:                         credentials,
+		terraformVersion:                    terraformVersion,
+		image:                               image,
+		runType:                             runType,
+		resourceLabels:                      resourceLabels,
+		serviceAccount:                      serviceAccount,
+		mainModuleAddonData:                 make(map[string]string),
+		secretData:                          make(map[string][]byte),
+		cleanupDisk:                         cleanupDisk,
+		outputsSecretName:                   outputsSecretName,
+		saveOutputs:                         saveOutputs,
+		stripGenerationLabelOnOutputsSecret: stripGenerationLabelOnOutputsSecret,
+		outputsToInclude:                    outputsToInclude,
+		outputsToOmit:                       outputsToOmit,
+		urlSource:                           urlSource,
 	}
 }
 
@@ -301,6 +365,7 @@ const terraformFinalizer = "finalizer.tf.isaaguilar.com"
 // The Controller will requeue the Request to be processed again if the returned error is non-nil or
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
 func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
+
 	reconcilerID := string(uuid.NewUUID())
 	reqLogger := r.Log.WithValues("Terraform", request.NamespacedName, "id", reconcilerID)
 	lockKey := request.String() + "-reconcile-lock"
@@ -330,7 +395,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	}
 
 	// Final delete by removing finalizers
-	if tf.Status.Phase == tfv1alpha1.PhaseDeleted {
+	if tf.Status.Phase == tfv1alpha2.PhaseDeleted {
 		reqLogger.Info("Remove finalizers")
 		_ = updateFinalizer(tf)
 		err := r.update(ctx, tf)
@@ -360,10 +425,11 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			utils.TruncateResourceName(tf.Name, 220),
 			utils.StringWithCharset(8, utils.AlphaNum),
 		)
-		tf.Status.Stages = []tfv1alpha1.Stage{}
+		tf.Status.Stages = []tfv1alpha2.Stage{}
 		tf.Status.LastCompletedGeneration = 0
-		tf.Status.Phase = tfv1alpha1.PhaseInitializing
-		err := r.updateStatus(ctx, tf)
+		tf.Status.Phase = tfv1alpha2.PhaseInitializing
+
+		err := r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 		if err != nil {
 			reqLogger.V(1).Info(err.Error())
 		}
@@ -371,13 +437,18 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	}
 
 	// Add the first stage
-	if len(tf.Status.Stages) == 0 {
-		podType := tfv1alpha1.PodSetup
-		stageState := tfv1alpha1.StateInitializing
-		interruptible := tfv1alpha1.CanNotBeInterrupt
-		addNewStage(tf, podType, "TF_RESOURCE_CREATED", interruptible, stageState)
-		tf.Status.Exported = tfv1alpha1.ExportedFalse
-		err := r.updateStatus(ctx, tf)
+	if tf.Status.Stage.Generation == 0 {
+		runType := tfv1alpha2.RunSetup
+		stageState := tfv1alpha2.StateInitializing
+		interruptible := tfv1alpha2.CanNotBeInterrupt
+		stage := newStage(tf, runType, "TF_RESOURCE_CREATED", interruptible, stageState)
+		if stage == nil {
+			return reconcile.Result{}, fmt.Errorf("failed to create a new stage")
+		}
+		tf.Status.Stage = *stage
+		tf.Status.Exported = tfv1alpha2.ExportedFalse
+
+		err := r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
@@ -385,15 +456,15 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	}
 
 	deletePhases := []string{
-		string(tfv1alpha1.PhaseDeleting),
-		string(tfv1alpha1.PhaseInitDelete),
-		string(tfv1alpha1.PhaseDeleted),
+		string(tfv1alpha2.PhaseDeleting),
+		string(tfv1alpha2.PhaseInitDelete),
+		string(tfv1alpha2.PhaseDeleted),
 	}
 
 	// Check if the resource is marked to be deleted which is
 	// indicated by the deletion timestamp being set.
 	if tf.GetDeletionTimestamp() != nil && !utils.ListContainsStr(deletePhases, string(tf.Status.Phase)) {
-		tf.Status.Phase = tfv1alpha1.PhaseInitDelete
+		tf.Status.Phase = tfv1alpha2.PhaseInitDelete
 	}
 
 	// // TODO Check the status on stages that have not completed
@@ -402,11 +473,14 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	//
 	// 	}
 	// }
-
-	if checkSetNewStage(tf) {
-		err := r.updateStatus(ctx, tf)
+	stage := checkSetNewStage(tf)
+	if stage != nil {
+		reqLogger.V(3).Info(fmt.Sprintf("Stage moving from '%s' -> '%s'", tf.Status.Stage.PodType, stage.PodType))
+		tf.Status.Stage = *stage
+		desiredStatus := tf.Status
+		err := r.updateStatusWithRetry(ctx, tf, &desiredStatus, reqLogger)
 		if err != nil {
-			reqLogger.V(1).Info(err.Error())
+			reqLogger.V(1).Info(fmt.Sprintf("Error adding stage '%s': %s", stage.PodType, err.Error()))
 		}
 		if tf.Spec.KeepLatestPodsOnly {
 			go r.backgroundReapOldGenerationPods(tf, 0)
@@ -414,38 +488,45 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		return reconcile.Result{}, nil
 	}
 
-	var podType tfv1alpha1.PodType
-	var generation int64
-	n := len(tf.Status.Stages)
-	currentStage := tf.Status.Stages[n-1]
-	podType = currentStage.PodType
-	generation = currentStage.Generation
-	runOpts := newRunOptions(tf)
+	currentStage := tf.Status.Stage
+	podType := currentStage.PodType
+	generation := currentStage.Generation
+	runOpts := newRunOptions(tf, currentStage.PodType, generation)
 
-	if tf.Spec.ExportRepo != nil && podType != tfv1alpha1.PodSetup {
-		// Run the export-runner
-		exportedStatus, err := r.exportRepo(ctx, tf, runOpts, generation, reqLogger)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-		if tf.Status.Exported != exportedStatus {
-			tf.Status.Exported = exportedStatus
-			err := r.updateStatus(ctx, tf)
-			if err != nil {
-				reqLogger.V(1).Info(err.Error())
-				return reconcile.Result{}, err
-			}
-			return reconcile.Result{}, nil
-		}
-	}
+	/*
+		The export repo will be it's own project and
+		will use the tf resource as a ref.  The
+		ref will look for the status to get the
+		stage's generation and have logic to decide
+		if it should do an export. The export fields
+			will be removed from the v1alpha2 api and
+			added to the export controller.
+	*/
 
-	if podType == "" {
+	// if OLDTF.Spec.ExportRepo != nil && podType != tfv1alpha1.PodSetup {
+	// 	// Run the export-runner
+	// 	exportedStatus, err := r.exportRepo(ctx, OLDTF, runOpts, generation, reqLogger)
+	// 	if err != nil {
+	// 		return reconcile.Result{}, err
+	// 	}
+	// 	if OLDTF.Status.Exported != exportedStatus {
+	// 		OLDTF.Status.Exported = exportedStatus
+	// 		err := r.OLD_updateStatus(ctx, OLDTF)
+	// 		if err != nil {
+	// 			reqLogger.V(1).Info(err.Error())
+	// 			return reconcile.Result{}, err
+	// 		}
+	// 		return reconcile.Result{}, nil
+	// 	}
+	// }
+
+	if podType == tfv1alpha2.RunNil {
 		// podType is blank when the terraform workflow has completed for
 		// either create or delete.
 
-		if tf.Status.Phase == tfv1alpha1.PhaseRunning {
+		if tf.Status.Phase == tfv1alpha2.PhaseRunning {
 			// Updates the status as "completed" on the resource
-			tf.Status.Phase = tfv1alpha1.PhaseCompleted
+			tf.Status.Phase = tfv1alpha2.PhaseCompleted
 			if tf.Spec.WriteOutputsToStatus {
 				// runOpts.outputsSecetName
 				secret, err := r.loadSecret(ctx, runOpts.outputsSecretName, runOpts.namespace)
@@ -470,16 +551,16 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 					tf.Status.Outputs[key] = string(value)
 				}
 			}
-			err := r.updateStatus(ctx, tf)
+			err := r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 			if err != nil {
 				reqLogger.V(1).Info(err.Error())
 				return reconcile.Result{}, err
 			}
-		} else if tf.Status.Phase == tfv1alpha1.PhaseDeleting {
+		} else if tf.Status.Phase == tfv1alpha2.PhaseDeleting {
 			// Updates the status as "deleted" which will be used to tell the
 			// controller to remove any finalizers).
-			tf.Status.Phase = tfv1alpha1.PhaseDeleted
-			err := r.updateStatus(ctx, tf)
+			tf.Status.Phase = tfv1alpha2.PhaseDeleted
+			err := r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 			if err != nil {
 				reqLogger.V(1).Info(err.Error())
 				return reconcile.Result{}, err
@@ -505,18 +586,26 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		return reconcile.Result{}, nil
 	}
 
-	if len(pods.Items) == 0 && tf.Status.Stages[n-1].State == tfv1alpha1.StateInProgress {
+	if len(pods.Items) == 0 && tf.Status.Stage.State == tfv1alpha2.StateInProgress {
 		// This condition is generally met when the user deletes the pod.
 		// Force the state to transition away from in-progress and then
 		// requeue.
-		tf.Status.Stages[n-1].State = tfv1alpha1.StateInitializing
-		err = r.updateStatus(ctx, tf)
+		tf.Status.Stage.State = tfv1alpha2.StateInitializing
+		err = r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 		if err != nil {
 			reqLogger.V(1).Info(err.Error())
 			return reconcile.Result{Requeue: true}, nil
 		}
 		return reconcile.Result{}, nil
 	}
+
+	// if 1 > 0 {
+	// 	// fmt.Println(utils.PrettyStruct(runOpts))
+	// 	fmt.Printf("%+v\n", runOpts)
+	// 	reqLogger.Info("Not doing anything until further notice.")
+	// 	return reconcile.Result{}, nil
+	// }
+	// OLDTF := &tfv1alpha1.Terraform{}
 
 	if len(pods.Items) == 0 {
 		// Trigger a new pod when no pods are found for current stage
@@ -526,17 +615,17 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			reqLogger.Error(err, "")
 			return reconcile.Result{}, err
 		}
-		if tf.Status.Phase == tfv1alpha1.PhaseInitializing {
-			tf.Status.Phase = tfv1alpha1.PhaseRunning
-		} else if tf.Status.Phase == tfv1alpha1.PhaseInitDelete {
-			tf.Status.Phase = tfv1alpha1.PhaseDeleting
+		if tf.Status.Phase == tfv1alpha2.PhaseInitializing {
+			tf.Status.Phase = tfv1alpha2.PhaseRunning
+		} else if tf.Status.Phase == tfv1alpha2.PhaseInitDelete {
+			tf.Status.Phase = tfv1alpha2.PhaseDeleting
 		}
-		tf.Status.Stages[n-1].State = tfv1alpha1.StateInProgress
+		tf.Status.Stage.State = tfv1alpha2.StateInProgress
 
 		// TODO Becuase the pod is already running, is it critical that the
 		// phase and state be updated. The updateStatus function needs to retry
 		// if it fails to update.
-		err = r.updateStatus(ctx, tf)
+		err = r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 		if err != nil {
 			reqLogger.V(1).Info(err.Error())
 			return reconcile.Result{Requeue: true}, nil
@@ -564,9 +653,9 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	reqLogger.V(1).Info(msg)
 
 	if pods.Items[0].Status.Phase == corev1.PodFailed {
-		tf.Status.Stages[n-1].State = tfv1alpha1.StateFailed
-		tf.Status.Stages[n-1].StopTime = metav1.NewTime(time.Now())
-		err = r.updateStatus(ctx, tf)
+		tf.Status.Stage.State = tfv1alpha2.StateFailed
+		tf.Status.Stage.StopTime = metav1.NewTime(time.Now())
+		err = r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 		if err != nil {
 			reqLogger.V(1).Info(err.Error())
 			return reconcile.Result{}, err
@@ -575,9 +664,9 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	}
 
 	if pods.Items[0].Status.Phase == corev1.PodSucceeded {
-		tf.Status.Stages[n-1].State = tfv1alpha1.StateComplete
-		tf.Status.Stages[n-1].StopTime = metav1.NewTime(time.Now())
-		err = r.updateStatus(ctx, tf)
+		tf.Status.Stage.State = tfv1alpha2.StateComplete
+		tf.Status.Stage.StopTime = metav1.NewTime(time.Now())
+		err = r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 		if err != nil {
 			reqLogger.V(1).Info(err.Error())
 			return reconcile.Result{}, err
@@ -597,8 +686,8 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 }
 
 // getTerraformResource fetches the terraform resource with a retry
-func (r ReconcileTerraform) getTerraformResource(ctx context.Context, namespacedName types.NamespacedName, maxRetry int, reqLogger logr.Logger) (*tfv1alpha1.Terraform, error) {
-	tf := &tfv1alpha1.Terraform{}
+func (r ReconcileTerraform) getTerraformResource(ctx context.Context, namespacedName types.NamespacedName, maxRetry int, reqLogger logr.Logger) (*tfv1alpha2.Terraform, error) {
+	tf := &tfv1alpha2.Terraform{}
 	for retryCount := 1; retryCount <= maxRetry; retryCount++ {
 		err := r.Client.Get(ctx, namespacedName, tf)
 		if err != nil {
@@ -616,25 +705,52 @@ func (r ReconcileTerraform) getTerraformResource(ctx context.Context, namespaced
 	return tf, nil
 }
 
-func addNewStage(tf *tfv1alpha1.Terraform, podType tfv1alpha1.PodType, reason string, interruptible tfv1alpha1.Interruptible, stageState tfv1alpha1.StageState) {
+func newStage(tf *tfv1alpha2.Terraform, runType tfv1alpha2.TaskType, reason string, interruptible tfv1alpha2.Interruptible, stageState tfv1alpha2.StageState) *tfv1alpha2.Stage {
 	if reason == "GENERATION_CHANGE" {
-		tf.Status.Exported = tfv1alpha1.ExportedFalse
-		tf.Status.Phase = tfv1alpha1.PhaseInitializing
+		tf.Status.Exported = tfv1alpha2.ExportedFalse
+		tf.Status.Phase = tfv1alpha2.PhaseInitializing
 	}
 	startTime := metav1.NewTime(time.Now())
 	stopTime := metav1.NewTime(time.Unix(0, 0))
-	if stageState == tfv1alpha1.StateComplete {
+	if stageState == tfv1alpha2.StateComplete {
 		stopTime = startTime
 	}
-	tf.Status.Stages = append(tf.Status.Stages, tfv1alpha1.Stage{
+	return &tfv1alpha2.Stage{
 		Generation:    tf.Generation,
 		Interruptible: interruptible,
 		Reason:        reason,
 		State:         stageState,
-		PodType:       podType,
+		PodType:       runType,
 		StartTime:     startTime,
 		StopTime:      stopTime,
-	})
+	}
+}
+
+func getConfiguredTasks(taskOptions *[]tfv1alpha2.TaskOption) []tfv1alpha2.TaskType {
+	tasks := []tfv1alpha2.TaskType{
+		tfv1alpha2.RunSetup,
+		tfv1alpha2.RunInit,
+		tfv1alpha2.RunPlan,
+		tfv1alpha2.RunApply,
+		tfv1alpha2.RunSetupDelete,
+		tfv1alpha2.RunInitDelete,
+		tfv1alpha2.RunPlanDelete,
+		tfv1alpha2.RunApplyDelete,
+	}
+	if taskOptions == nil {
+		return tasks
+	}
+	for _, taskOption := range *taskOptions {
+		for _, runType := range taskOption.TaskTypes {
+			if runType == "*" {
+				continue
+			}
+			if !tfv1alpha2.ListContainsRunType(tasks, runType) {
+				tasks = append(tasks, runType)
+			}
+		}
+	}
+	return tasks
 }
 
 // checkSetNewStage uses the tf resource's `.status.stage` state to find the next stage of the terraform run. The following set of rules are used:
@@ -651,30 +767,27 @@ func addNewStage(tf *tfv1alpha1.Terraform, podType tfv1alpha1.PodType, reason st
 //
 // TODO Should stages be cleaned? If not, the `.status.stages` list can become very long.
 //
-func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
+func checkSetNewStage(tf *tfv1alpha2.Terraform) *tfv1alpha2.Stage {
 	var isNewStage bool
-	var podType tfv1alpha1.PodType
+	var podType tfv1alpha2.TaskType
 	var reason string
+	configuredTasks := getConfiguredTasks(&tf.Spec.TaskOptions)
 
 	deletePhases := []string{
-		string(tfv1alpha1.PhaseDeleted),
-		string(tfv1alpha1.PhaseInitDelete),
-		string(tfv1alpha1.PhaseDeleted),
+		string(tfv1alpha2.PhaseDeleted),
+		string(tfv1alpha2.PhaseInitDelete),
+		string(tfv1alpha2.PhaseDeleted),
 	}
 	tfIsFinalizing := utils.ListContainsStr(deletePhases, string(tf.Status.Phase))
 	tfIsNotFinalizing := !tfIsFinalizing
-	initDelete := tf.Status.Phase == tfv1alpha1.PhaseInitDelete
-	stageState := tfv1alpha1.StateInitializing
-	interruptible := tfv1alpha1.CanBeInterrupt
-	// n is the last stage which should be the current stage
-	n := len(tf.Status.Stages)
-	// if n == 0 {
-	// 	// There should always be at least 1 stage, this shouldn't happen
-	// }
-	currentStage := tf.Status.Stages[n-1]
+	initDelete := tf.Status.Phase == tfv1alpha2.PhaseInitDelete
+	stageState := tfv1alpha2.StateInitializing
+	interruptible := tfv1alpha2.CanBeInterrupt
+
+	currentStage := tf.Status.Stage
 	currentStagePodType := currentStage.PodType
-	currentStageCanNotBeInterrupted := currentStage.Interruptible == tfv1alpha1.CanNotBeInterrupt
-	currentStageIsRunning := currentStage.State == tfv1alpha1.StateInProgress
+	currentStageCanNotBeInterrupted := currentStage.Interruptible == tfv1alpha2.CanNotBeInterrupt
+	currentStageIsRunning := currentStage.State == tfv1alpha2.StateInProgress
 	isNewGeneration := currentStage.Generation != tf.Generation
 
 	// resource status
@@ -687,7 +800,7 @@ func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
 		// normal terraform workflow
 		isNewStage = true
 		reason = "GENERATION_CHANGE"
-		podType = tfv1alpha1.PodSetup
+		podType = tfv1alpha2.RunSetup
 
 		// } else if initDelete && !utils.ListContainsStr(deletePodTypes, string(currentStagePodType)) {
 	} else if initDelete && isNewGeneration {
@@ -695,131 +808,106 @@ func checkSetNewStage(tf *tfv1alpha1.Terraform) bool {
 		// in the terraform destroy workflow.
 		isNewStage = true
 		reason = "TF_RESOURCE_DELETED"
-		podType = tfv1alpha1.PodSetupDelete
-		interruptible = tfv1alpha1.CanNotBeInterrupt
+		podType = tfv1alpha2.RunSetupDelete
+		interruptible = tfv1alpha2.CanNotBeInterrupt
 
-	} else if currentStage.State == tfv1alpha1.StateComplete {
+	} else if currentStage.State == tfv1alpha2.StateComplete {
 		isNewStage = true
-		reason = ""
+		reason = fmt.Sprintf("COMPLETED_%s", strings.ToUpper(currentStage.PodType.String()))
 
 		switch currentStagePodType {
-		//
-		// setup
-		//
-		case tfv1alpha1.PodSetup:
-			podType = tfv1alpha1.PodInit
 
-		//
-		// init types
-		//
-		case tfv1alpha1.PodInit:
-			if tf.Spec.PostInitScript != "" {
-				podType = tfv1alpha1.PodPostInit
-			} else {
-				podType = tfv1alpha1.PodPlan
-				interruptible = tfv1alpha1.CanNotBeInterrupt
-			}
-
-		case tfv1alpha1.PodPostInit:
-			podType = tfv1alpha1.PodPlan
-			interruptible = tfv1alpha1.CanNotBeInterrupt
-
-		//
-		// plan types
-		//
-		case tfv1alpha1.PodPlan:
-			if tf.Spec.PostPlanScript != "" {
-				podType = tfv1alpha1.PodPostPlan
-			} else {
-				podType = tfv1alpha1.PodApply
-				interruptible = tfv1alpha1.CanNotBeInterrupt
-			}
-
-		case tfv1alpha1.PodPostPlan:
-			podType = tfv1alpha1.PodApply
-			interruptible = tfv1alpha1.CanNotBeInterrupt
-
-		//
-		// apply types
-		//
-		case tfv1alpha1.PodApply:
-			if tf.Spec.PostApplyScript != "" {
-				podType = tfv1alpha1.PodPostApply
-			} else {
-				reason = "COMPLETED_TERRAFORM"
-				podType = tfv1alpha1.PodNil
-				stageState = tfv1alpha1.StateComplete
-			}
-
-		case tfv1alpha1.PodPostApply:
-			reason = "COMPLETED_TERRAFORM"
-			podType = tfv1alpha1.PodNil
-			stageState = tfv1alpha1.StateComplete
-
-		//
-		// setup delete
-		//
-		case tfv1alpha1.PodSetupDelete:
-			podType = tfv1alpha1.PodInitDelete
-
-		//
-		// init (delete) types
-		case tfv1alpha1.PodInitDelete:
-			if tf.Spec.PostInitDeleteScript != "" {
-				podType = tfv1alpha1.PodPostInitDelete
-			} else {
-				podType = tfv1alpha1.PodPlanDelete
-				interruptible = tfv1alpha1.CanNotBeInterrupt
-			}
-
-		case tfv1alpha1.PodPostInitDelete:
-			podType = tfv1alpha1.PodPlanDelete
-			interruptible = tfv1alpha1.CanNotBeInterrupt
-
-		//
-		// plan (delete) types
-		//
-		case tfv1alpha1.PodPlanDelete:
-			if tf.Spec.PostPlanDeleteScript != "" {
-				podType = tfv1alpha1.PodPostPlanDelete
-			} else {
-				podType = tfv1alpha1.PodApplyDelete
-				interruptible = tfv1alpha1.CanNotBeInterrupt
-			}
-
-		case tfv1alpha1.PodPostPlanDelete:
-			podType = tfv1alpha1.PodApplyDelete
-			interruptible = tfv1alpha1.CanNotBeInterrupt
-
-		//
-		// apply (delete) types
-		//
-		case tfv1alpha1.PodApplyDelete:
-			if tf.Spec.PostApplyDeleteScript != "" {
-				podType = tfv1alpha1.PodPostApplyDelete
-			} else {
-				reason = "COMPLETED_TERRAFORM"
-				podType = tfv1alpha1.PodNil
-				stageState = tfv1alpha1.StateComplete
-			}
-
-		case tfv1alpha1.PodPostApplyDelete:
-			reason = "COMPLETED_TERRAFORM"
-			podType = tfv1alpha1.PodNil
-			stageState = tfv1alpha1.StateComplete
-
-		case tfv1alpha1.PodNil:
+		case tfv1alpha2.RunNil:
 			isNewStage = false
+
+		default:
+			podType = nextTask(currentStagePodType, configuredTasks)
+			interruptible = isTaskInterruptable(podType)
+			if podType == tfv1alpha2.RunNil {
+				stageState = tfv1alpha2.StateComplete
+			}
 		}
 
 	}
-	if isNewStage {
-		addNewStage(tf, podType, reason, interruptible, stageState)
+	if !isNewStage {
+		return nil
 	}
-	return isNewStage
+	return newStage(tf, podType, reason, interruptible, stageState)
+
 }
 
-func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1alpha1.Terraform, attempt int) {
+// These are pods that are known to cause issues with terraform state when
+// not run to completion.
+func isTaskInterruptable(task tfv1alpha2.TaskType) tfv1alpha2.Interruptible {
+	uninterruptibleTasks := []tfv1alpha2.TaskType{
+		tfv1alpha2.RunInit,
+		tfv1alpha2.RunPlan,
+		tfv1alpha2.RunApply,
+		tfv1alpha2.RunInitDelete,
+		tfv1alpha2.RunPlanDelete,
+		tfv1alpha2.RunApplyDelete,
+	}
+	if tfv1alpha2.ListContainsRunType(uninterruptibleTasks, task) {
+		return tfv1alpha2.CanNotBeInterrupt
+	}
+	return tfv1alpha2.CanBeInterrupt
+}
+
+func nextTask(currentTask tfv1alpha2.TaskType, configuredTasks []tfv1alpha2.TaskType) tfv1alpha2.TaskType {
+	tasksInOrder := []tfv1alpha2.TaskType{
+		tfv1alpha2.RunSetup,
+		tfv1alpha2.RunPreInit,
+		tfv1alpha2.RunInit,
+		tfv1alpha2.RunPostInit,
+		tfv1alpha2.RunPrePlan,
+		tfv1alpha2.RunPlan,
+		tfv1alpha2.RunPostPlan,
+		tfv1alpha2.RunPreApply,
+		tfv1alpha2.RunApply,
+		tfv1alpha2.RunPostApply,
+	}
+	deleteTasksInOrder := []tfv1alpha2.TaskType{
+		tfv1alpha2.RunSetupDelete,
+		tfv1alpha2.RunPreInitDelete,
+		tfv1alpha2.RunInitDelete,
+		tfv1alpha2.RunPostInitDelete,
+		tfv1alpha2.RunPrePlanDelete,
+		tfv1alpha2.RunPlanDelete,
+		tfv1alpha2.RunPostPlanDelete,
+		tfv1alpha2.RunPreApplyDelete,
+		tfv1alpha2.RunApplyDelete,
+		tfv1alpha2.RunPostApplyDelete,
+	}
+
+	next := tfv1alpha2.RunNil
+	isUpNext := false
+	if tfv1alpha2.ListContainsRunType(tasksInOrder, currentTask) {
+		for _, task := range tasksInOrder {
+			if task == currentTask {
+				isUpNext = true
+				continue
+			}
+			if isUpNext && tfv1alpha2.ListContainsRunType(configuredTasks, task) {
+				next = task
+				break
+			}
+		}
+	} else if tfv1alpha2.ListContainsRunType(deleteTasksInOrder, currentTask) {
+		for _, task := range deleteTasksInOrder {
+			if task == currentTask {
+				isUpNext = true
+				continue
+			}
+			if isUpNext && tfv1alpha2.ListContainsRunType(configuredTasks, task) {
+				next = task
+				break
+			}
+		}
+	}
+	return next
+}
+
+func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1alpha2.Terraform, attempt int) {
 	logger := r.Log.WithName("Reaper").WithValues("Terraform", fmt.Sprintf("%s/%s", tf.Namespace, tf.Name))
 	if attempt > 20 {
 		// TODO explain what and way resources cannot be reaped
@@ -928,10 +1016,10 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1alpha1.Terra
 // the finalizer is added.
 //
 // The finalizer will be responsible for starting the destroy-workflow.
-func updateFinalizer(tf *tfv1alpha1.Terraform) bool {
+func updateFinalizer(tf *tfv1alpha2.Terraform) bool {
 	finalizers := tf.GetFinalizers()
 
-	if tf.Status.Phase == tfv1alpha1.PhaseDeleted {
+	if tf.Status.Phase == tfv1alpha2.PhaseDeleted {
 		if utils.ListContainsStr(finalizers, terraformFinalizer) {
 			tf.SetFinalizers(utils.ListRemoveStr(finalizers, terraformFinalizer))
 			return true
@@ -954,7 +1042,7 @@ func updateFinalizer(tf *tfv1alpha1.Terraform) bool {
 	return false
 }
 
-func (r ReconcileTerraform) update(ctx context.Context, tf *tfv1alpha1.Terraform) error {
+func (r ReconcileTerraform) update(ctx context.Context, tf *tfv1alpha2.Terraform) error {
 	err := r.Client.Update(ctx, tf)
 	if err != nil {
 		return fmt.Errorf("failed to update tf resource: %s", err)
@@ -962,42 +1050,7 @@ func (r ReconcileTerraform) update(ctx context.Context, tf *tfv1alpha1.Terraform
 	return nil
 }
 
-func removeStageIndex(slice []tfv1alpha1.Stage, s int) []tfv1alpha1.Stage {
-	return append(slice[:s], slice[s+1:]...)
-}
-
-func (r ReconcileTerraform) updateStatus(ctx context.Context, tf *tfv1alpha1.Terraform) error {
-	// To attempt to keep the etcd resource size under the max allowed, clean up
-	// status.stages to the last N generations only.
-	// TODO
-	//		If anyone needs this feature to hold a greater history, N can be
-	//		exposed as a config. For now, it's hard-coded to 50 for simplicity
-	//		and is probably more than enough for any user.
-	if tf.Status.Stages != nil {
-		if len(tf.Status.Stages) > 0 {
-			totalGenerationsToKeep := int64(49)
-			lastGenerationInStatus := tf.Status.Stages[len(tf.Status.Stages)-1].Generation
-			stagesToPop := []int{}
-			for index, stage := range tf.Status.Stages {
-				if stage.Generation < lastGenerationInStatus-totalGenerationsToKeep {
-					stagesToPop = append(stagesToPop, index)
-				}
-			}
-			// Save time and check if stagesToPop is sequential starting from 0
-			if utils.IsSeq(stagesToPop, nil) {
-				// The length of stagesToPop will be removed from current status.stages
-				tf.Status.Stages = tf.Status.Stages[len(stagesToPop):]
-			} else {
-				for i, stageIndex := range stagesToPop {
-					// On each iteration, the slice is modified by one index so we
-					// subtract i from the index we pop from the slice.
-					// This is a very expensive operation but it should be used or at
-					// least its used seldom
-					tf.Status.Stages = removeStageIndex(tf.Status.Stages, stageIndex-i)
-				}
-			}
-		}
-	}
+func (r ReconcileTerraform) updateStatus(ctx context.Context, tf *tfv1alpha2.Terraform) error {
 	err := r.Client.Status().Update(ctx, tf)
 	if err != nil {
 		return fmt.Errorf("failed to update tf status: %s", err)
@@ -1005,10 +1058,32 @@ func (r ReconcileTerraform) updateStatus(ctx context.Context, tf *tfv1alpha1.Ter
 	return nil
 }
 
-func (r ReconcileTerraform) PodStatus(ctx context.Context, tf tfv1alpha1.Terraform, stage tfv1alpha1.Stage) (tfv1alpha1.StageState, error) {
-
-	return tfv1alpha1.StateInProgress, nil
-
+func (r ReconcileTerraform) updateStatusWithRetry(ctx context.Context, tf *tfv1alpha2.Terraform, desiredStatus *tfv1alpha2.TerraformStatus, logger logr.Logger) error {
+	var getResourceErr error
+	var updateErr error
+	for i := 0; i < 10; i++ {
+		if i > 0 {
+			n := math.Pow(2, float64(i+3))
+			backoffTime := math.Ceil(.5 * (n - 1))
+			time.Sleep(time.Duration(backoffTime) * time.Millisecond)
+			tf, getResourceErr = r.getTerraformResource(ctx, types.NamespacedName{Namespace: tf.Namespace, Name: tf.Name}, 10, logger)
+			if getResourceErr != nil {
+				return fmt.Errorf("failed to get latest terraform: %s", getResourceErr)
+			}
+			if desiredStatus != nil {
+				tf.Status = *desiredStatus
+			}
+		}
+		updateErr = r.Client.Status().Update(ctx, tf)
+		if updateErr != nil {
+			continue
+		}
+		break
+	}
+	if updateErr != nil {
+		return fmt.Errorf("failed to update tf status: %s", updateErr)
+	}
+	return nil
 }
 
 // IsJobFinished returns true if the job has completed
@@ -1017,28 +1092,28 @@ func IsJobFinished(job *batchv1.Job) bool {
 	return job.Status.CompletionTime != nil || (job.Status.Active == 0 && BackoffLimit != nil && job.Status.Failed >= *BackoffLimit)
 }
 
-func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, instance *tfv1alpha1.Terraform, k8sclient client.Client) (map[string][]byte, error) {
+func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, tf *tfv1alpha2.Terraform, k8sclient client.Client) (map[string][]byte, error) {
 	data := make(map[string]string)
 	dataAsByte := make(map[string][]byte)
-	if instance.Spec.SSHTunnel != nil {
+	if tf.Spec.SSHTunnel != nil {
 		data["config"] = fmt.Sprintf("Host proxy\n"+
 			"\tStrictHostKeyChecking no\n"+
 			"\tUserKnownHostsFile=/dev/null\n"+
 			"\tUser %s\n"+
 			"\tHostname %s\n"+
 			"\tIdentityFile ~/.ssh/proxy_key\n",
-			instance.Spec.SSHTunnel.User,
-			instance.Spec.SSHTunnel.Host)
-		k := instance.Spec.SSHTunnel.SSHKeySecretRef.Key
+			tf.Spec.SSHTunnel.User,
+			tf.Spec.SSHTunnel.Host)
+		k := tf.Spec.SSHTunnel.SSHKeySecretRef.Key
 		if k == "" {
 			k = "id_rsa"
 		}
-		ns := instance.Spec.SSHTunnel.SSHKeySecretRef.Namespace
+		ns := tf.Spec.SSHTunnel.SSHKeySecretRef.Namespace
 		if ns == "" {
-			ns = instance.Namespace
+			ns = tf.Namespace
 		}
 
-		key, err := loadPassword(ctx, k8sclient, k, instance.Spec.SSHTunnel.SSHKeySecretRef.Name, ns)
+		key, err := loadPassword(ctx, k8sclient, k, tf.Spec.SSHTunnel.SSHKeySecretRef.Name, ns)
 		if err != nil {
 			return dataAsByte, err
 		}
@@ -1046,7 +1121,7 @@ func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, instance *tf
 
 	}
 
-	for _, m := range instance.Spec.SCMAuthMethods {
+	for _, m := range tf.Spec.SCMAuthMethods {
 
 		// TODO validate SSH in resource manifest
 		if m.Git.SSH != nil {
@@ -1076,7 +1151,7 @@ func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, instance *tf
 			}
 			ns := m.Git.SSH.SSHKeySecretRef.Namespace
 			if ns == "" {
-				ns = instance.Namespace
+				ns = tf.Namespace
 			}
 			key, err := loadPassword(ctx, k8sclient, k, m.Git.SSH.SSHKeySecretRef.Name, ns)
 			if err != nil {
@@ -1093,13 +1168,12 @@ func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, instance *tf
 	return dataAsByte, nil
 }
 
-func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
+func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts RunOptions) error {
 	reqLogger := r.Log.WithValues("Terraform", types.NamespacedName{Name: tf.Name, Namespace: tf.Namespace}.String())
 	var err error
-	n := len(tf.Status.Stages)
-	podType := tf.Status.Stages[n-1].PodType
-	generation := tf.Status.Stages[n-1].Generation
-	reason := tf.Status.Stages[n-1].Reason
+
+	generation := runOpts.generation
+	reason := tf.Status.Stage.Reason
 	isNewGeneration := reason == "GENERATION_CHANGE" || reason == "TF_RESOURCE_DELETED"
 	isFirstInstall := reason == "TF_RESOURCE_CREATED"
 	isChanged := isNewGeneration || isFirstInstall
@@ -1115,29 +1189,56 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Ter
 		}
 	}
 
-	if tf.Spec.TerraformModuleInline != "" {
+	/*
+
+
+		Load the terraform module from one of source, inline, or configmap
+
+
+		To test new version, just load the source version.
+
+	*/
+
+	if tf.Spec.TerraformModule.Inline != "" {
 		// Add add inline to configmap and instruct the pod to fetch the
 		// configmap as the main module
-		runOpts.mainModuleAddonData["inline-module.tf"] = tf.Spec.TerraformModuleInline
+		runOpts.mainModuleAddonData["inline-module.tf"] = tf.Spec.TerraformModule.Inline
 	}
 
-	if tf.Spec.TerraformModuleConfigMap != nil {
+	if tf.Spec.TerraformModule.ConfigMapSelector != nil {
 		// Instruct the setup pod to fetch the configmap as the main module
-		b, err := json.Marshal(tf.Spec.TerraformModuleConfigMap)
+		b, err := json.Marshal(tf.Spec.TerraformModule.ConfigMapSelector)
 		if err != nil {
 			return err
 		}
 		runOpts.mainModuleAddonData[".__TFO__ConfigMapModule.json"] = string(b)
 	}
 
-	if tf.Spec.TerraformModule != "" {
-		runOpts.terraformModuleParsed, err = getParsedAddress(tf.Spec.TerraformModule, "", false, scmMap)
+	if tf.Spec.TerraformModule.Source != "" {
+		runOpts.terraformModuleParsed, err = getParsedAddress(tf.Spec.TerraformModule.Source, "", false, scmMap)
 		if err != nil {
 			return err
 		}
+	} else {
+
+		// TODO REMOVE ME
+		return fmt.Errorf("for testing, only allow the terraform module from source")
+
 	}
 
 	if isChanged {
+
+		for _, taskOption := range tf.Spec.TaskOptions {
+			if inlineScript := taskOption.Script.Inline; inlineScript != "" {
+				for _, taskType := range taskOption.TaskTypes {
+					if taskType.String() == "*" {
+						continue
+					}
+					runOpts.mainModuleAddonData[fmt.Sprintf("inline-%s.sh", taskType)] = inlineScript
+				}
+			}
+		}
+
 		// Set up the HTTPS token to use if defined
 		for _, m := range tf.Spec.SCMAuthMethods {
 			// This loop is used to find the first HTTPS token-based
@@ -1178,18 +1279,19 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Ter
 		// use to download the resources into the main module directory
 
 		// ConfigMap Data only needs to be updated when generation changes
-
-		for _, s := range tf.Spec.ResourceDownloads {
-			address := strings.TrimSpace(s.Address)
-			parsedAddress, err := getParsedAddress(address, s.Path, s.UseAsVar, scmMap)
-			if err != nil {
-				return err
+		if tf.Spec.Setup != nil {
+			for _, s := range tf.Spec.Setup.ResourceDownloads {
+				address := strings.TrimSpace(s.Address)
+				parsedAddress, err := getParsedAddress(address, s.Path, s.UseAsVar, scmMap)
+				if err != nil {
+					return err
+				}
+				// b, err := json.Marshal(parsedAddress)
+				// if err != nil {
+				// 	return err
+				// }
+				resourceDownloadItems = append(resourceDownloadItems, parsedAddress)
 			}
-			// b, err := json.Marshal(parsedAddress)
-			// if err != nil {
-			// 	return err
-			// }
-			resourceDownloadItems = append(resourceDownloadItems, parsedAddress)
 		}
 		b, err := json.Marshal(resourceDownloadItems)
 		if err != nil {
@@ -1200,69 +1302,77 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha1.Ter
 		runOpts.mainModuleAddonData[".__TFO__ResourceDownloads.json"] = resourceDownloads
 
 		// Override the backend.tf by inserting a custom backend
-		if tf.Spec.CustomBackend != "" {
-			runOpts.mainModuleAddonData["backend_override.tf"] = tf.Spec.CustomBackend
-		}
+		runOpts.mainModuleAddonData["backend_override.tf"] = tf.Spec.Backend
 
-		if tf.Spec.PreInitScript != "" {
-			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreInit)] = tf.Spec.PreInitScript
-		}
+		/*
 
-		if tf.Spec.PostInitScript != "" {
-			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostInit)] = tf.Spec.PostInitScript
-		}
 
-		if tf.Spec.PrePlanScript != "" {
-			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPrePlan)] = tf.Spec.PrePlanScript
-		}
+			All the tasks will perform external fetching of the scripts to
+			execute. The downloader has yet to be determined... working on it
 
-		if tf.Spec.PostPlanScript != "" {
-			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostPlan)] = tf.Spec.PostPlanScript
-		}
+			:)
 
-		if tf.Spec.PreApplyScript != "" {
-			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreApply)] = tf.Spec.PreApplyScript
-		}
 
-		if tf.Spec.PostApplyScript != "" {
-			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostApply)] = tf.Spec.PostApplyScript
-		}
+		*/
+		// if tf.Spec.PreInitScript != "" {
+		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreInit)] = tf.Spec.PreInitScript
+		// }
 
-		if tf.Spec.PreInitDeleteScript != "" {
-			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreInitDelete)] = tf.Spec.PreInitDeleteScript
-		}
+		// if tf.Spec.PostInitScript != "" {
+		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostInit)] = tf.Spec.PostInitScript
+		// }
 
-		if tf.Spec.PostInitDeleteScript != "" {
-			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostInitDelete)] = tf.Spec.PostInitDeleteScript
-		}
+		// if tf.Spec.PrePlanScript != "" {
+		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPrePlan)] = tf.Spec.PrePlanScript
+		// }
 
-		if tf.Spec.PrePlanDeleteScript != "" {
-			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPrePlanDelete)] = tf.Spec.PrePlanDeleteScript
-		}
+		// if tf.Spec.PostPlanScript != "" {
+		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostPlan)] = tf.Spec.PostPlanScript
+		// }
 
-		if tf.Spec.PostPlanDeleteScript != "" {
-			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostPlanDelete)] = tf.Spec.PostPlanDeleteScript
-		}
+		// if tf.Spec.PreApplyScript != "" {
+		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreApply)] = tf.Spec.PreApplyScript
+		// }
 
-		if tf.Spec.PreApplyDeleteScript != "" {
-			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreApplyDelete)] = tf.Spec.PostApplyScript
-		}
+		// if tf.Spec.PostApplyScript != "" {
+		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostApply)] = tf.Spec.PostApplyScript
+		// }
 
-		if tf.Spec.PostApplyDeleteScript != "" {
-			runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostApplyDelete)] = tf.Spec.PostApplyDeleteScript
-		}
+		// if tf.Spec.PreInitDeleteScript != "" {
+		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreInitDelete)] = tf.Spec.PreInitDeleteScript
+		// }
+
+		// if tf.Spec.PostInitDeleteScript != "" {
+		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostInitDelete)] = tf.Spec.PostInitDeleteScript
+		// }
+
+		// if tf.Spec.PrePlanDeleteScript != "" {
+		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPrePlanDelete)] = tf.Spec.PrePlanDeleteScript
+		// }
+
+		// if tf.Spec.PostPlanDeleteScript != "" {
+		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostPlanDelete)] = tf.Spec.PostPlanDeleteScript
+		// }
+
+		// if tf.Spec.PreApplyDeleteScript != "" {
+		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreApplyDelete)] = tf.Spec.PostApplyScript
+		// }
+
+		// if tf.Spec.PostApplyDeleteScript != "" {
+		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostApplyDelete)] = tf.Spec.PostApplyDeleteScript
+		// }
 	}
 
 	runOpts.resourceLabels["terraforms.tf.isaaguilar.com/generation"] = fmt.Sprintf("%d", generation)
-	runOpts.resourceLabels["terraforms.tf.isaaguilar.com/resourceName"] = runOpts.tfName
-	runOpts.resourceLabels["terraforms.tf.isaaguilar.com/podPrefix"] = runOpts.name
+	runOpts.resourceLabels["terraforms.tf.isaaguilar.com/resourceName"] = runOpts.resourceName
+	runOpts.resourceLabels["terraforms.tf.isaaguilar.com/podPrefix"] = runOpts.prefixedName
 	runOpts.resourceLabels["terraforms.tf.isaaguilar.com/terraformVersion"] = runOpts.terraformVersion
 	runOpts.resourceLabels["app.kubernetes.io/name"] = "terraform-operator"
 	runOpts.resourceLabels["app.kubernetes.io/component"] = "terraform-operator-runner"
 	runOpts.resourceLabels["app.kubernetes.io/created-by"] = "controller"
 
 	// RUN
-	err = r.run(ctx, reqLogger, tf, runOpts, isNewGeneration, isFirstInstall, podType, generation)
+	err = r.run(ctx, reqLogger, tf, runOpts, isNewGeneration, isFirstInstall)
 	if err != nil {
 		return err
 	}
@@ -1282,10 +1392,10 @@ func (r ReconcileTerraform) checkPersistentVolumeClaimExists(ctx context.Context
 	return resource, true, nil
 }
 
-func (r ReconcileTerraform) createPVC(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
+func (r ReconcileTerraform) createPVC(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts RunOptions) error {
 	kind := "PersistentVolumeClaim"
 	_, found, err := r.checkPersistentVolumeClaimExists(ctx, types.NamespacedName{
-		Name:      runOpts.name,
+		Name:      runOpts.prefixedName,
 		Namespace: runOpts.namespace,
 	})
 	if err != nil {
@@ -1339,7 +1449,7 @@ func (r ReconcileTerraform) deleteConfigMapIfExists(ctx context.Context, name, n
 	return nil
 }
 
-func (r ReconcileTerraform) createConfigMap(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
+func (r ReconcileTerraform) createConfigMap(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts RunOptions) error {
 	kind := "ConfigMap"
 
 	resource := runOpts.generateConfigMap()
@@ -1388,7 +1498,7 @@ func (r ReconcileTerraform) deleteSecretIfExists(ctx context.Context, name, name
 	return nil
 }
 
-func (r ReconcileTerraform) createSecret(ctx context.Context, tf *tfv1alpha1.Terraform, name, namespace string, data map[string][]byte, recreate bool, labelsToOmit []string, runOpts RunOptions) error {
+func (r ReconcileTerraform) createSecret(ctx context.Context, tf *tfv1alpha2.Terraform, name, namespace string, data map[string][]byte, recreate bool, labelsToOmit []string, runOpts RunOptions) error {
 	kind := "Secret"
 
 	// Must make a clean map of labels since the memory address is shared
@@ -1456,7 +1566,7 @@ func (r ReconcileTerraform) deleteServiceAccountIfExists(ctx context.Context, na
 	return nil
 }
 
-func (r ReconcileTerraform) createServiceAccount(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
+func (r ReconcileTerraform) createServiceAccount(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts RunOptions) error {
 	kind := "ServiceAccount"
 
 	resource := runOpts.generateServiceAccount()
@@ -1504,7 +1614,7 @@ func (r ReconcileTerraform) deleteRoleIfExists(ctx context.Context, name, namesp
 	return nil
 }
 
-func (r ReconcileTerraform) createRole(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
+func (r ReconcileTerraform) createRole(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts RunOptions) error {
 	kind := "Role"
 
 	resource := runOpts.generateRole()
@@ -1552,7 +1662,7 @@ func (r ReconcileTerraform) deleteRoleBindingIfExists(ctx context.Context, name,
 	return nil
 }
 
-func (r ReconcileTerraform) createRoleBinding(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions) error {
+func (r ReconcileTerraform) createRoleBinding(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts RunOptions) error {
 	kind := "RoleBinding"
 
 	resource := runOpts.generateRoleBinding()
@@ -1571,36 +1681,10 @@ func (r ReconcileTerraform) createRoleBinding(ctx context.Context, tf *tfv1alpha
 	return nil
 }
 
-func (r ReconcileTerraform) createPod(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions, podType tfv1alpha1.PodType, generation int64) error {
+func (r ReconcileTerraform) createPod(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts RunOptions) error {
 	kind := "Pod"
 
-	tfRunnerPodTypes := []string{
-		string(tfv1alpha1.PodInit),
-		string(tfv1alpha1.PodInitDelete),
-		string(tfv1alpha1.PodPlan),
-		string(tfv1alpha1.PodPlanDelete),
-		string(tfv1alpha1.PodApply),
-		string(tfv1alpha1.PodApplyDelete),
-	}
-
-	isTFRunner := utils.ListContainsStr(tfRunnerPodTypes, string(podType))
-
-	var preScriptPodType tfv1alpha1.PodType
-	if podType == tfv1alpha1.PodInit && tf.Spec.PreInitScript != "" {
-		preScriptPodType = tfv1alpha1.PodPreInit
-	} else if podType == tfv1alpha1.PodInitDelete && tf.Spec.PreInitDeleteScript != "" {
-		preScriptPodType = tfv1alpha1.PodPreInitDelete
-	} else if podType == tfv1alpha1.PodPlan && tf.Spec.PrePlanScript != "" {
-		preScriptPodType = tfv1alpha1.PodPrePlan
-	} else if podType == tfv1alpha1.PodPlanDelete && tf.Spec.PrePlanDeleteScript != "" {
-		preScriptPodType = tfv1alpha1.PodPrePlanDelete
-	} else if podType == tfv1alpha1.PodApply && tf.Spec.PreApplyScript != "" {
-		preScriptPodType = tfv1alpha1.PodPreApply
-	} else if podType == tfv1alpha1.PodApplyDelete && tf.Spec.PreApplyDeleteScript != "" {
-		preScriptPodType = tfv1alpha1.PodPreApplyDelete
-	}
-
-	resource := runOpts.generatePod(podType, preScriptPodType, isTFRunner, generation)
+	resource := runOpts.generatePod()
 	controllerutil.SetControllerReference(tf, resource, r.Scheme)
 
 	err := r.Client.Create(ctx, resource)
@@ -1692,7 +1776,7 @@ func (r RunOptions) generateRole() *rbacv1.Role {
 		}
 	}
 
-	rules = append(rules, r.runnerRules...)
+	rules = append(rules, r.policyRules...)
 
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1731,7 +1815,7 @@ func (r RunOptions) generateRoleBinding() *rbacv1.RoleBinding {
 func (r RunOptions) generatePVC(size resource.Quantity) *corev1.PersistentVolumeClaim {
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.name,
+			Name:      r.prefixedName,
 			Namespace: r.namespace,
 			Labels:    r.resourceLabels,
 		},
@@ -1748,21 +1832,46 @@ func (r RunOptions) generatePVC(size resource.Quantity) *corev1.PersistentVolume
 	}
 }
 
-func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, isTFRunner bool, generation int64) *corev1.Pod {
+// generatePod puts together all the contents required to execute the taskType.
+// Although most of the tasks use similar.... (TODO EDIT ME)
+func (r RunOptions) generatePod() *corev1.Pod {
 
-	generateName := r.versionedName + "-" + string(podType) + "-"
+	home := "/home/tfo-runner"
+	generateName := r.versionedName + "-" + r.runType.String() + "-"
+	generationPath := fmt.Sprintf("%s/generations/%d", home, r.generation)
 
-	generationPath := "/home/tfo-runner/generations/" + fmt.Sprint(generation)
-
-	envs := r.envVars
+	runnerLabels := r.labels
+	annotations := r.annotations
+	envFrom := r.envFrom
+	envs := r.env
 	envs = append(envs, []corev1.EnvVar{
 		{
-			Name:  "TFO_RUNNER",
-			Value: r.versionedName,
+			/*
+
+				What is the significance of having an env about the TFO_RUNNER?
+
+				Only used to idenify the taskType for the log.out file. This
+				should simply be the taskType name.
+
+			*/
+			Name:  "TFO_TASK",
+			Value: r.runType.String(),
+		},
+		{
+			Name:  "TFO_TASK_EXEC_URL_SOURCE",
+			Value: r.urlSource,
+		},
+		{
+			Name:  "TFO_TASK_EXEC_CONFIGMAP_SOURCE_NAME",
+			Value: r.configMapSourceName,
+		},
+		{
+			Name:  "TFO_TASK_EXEC_CONFIGMAP_SOURCE_KEY",
+			Value: r.configMapSourceKey,
 		},
 		{
 			Name:  "TFO_RESOURCE",
-			Value: r.tfName,
+			Value: r.resourceName,
 		},
 		{
 			Name:  "TFO_NAMESPACE",
@@ -1770,7 +1879,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		},
 		{
 			Name:  "TFO_GENERATION",
-			Value: fmt.Sprintf("%d", generation),
+			Value: fmt.Sprintf("%d", r.generation),
 		},
 		{
 			Name:  "TFO_GENERATION_PATH",
@@ -1802,6 +1911,13 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		},
 	}...)
 
+	if r.cleanupDisk {
+		envs = append(envs, corev1.EnvVar{
+			Name:  "TFO_CLEANUP_DISK",
+			Value: "true",
+		})
+	}
+
 	volumes := []corev1.Volume{
 		{
 			Name: "tfohome",
@@ -1811,7 +1927,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 				// 		for the plan.
 				//
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: r.name,
+					ClaimName: r.prefixedName,
 					ReadOnly:  false,
 				},
 				//
@@ -1830,13 +1946,13 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 	volumeMounts := []corev1.VolumeMount{
 		{
 			Name:      "tfohome",
-			MountPath: "/home/tfo-runner",
+			MountPath: home,
 			ReadOnly:  false,
 		},
 	}
 	envs = append(envs, corev1.EnvVar{
 		Name:  "TFO_ROOT_PATH",
-		Value: "/home/tfo-runner",
+		Value: home,
 	})
 
 	if r.terraformModuleParsed.Repo != "" {
@@ -1875,6 +1991,31 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 			}...)
 		}
 	}
+
+	configMapSourceVolumeName := "config-map-source"
+	configMapSourcePath := "/tmp/config-map-source"
+	if r.configMapSourceName != "" && r.configMapSourceKey != "" {
+		volumes = append(volumes, corev1.Volume{
+			Name: configMapSourceVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: r.configMapSourceName,
+					},
+				},
+			},
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      configMapSourceVolumeName,
+			MountPath: configMapSourcePath,
+		})
+	}
+	envs = append(envs, []corev1.EnvVar{
+		{
+			Name:  "TFO_TASK_EXEC_CONFIGMAP_SOURCE_PATH",
+			Value: configMapSourcePath,
+		},
+	}...)
 
 	mainModuleAddonsConfigMapName := "main-module-addons"
 	mainModuleAddonsConfigMapPath := "/tmp/main-module-addons"
@@ -1975,122 +2116,6 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		},
 	}...)
 
-	// Envs from this point may differ between runners
-	terraformRunnerEnvs := make([]corev1.EnvVar, len(envs))
-	scriptRunnerEnvs := make([]corev1.EnvVar, len(envs))
-	setupRunnerEnvs := make([]corev1.EnvVar, len(envs))
-	exportRunnerEnvs := make([]corev1.EnvVar, len(envs))
-	copy(terraformRunnerEnvs, envs)
-	copy(scriptRunnerEnvs, envs)
-	copy(setupRunnerEnvs, envs)
-	copy(exportRunnerEnvs, envs)
-
-	executionScript := "tfo_runner.sh"
-	if r.terraformRunnerExecutionScriptConfigMap != nil {
-		executionScriptVolumeName := "terraform-runner-execution-script"
-		tfo_runner_script := "/terraform-runner/" + executionScript
-		volumes = append(volumes, []corev1.Volume{
-			{
-				Name: executionScriptVolumeName,
-				VolumeSource: corev1.VolumeSource{
-					ConfigMap: &corev1.ConfigMapVolumeSource{
-						LocalObjectReference: r.terraformRunnerExecutionScriptConfigMap.LocalObjectReference,
-						DefaultMode:          &xmode,
-						Optional:             r.terraformRunnerExecutionScriptConfigMap.Optional,
-						Items: []corev1.KeyToPath{
-							{
-								Key:  r.terraformRunnerExecutionScriptConfigMap.Key,
-								Path: executionScript,
-							},
-						},
-					},
-				},
-			},
-		}...)
-		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
-			{
-				Name:      executionScriptVolumeName,
-				MountPath: tfo_runner_script,
-				SubPath:   executionScript,
-			},
-		}...)
-		terraformRunnerEnvs = append(terraformRunnerEnvs, corev1.EnvVar{
-			Name:  "TFO_RUNNER_SCRIPT",
-			Value: tfo_runner_script,
-		})
-	}
-
-	if r.scriptRunnerExecutionScriptConfigMap != nil {
-		executionScriptVolumeName := "script-runner-execution-script"
-		tfo_runner_script := "/script-runner/" + executionScript
-		volumes = append(volumes, []corev1.Volume{
-			{
-				Name: executionScriptVolumeName,
-				VolumeSource: corev1.VolumeSource{
-					ConfigMap: &corev1.ConfigMapVolumeSource{
-						LocalObjectReference: r.scriptRunnerExecutionScriptConfigMap.LocalObjectReference,
-						DefaultMode:          &xmode,
-						Optional:             r.scriptRunnerExecutionScriptConfigMap.Optional,
-						Items: []corev1.KeyToPath{
-							{
-								Key:  r.scriptRunnerExecutionScriptConfigMap.Key,
-								Path: executionScript,
-							},
-						},
-					},
-				},
-			},
-		}...)
-		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
-			{
-				Name:      executionScriptVolumeName,
-				MountPath: tfo_runner_script,
-				SubPath:   executionScript,
-			},
-		}...)
-		scriptRunnerEnvs = append(scriptRunnerEnvs, corev1.EnvVar{
-			Name:  "TFO_RUNNER_SCRIPT",
-			Value: tfo_runner_script,
-		})
-	}
-
-	if r.setupRunnerExecutionScriptConfigMap != nil {
-		executionScriptVolumeName := "setup-runner-execution-script"
-		tfo_runner_script := "/setup-runner/" + executionScript
-		volumes = append(volumes, []corev1.Volume{
-			{
-				Name: executionScriptVolumeName,
-				VolumeSource: corev1.VolumeSource{
-					ConfigMap: &corev1.ConfigMapVolumeSource{
-						LocalObjectReference: r.setupRunnerExecutionScriptConfigMap.LocalObjectReference,
-						DefaultMode:          &xmode,
-						Optional:             r.setupRunnerExecutionScriptConfigMap.Optional,
-						Items: []corev1.KeyToPath{
-							{
-								Key:  r.setupRunnerExecutionScriptConfigMap.Key,
-								Path: executionScript,
-							},
-						},
-					},
-				},
-			},
-		}...)
-		volumeMounts = append(volumeMounts, []corev1.VolumeMount{
-			{
-				Name:      executionScriptVolumeName,
-				MountPath: tfo_runner_script,
-				SubPath:   executionScript,
-			},
-		}...)
-		setupRunnerEnvs = append(setupRunnerEnvs, corev1.EnvVar{
-			Name:  "TFO_RUNNER_SCRIPT",
-			Value: tfo_runner_script,
-		})
-	}
-
-	annotations := r.runnerAnnotations
-	envFrom := []corev1.EnvFromSource{}
-
 	for _, c := range r.credentials {
 		if c.AWSCredentials.KIAM != "" {
 			annotations["iam.amazonaws.com/role"] = c.AWSCredentials.KIAM
@@ -2098,7 +2123,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 	}
 
 	for _, c := range r.credentials {
-		if (tfv1alpha1.SecretNameRef{}) != c.SecretNameRef {
+		if (tfv1alpha2.SecretNameRef{}) != c.SecretNameRef {
 			envFrom = append(envFrom, []corev1.EnvFromSource{
 				{
 					SecretRef: &corev1.SecretEnvSource{
@@ -2111,14 +2136,11 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 		}
 	}
 
-	runnerLabels := r.runnerLabels
+	// labels for all resources for use in queries
 	for key, value := range r.resourceLabels {
 		runnerLabels[key] = value
 	}
-	runnerLabels["app.kubernetes.io/instance"] = string(podType)
-
-	initContainers := []corev1.Container{}
-	containers := []corev1.Container{}
+	runnerLabels["app.kubernetes.io/instance"] = r.runType.String()
 
 	// Make sure to use the same uid for containers so the dir in the
 	// PersistentVolume have the correct permissions for the user
@@ -2132,132 +2154,21 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 	}
 	restartPolicy := corev1.RestartPolicyNever
 
-	if podType == tfv1alpha1.PodSetup || podType == tfv1alpha1.PodSetupDelete {
-		// setup once per generation
-		setupRunnerEnvs = append(setupRunnerEnvs, corev1.EnvVar{
-			Name:  "TFO_RUNNER",
-			Value: string(podType),
-		})
-		if r.setupOptions.cleanupDisk {
-			setupRunnerEnvs = append(setupRunnerEnvs, corev1.EnvVar{
-				Name:  "TFO_CLEANUP_DISK",
-				Value: "true",
-			})
-		}
-		containers = append(containers, corev1.Container{
-			Name:            "tfo-setup",
-			SecurityContext: securityContext,
-			Image:           r.setupRunner + ":" + r.setupRunnerVersion,
-			ImagePullPolicy: r.setupRunnerPullPolicy,
-			EnvFrom:         envFrom,
-			Env:             setupRunnerEnvs,
-			VolumeMounts:    volumeMounts,
-		})
-	} else if isTFRunner {
-		terraformRunnerEnvs = append(terraformRunnerEnvs, corev1.EnvVar{
-			Name:  "TFO_RUNNER",
-			Value: string(podType),
-		})
-		scriptRunnerEnvs = append(scriptRunnerEnvs, corev1.EnvVar{
-			Name:  "TFO_RUNNER",
-			Value: string(podType),
-		})
-		containers = append(containers, corev1.Container{
-			SecurityContext: securityContext,
-			Name:            "tf",
-			Image:           r.terraformRunner + ":" + r.terraformVersion,
-			ImagePullPolicy: r.terraformRunnerPullPolicy,
-			EnvFrom:         envFrom,
-			Env:             terraformRunnerEnvs,
-			VolumeMounts:    volumeMounts,
-		})
+	containers := []corev1.Container{}
+	containers = append(containers, corev1.Container{
+		Name:            "task",
+		SecurityContext: securityContext,
+		Image:           r.image,
+		ImagePullPolicy: r.imagePullPolicy,
+		EnvFrom:         envFrom,
+		Env:             envs,
+		VolumeMounts:    volumeMounts,
+	})
 
-		if preScriptPodType != "" {
-			scriptRunnerEnvs = append(scriptRunnerEnvs, corev1.EnvVar{
-				Name:  "TFO_SCRIPT",
-				Value: string(preScriptPodType),
-			})
-			initContainers = append(initContainers, corev1.Container{
-				SecurityContext: securityContext,
-				Name:            "pre-script",
-				Image:           r.scriptRunner + ":" + r.scriptRunnerVersion,
-				ImagePullPolicy: r.scriptRunnerPullPolicy,
-				EnvFrom:         envFrom,
-				Env:             scriptRunnerEnvs,
-				VolumeMounts:    volumeMounts,
-			})
-		}
-	} else if podType == tfv1alpha1.PodExport {
-		exportRef := r.exportOptions.stack.Hash
-		if exportRef == "" {
-			exportRef = "master"
-		}
-		exportRunnerEnvs = append(exportRunnerEnvs, []corev1.EnvVar{
-			{
-				Name:  "TFO_EXPORT_REPO_PATH",
-				Value: generationPath + "/export",
-			},
-			{
-				Name:  "TFO_EXPORT_REPO",
-				Value: r.exportOptions.stack.Repo,
-			},
-			{
-				Name:  "TFO_EXPORT_REPO_REF",
-				Value: exportRef,
-			},
-			{
-				Name:  "TFO_EXPORT_REPO_SUBDIR",
-				Value: exportRef,
-			},
-			{
-				Name:  "TFO_EXPORT_CONF_PATH",
-				Value: r.exportOptions.confPath,
-			},
-			{
-				Name:  "TFO_EXPORT_TFVARS_PATH",
-				Value: r.exportOptions.tfvarsPath,
-			},
-			{
-				Name:  "TFO_EXPORT_REPO_AUTOMATED_USER_NAME",
-				Value: r.exportOptions.gitUsername,
-			},
-			{
-				Name:  "TFO_EXPORT_REPO_AUTOMATED_USER_EMAIL",
-				Value: r.exportOptions.gitEmail,
-			},
-		}...)
-		containers = append(containers, corev1.Container{
-			SecurityContext: securityContext,
-			Name:            "export",
-			Image:           "docker.io/isaaguilar/export-runner" + ":" + "0.0.1", // CHANGE THIS TO EXPORT RUNNER, FOR NOW USE SOMETHING
-			ImagePullPolicy: corev1.PullAlways,
-			EnvFrom:         envFrom,
-			Env:             exportRunnerEnvs,
-			VolumeMounts:    volumeMounts,
-			// Command:         []string{"/bin/sleep"},
-			// Args:            []string{"3600"},
-		})
-		if r.exportOptions.retryOnFailure {
-			restartPolicy = corev1.RestartPolicyOnFailure
-		}
-	} else {
-		scriptRunnerEnvs = append(scriptRunnerEnvs, corev1.EnvVar{
-			Name:  "TFO_SCRIPT",
-			Value: string(podType),
-		})
-		containers = append(containers, corev1.Container{
-			SecurityContext: securityContext,
-			Name:            "script",
-			Image:           r.scriptRunner + ":" + r.scriptRunnerVersion,
-			ImagePullPolicy: r.scriptRunnerPullPolicy,
-			EnvFrom:         envFrom,
-			Env:             scriptRunnerEnvs,
-			VolumeMounts:    volumeMounts,
-		})
-	}
 	podSecurityContext := corev1.PodSecurityContext{
 		FSGroup: &user,
 	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: generateName,
@@ -2269,7 +2180,6 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 			SecurityContext:    &podSecurityContext,
 			ServiceAccountName: r.serviceAccount,
 			RestartPolicy:      restartPolicy,
-			InitContainers:     initContainers,
 			Containers:         containers,
 			Volumes:            volumes,
 		},
@@ -2278,7 +2188,7 @@ func (r RunOptions) generatePod(podType, preScriptPodType tfv1alpha1.PodType, is
 	return pod
 }
 
-func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *tfv1alpha1.Terraform, runOpts RunOptions, isNewGeneration, isFirstInstall bool, podType tfv1alpha1.PodType, generation int64) (err error) {
+func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *tfv1alpha2.Terraform, runOpts RunOptions, isNewGeneration, isFirstInstall bool) (err error) {
 
 	if isFirstInstall || isNewGeneration {
 		if err := r.createPVC(ctx, tf, runOpts); err != nil {
@@ -2319,7 +2229,7 @@ func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *
 	} else {
 		// check resources exists
 		lookupKey := types.NamespacedName{
-			Name:      runOpts.name,
+			Name:      runOpts.prefixedName,
 			Namespace: runOpts.namespace,
 		}
 
@@ -2370,14 +2280,14 @@ func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *
 
 	}
 
-	if err := r.createPod(ctx, tf, runOpts, podType, generation); err != nil {
+	if err := r.createPod(ctx, tf, runOpts); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (r ReconcileTerraform) createGitAskpass(ctx context.Context, tokenSecret tfv1alpha1.TokenSecretRef) ([]byte, error) {
+func (r ReconcileTerraform) createGitAskpass(ctx context.Context, tokenSecret tfv1alpha2.TokenSecretRef) ([]byte, error) {
 	secret, err := r.loadSecret(ctx, tokenSecret.Name, tokenSecret.Namespace)
 	if err != nil {
 		return []byte{}, err
@@ -2585,112 +2495,4 @@ func getParsedAddress(address, path string, useAsVar bool, scmMap map[string]scm
 		Repo:           strings.Split(parsedURL.String(), "?")[0],
 	}
 	return p, nil
-}
-
-func (r *ReconcileTerraform) exportRepo(ctx context.Context, tf *tfv1alpha1.Terraform, runOpts RunOptions, generation int64, reqLogger logr.Logger) (tfv1alpha1.Exported, error) {
-	var exportedStatus tfv1alpha1.Exported = tf.Status.Exported
-	if tf.Status.Exported == tfv1alpha1.ExportedTrue {
-		return exportedStatus, nil
-	}
-
-	var err error
-	var exportPodType tfv1alpha1.PodType = tfv1alpha1.PodExport
-
-	// Updates from exported False to InProgress
-	if tf.Status.Exported == tfv1alpha1.ExportedFalse {
-		exportedStatus = tfv1alpha1.ExportedPending
-		return exportedStatus, nil
-	}
-
-	inNamespace := client.InNamespace(tf.Namespace)
-	f := fields.Set{
-		"metadata.generateName": fmt.Sprintf("%s-%s-", tf.Status.PodNamePrefix+"-v"+fmt.Sprint(generation), exportPodType),
-	}
-	labelSelector := map[string]string{
-		"terraforms.tf.isaaguilar.com/generation": fmt.Sprintf("%d", generation),
-	}
-	matchingFields := client.MatchingFields(f)
-	matchingLabels := client.MatchingLabels(labelSelector)
-	pods := &corev1.PodList{}
-	err = r.Client.List(ctx, pods, inNamespace, matchingFields, matchingLabels)
-	if err != nil {
-		reqLogger.Error(err, "")
-		return exportedStatus, err
-	}
-
-	if len(pods.Items) == 0 && tf.Status.Exported == tfv1alpha1.ExportedInProgress {
-		reqLogger.V(1).Info("No pods found. Removing the in-progress status")
-		// This case can happen if the pod is running and the user deletes it.
-		// Reset the phase to pending and then update the status which will
-		// force the resource to requeue.
-		exportedStatus = tfv1alpha1.ExportedPending
-		return exportedStatus, nil
-	}
-
-	if len(pods.Items) == 0 && tf.Status.Exported == tfv1alpha1.ExportedPending {
-		var err error
-		n := len(tf.Status.Stages)
-		generation := tf.Status.Stages[n-1].Generation
-		scmMap := make(map[string]scmType)
-		for _, v := range tf.Spec.SCMAuthMethods {
-			if v.Git != nil {
-				scmMap[v.Host] = gitScmType
-			}
-		}
-
-		runOpts.terraformModuleParsed, err = getParsedAddress(tf.Spec.TerraformModule, "", false, scmMap)
-		if err != nil {
-			r.Recorder.Event(tf, "Warning", "ConfigError", err.Error())
-			return exportedStatus, err
-		}
-		runOpts.exportOptions.stack, err = getParsedAddress(tf.Spec.ExportRepo.Address, "", false, scmMap)
-		if err != nil {
-			r.Recorder.Event(tf, "Warning", "ConfigError", err.Error())
-			return exportedStatus, err
-		}
-		runOpts.exportOptions.confPath = tf.Spec.ExportRepo.ConfFile
-		runOpts.exportOptions.tfvarsPath = tf.Spec.ExportRepo.TFVarsFile
-		runOpts.exportOptions.retryOnFailure = tf.Spec.ExportRepo.RetryOnFailure
-		if tf.Spec.ExportRepo.GitEmail != "" {
-			runOpts.exportOptions.gitEmail = tf.Spec.ExportRepo.GitEmail
-		} else {
-			runOpts.exportOptions.gitEmail = "terraform-operator@example.com"
-		}
-		if tf.Spec.ExportRepo.GitUsername != "" {
-			runOpts.exportOptions.gitUsername = tf.Spec.ExportRepo.GitUsername
-		} else {
-			runOpts.exportOptions.gitUsername = "Terraform Operator"
-		}
-
-		err = r.run(ctx, reqLogger, tf, runOpts, false, false, tfv1alpha1.PodExport, generation)
-		if err != nil {
-			return exportedStatus, err
-		}
-		exportedStatus = tfv1alpha1.ExportCreating
-	}
-
-	if len(pods.Items) > 0 {
-		if pods.Items[0].Status.Phase == corev1.PodFailed {
-			exportedStatus = tfv1alpha1.ExportedPending
-			return exportedStatus, nil
-		}
-
-		if pods.Items[0].Status.Phase == corev1.PodSucceeded {
-			exportedStatus = tfv1alpha1.ExportedTrue
-			if !tf.Spec.KeepCompletedPods && !tf.Spec.KeepLatestPodsOnly {
-				err := r.Client.Delete(ctx, &pods.Items[0])
-				if err != nil {
-					reqLogger.V(1).Info(err.Error())
-				}
-			}
-			return exportedStatus, nil
-		}
-
-		if tf.Status.Exported != tfv1alpha1.ExportedInProgress {
-			exportedStatus = tfv1alpha1.ExportedInProgress
-			return exportedStatus, nil
-		}
-
-	}
-	return exportedStatus, nil
 }

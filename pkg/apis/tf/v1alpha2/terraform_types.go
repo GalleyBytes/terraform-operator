@@ -1,4 +1,4 @@
-package v1alpha1
+package v1alpha2
 
 import (
 	corev1 "k8s.io/api/core/v1"
@@ -15,7 +15,7 @@ import (
 // Terraform is the Schema for the terraforms API
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +k8s:openapi-gen=true
-// +kubebuilder:deprecatedversion:warning="tf.isaaguilar.com/v1alpha1 is no longer supported. Please upgrade to tf.isaaguilar.com/v1alpha2"
+// +kubebuilder:storageversion
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:path=terraforms,shortName=tf
 // +kubebuilder:singular=terraform
@@ -30,9 +30,6 @@ type Terraform struct {
 // TerraformSpec defines the desired state of Terraform
 // +k8s:openapi-gen=true
 type TerraformSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
-	// Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html
 
 	// KeepLatestPodsOnly when true will keep only the pods that match the
 	// current generation of the terraform k8s-resource. This overrides the
@@ -42,81 +39,6 @@ type TerraformSpec struct {
 	// KeepCompletedPods when true will keep completed pods. Default is false
 	// and completed pods are removed.
 	KeepCompletedPods bool `json:"keepCompletedPods,omitempty"`
-
-	// CleanupDisk will clear out previous terraform run data from the
-	// persistent volume.
-	CleanupDisk bool `json:"cleanupDisk,omitempty"`
-
-	// PersistentVolumeSize define the size of the disk used to store
-	// terraform run data. If not defined, a default of "2Gi" is used.
-	PersistentVolumeSize *resource.Quantity `json:"persistentVolumeSize,omitempty"`
-
-	// RunnerRules are RBAC rules that will be added to all runner pods.
-	RunnerRules []rbacv1.PolicyRule `json:"runnerRules,omitempty"`
-
-	// RunnerAnnotations are annotations that will be added to all runner pods.
-	RunnerAnnotations map[string]string `json:"runnerAnnotations,omitempty"`
-
-	// RunnerLabels key/value pairs that will be added as labels to runner pods
-	RunnerLabels map[string]string `json:"runnerLabels,omitempty"`
-
-	// TerraformVersion helps the operator decide which image tag to pull for
-	// the terraform runner. Defaults to "0.11.14"
-	TerraformVersion    string `json:"terraformVersion,omitempty"`
-	ScriptRunnerVersion string `json:"scriptRunnerVersion,omitempty"`
-	SetupRunnerVersion  string `json:"setupRunnerVersion,omitempty"`
-
-	// TerraformRunner gives the user the ability to inject their own container
-	// image to execute terraform. This is very helpful for users who need to
-	// have a certain toolset installed on their images, or who can't pull
-	// public images, such as the default image "isaaguilar/tfops".
-	TerraformRunner string `json:"terraformRunner,omitempty"`
-	ScriptRunner    string `json:"scriptRunner,omitempty"`
-	SetupRunner     string `json:"setupRunner,omitempty"`
-
-	// TerraformRunnerExecutionScriptConfigMap allows the user to define a
-	// custom terraform runner script that gets executed instead of the default
-	// script built into the runner image. The configmap "name" and "key" are
-	// required.
-	TerraformRunnerExecutionScriptConfigMap *corev1.ConfigMapKeySelector `json:"terraformRunnerExecutionScriptConfigMap,omitempty"`
-
-	// ScriptRunnerExecutionScriptConfigMap allows the user to define a
-	// custom terraform runner script that gets executed instead of the default
-	// script built into the runner image. The configmap "name" and "key" are
-	// required.
-	ScriptRunnerExecutionScriptConfigMap *corev1.ConfigMapKeySelector `json:"scriptRunnerExecutionScriptConfigMap,omitempty"`
-
-	// SetupRunnerExecutionScriptConfigMap allows the user to define a
-	// custom terraform runner script that gets executed instead of the default
-	// script built into the runner image. The configmap "name" and "key" are
-	// required.
-	SetupRunnerExecutionScriptConfigMap *corev1.ConfigMapKeySelector `json:"setupRunnerExecutionScriptConfigMap,omitempty"`
-
-	// TerraformRunnerPullPolicy describes a policy for if/when to pull the
-	// TerraformRunner image. Acceptable values are "Always", "Never", or
-	// "IfNotPresent".
-	TerraformRunnerPullPolicy corev1.PullPolicy `json:"terraformRunnerPullPolicy,omitempty"`
-	ScriptRunnerPullPolicy    corev1.PullPolicy `json:"scriptRunnerPullPolicy,omitempty"`
-	SetupRunnerPullPolicy     corev1.PullPolicy `json:"setupRunnerPullPolicy,omitempty"`
-
-	// TerraformModule is the terraform module scm address. Currently supports
-	// git protocol over SSH or HTTPS.
-	//
-	// Precedence of "terraformModule*" to use as the main module is
-	// determined by the setup runner. See the runners/setup.sh for the
-	// module configuration.
-	TerraformModule string `json:"terraformModule,omitempty"`
-
-	// TerraformModuleConfigMap is the configMap that contains terraform module
-	// resources. The module will be fetched by the setup runner. In order
-	// for terraform to understand it's a module reosurce, the configmap keys
-	// must end in `.tf` or `.tf.json`.
-	TerraformModuleConfigMap *ConfigMapSelector `json:"terraformModuleConfigMap,omitempty"`
-
-	// TerraformModuleInline is an incline terraform module definition. The
-	// contents of the inline definition will be used to create
-	// `inline-module.tf`
-	TerraformModuleInline string `json:"terraformModuleInline,omitempty"`
 
 	// OutputsSecret will create a secret with the outputs from the module. All
 	// outputs from the module will be written to the secret unless the user
@@ -135,16 +57,9 @@ type TerraformSpec struct {
 	// of the Terraform CustomResource.
 	WriteOutputsToStatus bool `json:"writeOutputsToStatus,omitempty"`
 
-	// ResourceDownloads defines other files to download into the module
-	// directory that can be used by the terraform workflow runners.
-	// The `tfvar` type will also be fetched by the `exportRepo` option (if
-	// defined) to aggregate the set of tfvars to save to an scm system.
-	ResourceDownloads []*ResourceDownload `json:"resourceDownloads,omitempty"`
-
-	// Env is used to define a common set of environment variables into the
-	// workflow runners. The `TF_VAR_` prefix will also be used by the
-	// `exportRepo` option.
-	Env []corev1.EnvVar `json:"env,omitempty"`
+	// PersistentVolumeSize define the size of the disk used to store
+	// terraform run data. If not defined, a default of "2Gi" is used.
+	PersistentVolumeSize *resource.Quantity `json:"persistentVolumeSize,omitempty"` // NOT MUTABLE
 
 	// ServiceAccount use a specific kubernetes ServiceAccount for running the create + destroy pods.
 	// If not specified we create a new ServiceAccount per Terraform
@@ -158,56 +73,202 @@ type TerraformSpec struct {
 	// resource without running any delete jobs.
 	IgnoreDelete bool `json:"ignoreDelete,omitempty"`
 
-	// Reconcile are the settings used for auto-reconciliation
-	Reconcile *ReconcileTerraformDeployment `json:"reconcile,omitempty"`
-
-	// CustomBackend will allow the user to configure the backend of their
-	// choice. If this is omitted, the default consul template will be used.
-	CustomBackend string `json:"customBackend,omitempty"`
-
-	// ExportRepo allows the user to define
-	ExportRepo *ExportRepo `json:"exportRepo,omitempty"`
-
-	// PreInitScript lets the user define a script that will run before
-	// terraform commands are executed on the terraform-execution pod. The pod
-	// will have already set up cloudProfile (eg cloud credentials) so the
-	// script can make use of it.
-	//
-	// Setting this field will create a key in the tfvars configmap called
-	// "prerun.sh". This means the user can also pass in a prerun.sh file via
-	// config "Sources".
-	PreInitScript  string `json:"preInitScript,omitempty"`
-	PostInitScript string `json:"postInitScript,omitempty"`
-
-	PrePlanScript  string `json:"prePlanScript,omitempty"`
-	PostPlanScript string `json:"postPlanScript,omitempty"`
-
-	PreApplyScript string `json:"preApplyScript,omitempty"`
-
-	// PostApplyScript lets the user define a script that will run after
-	// terraform commands are executed on the terraform-execution pod. The pod
-	// will have already set up cloudProfile (eg cloud credentials) so the
-	// script can make use of it.
-	//
-	// Setting this field will create a key in the tfvars configmap called
-	// "postrun.sh". This means the user can alternatively pass in a
-	// posterun.sh file via config "Sources".
-	PostApplyScript string `json:"postApplyScript,omitempty"`
-
-	PreInitDeleteScript   string `json:"preInitDeleteScript,omitempty"`
-	PostInitDeleteScript  string `json:"postInitDeleteScript,omitempty"`
-	PrePlanDeleteScript   string `json:"prePlanDeleteScript,omitempty"`
-	PostPlanDeleteScript  string `json:"postPlanDeleteScript,omitempty"`
-	PreApplyDeleteScript  string `json:"preApplyDeleteScript,omitempty"`
-	PostApplyDeleteScript string `json:"postApplyDeleteScript,omitempty"`
-
-	// SSHTunnel can be defined for pulling from scm sources that cannot be
-	// accessed by the network the operator/runner runs in. An example is
-	// Enterprise Github servers running on a private network.
+	// SSHTunnel can be defined for pulling from scm sources that cannot be accessed by the network the
+	// operator/runner runs in. An example is enterprise-Github servers running on a private network.
 	SSHTunnel *ProxyOpts `json:"sshTunnel,omitempty"`
 
 	// SCMAuthMethods define multiple SCMs that require tokens/keys
 	SCMAuthMethods []SCMAuthMethod `json:"scmAuthMethods,omitempty"`
+
+	// Images describes the container images used by task classes.
+	Images *Images `json:"images,omitempty"`
+
+	// Setup is configuration generally used once in the setup task
+	Setup *Setup `json:"setup,omitempty"`
+
+	// TerraformModule is used to configure the source of the terraform module.
+	TerraformModule Module `json:"terraformModule"`
+
+	// TerraformVersion is the version of terraform which is used to run the module. The terraform version is
+	// used as the tag of the terraform image  regardless if images.terraform.image is defined with a tag. In
+	// that case, the tag is stripped and replace with this value.
+	TerraformVersion string `json:"terraformVersion"`
+
+	// Backend is mandatory terraform backend configuration. Must use a valid terraform backend block.
+	// For more information see https://www.terraform.io/language/settings/backends/configuration
+	//
+	// Example usage of the kubernetes cluster as a backend:
+	//
+	//   terraform {
+	//    backend "kubernetes" {
+	//     secret_suffix     = "all-task-types"
+	//     namespace         = "default"
+	//     in_cluster_config = true
+	//    }
+	//   }
+	//
+	// Example of a remote backend:
+	//
+	//   terraform {
+	//    backend "remote" {
+	//     organization = "example_corp"
+	//     workspaces {
+	//       name = "my-app-prod"
+	//     }
+	//    }
+	//   }
+	//
+	//
+	Backend string `json:"backend"`
+
+	// TaskOptions are a list of configuration options to be injected into task pods.
+	TaskOptions []TaskOption `json:"taskOptions,omitempty"`
+}
+
+// Setup are things that only happen during the life of the setup task.
+type Setup struct {
+	// ResourceDownloads defines other files to download into the module directory that can be used by the
+	// terraform workflow runners. The `tfvar` type will also be fetched by the `exportRepo` option
+	// (if defined) to aggregate the set of tfvars to save to an scm system.
+	ResourceDownloads []ResourceDownload `json:"resourceDownloads,omitempty"`
+
+	// CleanupDisk will clear out previous terraform run data from the persistent volume.
+	CleanupDisk bool `json:"cleanupDisk,omitempty"`
+}
+
+// // Images describes the container images used by task classes
+type Images struct {
+	// Terraform task type container image definition
+	Terraform *ImageConfig `json:"terraform,omitempty"`
+	// Script task type container image definition
+	Script *ImageConfig `json:"script,omitempty"`
+	// Setup task type container image definition
+	Setup *ImageConfig `json:"setup,omitempty"`
+}
+
+// ImageConfig describes a task class's container image and image pull policy.
+type ImageConfig struct {
+
+	// The container image from the registry; tags must be omitted
+	Image string `json:"image"`
+
+	// Image pull policy.
+	// One of Always, Never, IfNotPresent.
+	// Defaults to Always if :latest tag is specified, or IfNotPresent otherwise.
+	// Cannot be updated.
+	// More info: https://kubernetes.io/docs/concepts/containers/images#updating-images
+	// +optional
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty" protobuf:"bytes,14,opt,name=imagePullPolicy,casttype=PullPolicy"`
+}
+
+// Module has the different types of ways to define a terraform module. The order of precendence is
+//     1. inline
+//     2. configMapSelector
+//     3. source[/version]
+type Module struct {
+	// Source accepts a subset of the terraform "Module Source" ways of defining a module.
+	// Terraform Operator prefers modules that are defined in a git repo as opposed to other scm types.
+	// Refer to https://www.terraform.io/language/modules/sources#module-sources for more details.
+	Source string `json:"source,omitempty"`
+	// Version to select from a terraform registry. For version to be used, source must be defined.
+	// Refer to https://www.terraform.io/language/modules/sources#module-sources for more details
+	Version string `json:"version,omitempty"`
+
+	// ConfigMapSelector is an option that points to an existing configmap on the executing cluster. The
+	// configmap is expected to contains has the terraform module (ie keys ending with .tf).
+	// The configmap would need to live in the same namespace as the tfo resource.
+	//
+	// The configmap is mounted as a volume and put into the TFO_MAIN_MODULE path by the setup task.
+	//
+	// If a key is defined, the value is used as the module else the entirety of the data objects will be
+	// loaded as files.
+	ConfigMapSelector *ConfigMapSelector `json:"configMapSeclector,omitempty"`
+
+	// Inline used to define an entire terraform module inline and then mounted in the TFO_MAIN_MODULE path.
+	Inline string `json:"inline,omitempty"`
+}
+
+type TaskType string
+
+func (t TaskType) String() string {
+	return string(t)
+}
+
+const (
+	RunSetupDelete     TaskType = "setup-delete"
+	RunPreInitDelete   TaskType = "preinit-delete"
+	RunInitDelete      TaskType = "init-delete"
+	RunPostInitDelete  TaskType = "postinit-delete"
+	RunPrePlanDelete   TaskType = "preplan-delete"
+	RunPlanDelete      TaskType = "plan-delete"
+	RunPostPlanDelete  TaskType = "postplan-delete"
+	RunPreApplyDelete  TaskType = "preapply-delete"
+	RunApplyDelete     TaskType = "apply-delete"
+	RunPostApplyDelete TaskType = "postapply-delete"
+
+	RunSetup     TaskType = "setup"
+	RunPreInit   TaskType = "preinit"
+	RunInit      TaskType = "init"
+	RunPostInit  TaskType = "postinit"
+	RunPrePlan   TaskType = "preplan"
+	RunPlan      TaskType = "plan"
+	RunPostPlan  TaskType = "postplan"
+	RunPreApply  TaskType = "preapply"
+	RunApply     TaskType = "apply"
+	RunPostApply TaskType = "postapply"
+	RunNil       TaskType = ""
+
+	// RunExport RunType = "export"
+)
+
+// TaskOption are different configuration options to be injected into task pods. Can apply to
+// one ore more task pods.
+type TaskOption struct {
+	// TaskTypes is a list of tasks these options will get applied to.
+	TaskTypes []TaskType `json:"runTypes"`
+
+	// RunnerRules are RBAC rules that will be added to all runner pods.
+	PolicyRules []rbacv1.PolicyRule `json:"policyRules,omitempty"`
+
+	// Labels extra labels to add task pods.
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Annotaitons extra annotaitons to add the task pods
+	Annotations map[string]string `json:"annotations,omitempty"`
+
+	// List of sources to populate environment variables in the container.
+	// The keys defined within a source must be a C_IDENTIFIER. All invalid keys
+	// will be reported as an event when the container is starting. When a key exists in multiple
+	// sources, the value associated with the last source will take precedence.
+	// Values defined by an Env with a duplicate key will take precedence.
+	// Cannot be updated.
+	// +optional
+	EnvFrom []corev1.EnvFromSource `json:"envFrom,omitempty" protobuf:"bytes,19,rep,name=envFrom"`
+
+	// List of environment variables to set in the task pods.
+	Env []corev1.EnvVar `json:"env,omitempty" patchStrategy:"merge" patchMergeKey:"name" protobuf:"bytes,7,rep,name=env"`
+
+	// Compute Resources required by the task pods.
+	Resources corev1.ResourceRequirements `json:"resources,omitempty" protobuf:"bytes,8,opt,name=resources"`
+
+	// Script is used to configure the source of the task's executable script.
+	Script StageScript `json:"script,omitempty"`
+}
+
+// StageScript defines the different ways of sourcing execution scripts of tasks. There is an order of
+// precendence of selecting which source is used, which is:
+//     1. inline
+//     2. configMapSelector
+//     3. source
+type StageScript struct {
+	// Source is an http source that the task container will fetch and then execute.
+	Source string `json:"source,omitempty"`
+
+	// ConfigMapSelector reads a in a script from a configmap name+key
+	ConfigMapSelector *ConfigMapSelector `json:"configMapSelector,omitempty"`
+
+	// Inline is used to write the entire task execution script in the tfo resource.
+	Inline string `json:"inline,omitempty"`
 }
 
 // A simple selector for configmaps that can select on the name of the configmap
@@ -253,45 +314,6 @@ type TerraformList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Terraform `json:"items"`
-}
-
-// ExportRepo is used to allow the tfvars passed into the job to also be
-// exported to a different git repo. The main use-case for this would be to
-// allow terraform execution outside of the terraform-operator for any reason
-type ExportRepo struct {
-	// Address is the git repo to save to. At this time, only SSH is allowed
-	Address string `json:"address"`
-
-	// TFVarsFile is the full path relative to the root of the repo
-	TFVarsFile string `json:"tfvarsFile,omitempty"`
-
-	// ConfFile is the full path relative to the root of the repo
-	ConfFile string `json:"confFile,omitempty"`
-
-	// GitEmail is the email of the user who pushes to git. This email is
-	// typically an automation user and probably the user whose token or sshkey
-	// is configured in scmAuthMethod
-	GitEmail string `json:"gitEmail,omitempty"`
-
-	// GitUsername is the name of the user who pushes to git. This name is
-	// typically an automation user and probably the user whose token or sshkey
-	// is configured in scmAuthMethod
-	GitUsername string `json:"gitUsername,omitempty"`
-
-	// RetryOnFailure sets the export pod's restartPolicy to "OnFailure"
-	RetryOnFailure bool `json:"retryOnFailure,omitempty"`
-}
-
-// ReconcileTerraformDeployment is used to configure auto watching the resources
-// created by terraform and re-applying them automatically if they are not
-// in-sync with the terraform state.
-type ReconcileTerraformDeployment struct {
-	// Enable used to turn on the auto reconciliation of tfstate to actual
-	// provisions. Default to false
-	Enable bool `json:"enable"`
-	// SyncPeriod can be used to set a custom time to check actual provisions
-	// to tfstate. Defaults to 60 minutes
-	SyncPeriod int64 `json:"syncPeriod,omitempty"`
 }
 
 // ResourceDownload (formerly SrcOpts) defines a resource to fetch using one
@@ -407,11 +429,6 @@ type SecretNameRef struct {
 	Key string `json:"key,omitempty"`
 }
 
-// Inline definitions of configmaps
-type Inline struct {
-	ConfigMapFiles map[string]string `json:"scripts"`
-}
-
 // TerraformStatus defines the observed state of Terraform
 // +k8s:openapi-gen=true
 type TerraformStatus struct {
@@ -431,7 +448,19 @@ type TerraformStatus struct {
 	LastCompletedGeneration int64             `json:"lastCompletedGeneration"`
 	Outputs                 map[string]string `json:"outputs,omitempty"`
 	Stages                  []Stage           `json:"stages"`
-	Exported                Exported          `json:"exported,omitempty"`
+	Stage                   Stage             `json:"stage"`
+
+	// TODO maybe change this to
+	// ExportReady bool - when try can run eport on it... no tracking on it
+	// ExportStatus string - mostly the same thing, just easier to understand
+	//
+	// Or just move export to an entirely different controller. Accepts the same
+	// fileds of export, and reads in tf resource as ref. Benifit will run in
+	// foreround instead of background. The cons are a new controller to
+	// maintain.
+
+	// Status of export if used
+	Exported Exported `json:"exported,omitempty"`
 }
 
 type Exported string
@@ -448,7 +477,7 @@ const (
 type Stage struct {
 	Generation int64      `json:"generation"`
 	State      StageState `json:"state"`
-	PodType    PodType    `json:"podType"`
+	PodType    TaskType   `json:"podType"`
 
 	// Interruptible is set to false when the pod should not be terminated
 	// such as when doing a terraform apply
@@ -467,35 +496,6 @@ const (
 	PhaseInitDelete   StatusPhase = "initializing-delete"
 	PhaseDeleting     StatusPhase = "deleting"
 	PhaseDeleted      StatusPhase = "deleted"
-)
-
-type PodType string
-
-const (
-	PodSetupDelete     PodType = "setup-delete"
-	PodPreInitDelete   PodType = "init0-delete"
-	PodInitDelete      PodType = "init-delete"
-	PodPostInitDelete  PodType = "init1-delete"
-	PodPrePlanDelete   PodType = "plan0-delete"
-	PodPlanDelete      PodType = "plan-delete"
-	PodPostPlanDelete  PodType = "plan1-delete"
-	PodPreApplyDelete  PodType = "apply0-delete"
-	PodApplyDelete     PodType = "apply-delete"
-	PodPostApplyDelete PodType = "post-delete"
-
-	PodSetup     PodType = "setup"
-	PodPreInit   PodType = "init0"
-	PodInit      PodType = "init"
-	PodPostInit  PodType = "init1"
-	PodPrePlan   PodType = "plan0"
-	PodPlan      PodType = "plan"
-	PodPostPlan  PodType = "plan1"
-	PodPreApply  PodType = "apply0"
-	PodApply     PodType = "apply"
-	PodPostApply PodType = "post"
-	PodNil       PodType = ""
-
-	PodExport PodType = "export"
 )
 
 type StageState string
@@ -517,4 +517,5 @@ const (
 
 func init() {
 	SchemeBuilder.Register(&Terraform{}, &TerraformList{})
+
 }
