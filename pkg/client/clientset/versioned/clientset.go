@@ -21,7 +21,7 @@ package versioned
 import (
 	"fmt"
 
-	tfv1alpha1 "github.com/isaaguilar/terraform-operator/pkg/client/clientset/versioned/typed/tf/v1alpha1"
+	tfv1alpha2 "github.com/isaaguilar/terraform-operator/pkg/client/clientset/versioned/typed/tf/v1alpha2"
 	discovery "k8s.io/client-go/discovery"
 	rest "k8s.io/client-go/rest"
 	flowcontrol "k8s.io/client-go/util/flowcontrol"
@@ -29,19 +29,19 @@ import (
 
 type Interface interface {
 	Discovery() discovery.DiscoveryInterface
-	TfV1alpha1() tfv1alpha1.TfV1alpha1Interface
+	TfV1alpha2() tfv1alpha2.TfV1alpha2Interface
 }
 
 // Clientset contains the clients for groups. Each group has exactly one
 // version included in a Clientset.
 type Clientset struct {
 	*discovery.DiscoveryClient
-	tfV1alpha1 *tfv1alpha1.TfV1alpha1Client
+	tfV1alpha2 *tfv1alpha2.TfV1alpha2Client
 }
 
-// TfV1alpha1 retrieves the TfV1alpha1Client
-func (c *Clientset) TfV1alpha1() tfv1alpha1.TfV1alpha1Interface {
-	return c.tfV1alpha1
+// TfV1alpha2 retrieves the TfV1alpha2Client
+func (c *Clientset) TfV1alpha2() tfv1alpha2.TfV1alpha2Interface {
+	return c.tfV1alpha2
 }
 
 // Discovery retrieves the DiscoveryClient
@@ -65,7 +65,7 @@ func NewForConfig(c *rest.Config) (*Clientset, error) {
 	}
 	var cs Clientset
 	var err error
-	cs.tfV1alpha1, err = tfv1alpha1.NewForConfig(&configShallowCopy)
+	cs.tfV1alpha2, err = tfv1alpha2.NewForConfig(&configShallowCopy)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +81,7 @@ func NewForConfig(c *rest.Config) (*Clientset, error) {
 // panics if there is an error in the config.
 func NewForConfigOrDie(c *rest.Config) *Clientset {
 	var cs Clientset
-	cs.tfV1alpha1 = tfv1alpha1.NewForConfigOrDie(c)
+	cs.tfV1alpha2 = tfv1alpha2.NewForConfigOrDie(c)
 
 	cs.DiscoveryClient = discovery.NewDiscoveryClientForConfigOrDie(c)
 	return &cs
@@ -90,7 +90,7 @@ func NewForConfigOrDie(c *rest.Config) *Clientset {
 // New creates a new Clientset for the given RESTClient.
 func New(c rest.Interface) *Clientset {
 	var cs Clientset
-	cs.tfV1alpha1 = tfv1alpha1.New(c)
+	cs.tfV1alpha2 = tfv1alpha2.New(c)
 
 	cs.DiscoveryClient = discovery.NewDiscoveryClient(c)
 	return &cs

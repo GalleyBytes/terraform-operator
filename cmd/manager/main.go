@@ -9,6 +9,7 @@ import (
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	"github.com/isaaguilar/terraform-operator/pkg/apis"
 	"github.com/isaaguilar/terraform-operator/pkg/controllers"
+	"github.com/isaaguilar/terraform-operator/pkg/webhook/admission"
 	localcache "github.com/patrickmn/go-cache"
 	"go.uber.org/zap/zapcore"
 	corev1 "k8s.io/api/core/v1"
@@ -29,7 +30,6 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
 	utilruntime.Must(apis.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -39,8 +39,10 @@ func main() {
 	var enableLeaderElection bool
 	var probeAddr string
 	var maxConcurrentReconciles int
+	var enableConversionWebhook bool
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.BoolVar(&enableConversionWebhook, "enable-conversion-webhook", false, "Enable the conversion webhook")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -94,6 +96,10 @@ func main() {
 	if err := mgr.AddReadyzCheck("check", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
+	}
+
+	if enableConversionWebhook {
+		mgr.GetWebhookServer().Register("/conversion", admission.NewConversionWebhook(ctrl.Log.WithName("conversion")))
 	}
 
 	setupLog.Info("starting manager")
