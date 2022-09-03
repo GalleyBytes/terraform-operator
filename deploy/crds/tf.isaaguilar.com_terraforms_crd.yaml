@@ -1402,7 +1402,13 @@ spec:
             description: TerraformStatus defines the observed state of Terraform
             properties:
               exported:
-                description: Status of export if used
+                description: "TODO maybe change this to ExportReady bool - when try
+                  can run eport on it... no tracking on it ExportStatus string - mostly
+                  the same thing, just easier to understand \n Or just move export
+                  to an entirely different controller. Accepts the same fileds of
+                  export, and reads in tf resource as ref. Benifit will run in foreround
+                  instead of background. The cons are a new controller to maintain.
+                  Status of export if used"
                 type: string
               lastCompletedGeneration:
                 format: int64
@@ -1431,6 +1437,14 @@ spec:
                     description: Interruptible is set to false when the pod should
                       not be terminated such as when doing a terraform apply
                     type: boolean
+                  message:
+                    description: Message stores the last message displayed in the
+                      logs. It is stored and checked by the controller to reduce the
+                      noise in the logs by only displying the message once.
+                    type: string
+                  podName:
+                    description: PodName is the pod assigned to execute the stage.
+                    type: string
                   podType:
                     type: string
                   reason:
@@ -1460,6 +1474,14 @@ spec:
                       description: Interruptible is set to false when the pod should
                         not be terminated such as when doing a terraform apply
                       type: boolean
+                    message:
+                      description: Message stores the last message displayed in the
+                        logs. It is stored and checked by the controller to reduce
+                        the noise in the logs by only displying the message once.
+                      type: string
+                    podName:
+                      description: PodName is the pod assigned to execute the stage.
+                      type: string
                     podType:
                       type: string
                     reason:

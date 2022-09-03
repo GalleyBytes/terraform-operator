@@ -450,6 +450,9 @@ type TerraformStatus struct {
 	Stages                  []Stage           `json:"stages"`
 	Stage                   Stage             `json:"stage"`
 
+	// // RerunAttempt	number is increased if a new pod is detected for the same stage.
+	// CurrentAttempt int64 `json:"currentAttempt"`
+
 	// TODO maybe change this to
 	// ExportReady bool - when try can run eport on it... no tracking on it
 	// ExportStatus string - mostly the same thing, just easier to understand
@@ -458,7 +461,6 @@ type TerraformStatus struct {
 	// fileds of export, and reads in tf resource as ref. Benifit will run in
 	// foreround instead of background. The cons are a new controller to
 	// maintain.
-
 	// Status of export if used
 	Exported Exported `json:"exported,omitempty"`
 }
@@ -477,7 +479,7 @@ const (
 type Stage struct {
 	Generation int64      `json:"generation"`
 	State      StageState `json:"state"`
-	PodType    TaskType   `json:"podType"`
+	TaskType   TaskType   `json:"podType"`
 
 	// Interruptible is set to false when the pod should not be terminated
 	// such as when doing a terraform apply
@@ -485,6 +487,15 @@ type Stage struct {
 	Reason        string        `json:"reason"`
 	StartTime     metav1.Time   `json:"startTime,omitempty"`
 	StopTime      metav1.Time   `json:"stopTime,omitempty"`
+
+	// Message stores the last message displayed in the logs. It is stored and checked by the
+	// controller to reduce the noise in the logs by only displying the message once.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// PodName is the pod assigned to execute the stage.
+	// +optional
+	PodName string `json:"podName,omitempty"`
 }
 
 type StatusPhase string

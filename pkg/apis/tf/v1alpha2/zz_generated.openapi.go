@@ -325,7 +325,7 @@ func schema_pkg_apis_tf_v1alpha2_TerraformStatus(ref common.ReferenceCallback) c
 					},
 					"exported": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Status of export if used",
+							Description: "ExportReady bool - when try can run eport on it... no tracking on it ExportStatus string - mostly the same thing, just easier to understand\n\nOr just move export to an entirely different controller. Accepts the same fileds of export, and reads in tf resource as ref. Benifit will run in foreround instead of background. The cons are a new controller to maintain. Status of export if used",
 							Type:        []string{"string"},
 							Format:      "",
 						},
