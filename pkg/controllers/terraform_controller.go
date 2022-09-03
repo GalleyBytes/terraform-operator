@@ -143,7 +143,7 @@ type RunOptions struct {
 	prefixedName                        string
 	resourceLabels                      map[string]string
 	resourceName                        string
-	runType                             tfv1alpha2.TaskType
+	taskType                            tfv1alpha2.TaskType
 	saveOutputs                         bool
 	secretData                          map[string][]byte
 	serviceAccount                      string
@@ -342,7 +342,7 @@ func newRunOptions(tf *tfv1alpha2.Terraform, runType tfv1alpha2.TaskType, genera
 		credentials:                         credentials,
 		terraformVersion:                    terraformVersion,
 		image:                               image,
-		runType:                             runType,
+		taskType:                            runType,
 		resourceLabels:                      resourceLabels,
 		serviceAccount:                      serviceAccount,
 		mainModuleAddonData:                 make(map[string]string),
@@ -473,14 +473,18 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	//
 	// 	}
 	// }
-	stage := checkSetNewStage(tf)
+	stage := r.checkSetNewStage(ctx, tf)
 	if stage != nil {
-		reqLogger.V(3).Info(fmt.Sprintf("Stage moving from '%s' -> '%s'", tf.Status.Stage.PodType, stage.PodType))
 		tf.Status.Stage = *stage
+		if stage.Reason == "RESTARTED_WORKFLOW" || stage.Reason == "RESTARTED_DELETE_WORKFLOW" {
+			_ = r.removeOldPlan(tf)
+			// TODO what to do if the remove old plan function fails
+		}
+		reqLogger.V(2).Info(fmt.Sprintf("Stage moving from '%s' -> '%s'", tf.Status.Stage.TaskType, stage.TaskType))
 		desiredStatus := tf.Status
 		err := r.updateStatusWithRetry(ctx, tf, &desiredStatus, reqLogger)
 		if err != nil {
-			reqLogger.V(1).Info(fmt.Sprintf("Error adding stage '%s': %s", stage.PodType, err.Error()))
+			reqLogger.V(1).Info(fmt.Sprintf("Error adding stage '%s': %s", stage.TaskType, err.Error()))
 		}
 		if tf.Spec.KeepLatestPodsOnly {
 			go r.backgroundReapOldGenerationPods(tf, 0)
@@ -489,36 +493,9 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	}
 
 	currentStage := tf.Status.Stage
-	podType := currentStage.PodType
+	podType := currentStage.TaskType
 	generation := currentStage.Generation
-	runOpts := newRunOptions(tf, currentStage.PodType, generation)
-
-	/*
-		The export repo will be it's own project and
-		will use the tf resource as a ref.  The
-		ref will look for the status to get the
-		stage's generation and have logic to decide
-		if it should do an export. The export fields
-			will be removed from the v1alpha2 api and
-			added to the export controller.
-	*/
-
-	// if OLDTF.Spec.ExportRepo != nil && podType != tfv1alpha1.PodSetup {
-	// 	// Run the export-runner
-	// 	exportedStatus, err := r.exportRepo(ctx, OLDTF, runOpts, generation, reqLogger)
-	// 	if err != nil {
-	// 		return reconcile.Result{}, err
-	// 	}
-	// 	if OLDTF.Status.Exported != exportedStatus {
-	// 		OLDTF.Status.Exported = exportedStatus
-	// 		err := r.OLD_updateStatus(ctx, OLDTF)
-	// 		if err != nil {
-	// 			reqLogger.V(1).Info(err.Error())
-	// 			return reconcile.Result{}, err
-	// 		}
-	// 		return reconcile.Result{}, nil
-	// 	}
-	// }
+	runOpts := newRunOptions(tf, currentStage.TaskType, generation)
 
 	if podType == tfv1alpha2.RunNil {
 		// podType is blank when the terraform workflow has completed for
@@ -599,14 +576,6 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		return reconcile.Result{}, nil
 	}
 
-	// if 1 > 0 {
-	// 	// fmt.Println(utils.PrettyStruct(runOpts))
-	// 	fmt.Printf("%+v\n", runOpts)
-	// 	reqLogger.Info("Not doing anything until further notice.")
-	// 	return reconcile.Result{}, nil
-	// }
-	// OLDTF := &tfv1alpha1.Terraform{}
-
 	if len(pods.Items) == 0 {
 		// Trigger a new pod when no pods are found for current stage
 		reqLogger.V(1).Info(fmt.Sprintf("Setting up the '%s' pod", podType))
@@ -641,6 +610,20 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	podPhase := pods.Items[0].Status.Phase
 	msg := fmt.Sprintf("Pod '%s' %s", podName, podPhase)
 
+	// if tf.Status.Stage.PodName != podName {
+	// 	if tf.Status.Stage.PodName == "" {
+	// 		// This is the first time this pod is found. Set the rerun attempt to 0
+	// 		tf.Status.Stage.RerunAttempt = 0
+	// 	} else {
+	// 		tf.Status.Stage.RerunAttempt++
+	// 	}
+	// }
+	tf.Status.Stage.PodName = podName
+	if tf.Status.Stage.Message != msg {
+		tf.Status.Stage.Message = msg
+		reqLogger.Info(msg)
+	}
+
 	// TODO Does the user need reason and message?
 	// reason := pods.Items[0].Status.Reason
 	// message := pods.Items[0].Status.Message
@@ -650,7 +633,6 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	// if message != "" {
 	// 	msg = fmt.Sprintf("%s %s", msg, message)
 	// }
-	reqLogger.V(1).Info(msg)
 
 	if pods.Items[0].Status.Phase == corev1.PodFailed {
 		tf.Status.Stage.State = tfv1alpha2.StateFailed
@@ -680,6 +662,14 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		return reconcile.Result{}, nil
 	}
 
+	// Finally, update any statuses that have been changed if not already saved. This is probablye
+	// for pending condition that does not require anything to be done.
+	err = r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
+	if err != nil {
+		reqLogger.V(1).Info(err.Error())
+		return reconcile.Result{}, err
+	}
+
 	// TODO should tf operator "auto" reconciliate (eg plan+apply)?
 	// TODO how should we handle manually triggering apply
 	return reconcile.Result{}, nil
@@ -705,7 +695,7 @@ func (r ReconcileTerraform) getTerraformResource(ctx context.Context, namespaced
 	return tf, nil
 }
 
-func newStage(tf *tfv1alpha2.Terraform, runType tfv1alpha2.TaskType, reason string, interruptible tfv1alpha2.Interruptible, stageState tfv1alpha2.StageState) *tfv1alpha2.Stage {
+func newStage(tf *tfv1alpha2.Terraform, taskType tfv1alpha2.TaskType, reason string, interruptible tfv1alpha2.Interruptible, stageState tfv1alpha2.StageState) *tfv1alpha2.Stage {
 	if reason == "GENERATION_CHANGE" {
 		tf.Status.Exported = tfv1alpha2.ExportedFalse
 		tf.Status.Phase = tfv1alpha2.PhaseInitializing
@@ -720,7 +710,7 @@ func newStage(tf *tfv1alpha2.Terraform, runType tfv1alpha2.TaskType, reason stri
 		Interruptible: interruptible,
 		Reason:        reason,
 		State:         stageState,
-		PodType:       runType,
+		TaskType:      taskType,
 		StartTime:     startTime,
 		StopTime:      stopTime,
 	}
@@ -753,21 +743,21 @@ func getConfiguredTasks(taskOptions *[]tfv1alpha2.TaskOption) []tfv1alpha2.TaskT
 	return tasks
 }
 
-// checkSetNewStage uses the tf resource's `.status.stage` state to find the next stage of the terraform run. The following set of rules are used:
+// checkSetNewStage uses the tf resource's `.status.stage` state to find the next stage of the terraform run.
+// The following set of rules are used:
 //
-// 1. Generation - Check that the resource's generation matches the stage's generation. When the generation changes the old generation can no longer add a new stage.
+// 1. Generation - Check that the resource's generation matches the stage's generation. When the generation
+// changes the old generation can no longer add a new stage.
 //
-// 2. Check that the current stage is completed. If it is not, this function returns false and the pod status will be determined which will update the stage for the next iteration.
+// 2. Check that the current stage is completed. If it is not, this function returns false and the pod status
+// will be determined which will update the stage for the next iteration.
 //
 // 3. Scripts defined in the tf resource manifest will trigger the script runner podTypes.
 //
-// When a stage has already triggered a pod, the only way for the pod to
-// transition to the next stage is for the pod to complete successfully. Any
-// other pod phase will keep the pod in the current stage.
-//
-// TODO Should stages be cleaned? If not, the `.status.stages` list can become very long.
-//
-func checkSetNewStage(tf *tfv1alpha2.Terraform) *tfv1alpha2.Stage {
+// When a stage has already triggered a pod, the only way for the pod to transition to the next stage is for
+// the pod to complete successfully. Any other pod phase will keep the pod in the current stage, or in the
+// case of the apply task, the workflow will be restarted.
+func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1alpha2.Terraform) *tfv1alpha2.Stage {
 	var isNewStage bool
 	var podType tfv1alpha2.TaskType
 	var reason string
@@ -785,7 +775,7 @@ func checkSetNewStage(tf *tfv1alpha2.Terraform) *tfv1alpha2.Stage {
 	interruptible := tfv1alpha2.CanBeInterrupt
 
 	currentStage := tf.Status.Stage
-	currentStagePodType := currentStage.PodType
+	currentStagePodType := currentStage.TaskType
 	currentStageCanNotBeInterrupted := currentStage.Interruptible == tfv1alpha2.CanNotBeInterrupt
 	currentStageIsRunning := currentStage.State == tfv1alpha2.StateInProgress
 	isNewGeneration := currentStage.Generation != tf.Generation
@@ -813,7 +803,7 @@ func checkSetNewStage(tf *tfv1alpha2.Terraform) *tfv1alpha2.Stage {
 
 	} else if currentStage.State == tfv1alpha2.StateComplete {
 		isNewStage = true
-		reason = fmt.Sprintf("COMPLETED_%s", strings.ToUpper(currentStage.PodType.String()))
+		reason = fmt.Sprintf("COMPLETED_%s", strings.ToUpper(currentStage.TaskType.String()))
 
 		switch currentStagePodType {
 
@@ -827,6 +817,28 @@ func checkSetNewStage(tf *tfv1alpha2.Terraform) *tfv1alpha2.Stage {
 				stageState = tfv1alpha2.StateComplete
 			}
 		}
+	} else if currentStage.State == tfv1alpha2.StateFailed {
+		if currentStage.TaskType == tfv1alpha2.RunApply {
+
+			err := r.Client.Get(ctx, types.NamespacedName{Namespace: tf.Namespace, Name: tf.Status.Stage.PodName}, &corev1.Pod{})
+			if err != nil && errors.IsNotFound(err) {
+				// If the task failed, is of type "apply", and the pod does not exist, restart the workflow.
+				isNewStage = true
+				reason = "RESTARTED_WORKFLOW"
+				podType = nextTask(tfv1alpha2.RunPostInit, configuredTasks)
+				interruptible = isTaskInterruptable(podType)
+			}
+		} else if currentStage.TaskType == tfv1alpha2.RunApplyDelete {
+			pod := corev1.Pod{}
+			err := r.Client.Get(ctx, types.NamespacedName{Namespace: tf.Namespace, Name: tf.Status.Stage.PodName}, &pod)
+			if err != nil && errors.IsNotFound(err) {
+				// If the task failed, is of type "apply", and the pod does not exist, restart the workflow.
+				isNewStage = true
+				reason = "RESTARTED_DELETE_WORKFLOW"
+				podType = nextTask(tfv1alpha2.RunPostInitDelete, configuredTasks)
+				interruptible = isTaskInterruptable(podType)
+			}
+		}
 
 	}
 	if !isNewStage {
@@ -834,6 +846,48 @@ func checkSetNewStage(tf *tfv1alpha2.Terraform) *tfv1alpha2.Stage {
 	}
 	return newStage(tf, podType, reason, interruptible, stageState)
 
+}
+
+func (r ReconcileTerraform) removeOldPlan(tf *tfv1alpha2.Terraform) error {
+	labelSelectors := []string{
+		fmt.Sprintf("terraforms.tf.isaaguilar.com/generation==%d", tf.Generation),
+		fmt.Sprintf("terraforms.tf.isaaguilar.com/resourceName=%s", tf.Name),
+		"app.kubernetes.io/instance",
+	}
+	if tf.Status.Stage.Reason == "RESTARTED_WORKFLOW" {
+		labelSelectors = append(labelSelectors, []string{
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunSetup),
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunPreInit),
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunInit),
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunPostInit),
+		}...)
+	} else if tf.Status.Stage.Reason == "RESTARTED_DELETE_WORKFLOW" {
+		labelSelectors = append(labelSelectors, []string{
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunSetupDelete),
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunPreInitDelete),
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunInitDelete),
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunPostInitDelete),
+		}...)
+	}
+	labelSelector, err := labels.Parse(strings.Join(labelSelectors, ","))
+	if err != nil {
+		return err
+	}
+	fieldSelector, err := fields.ParseSelector("status.phase!=Running")
+	if err != nil {
+		return err
+	}
+	err = r.Client.DeleteAllOf(context.TODO(), &corev1.Pod{}, &client.DeleteAllOfOptions{
+		ListOptions: client.ListOptions{
+			LabelSelector: labelSelector,
+			Namespace:     tf.Namespace,
+			FieldSelector: fieldSelector,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // These are pods that are known to cause issues with terraform state when
@@ -1837,7 +1891,7 @@ func (r RunOptions) generatePVC(size resource.Quantity) *corev1.PersistentVolume
 func (r RunOptions) generatePod() *corev1.Pod {
 
 	home := "/home/tfo-runner"
-	generateName := r.versionedName + "-" + r.runType.String() + "-"
+	generateName := r.versionedName + "-" + r.taskType.String() + "-"
 	generationPath := fmt.Sprintf("%s/generations/%d", home, r.generation)
 
 	runnerLabels := r.labels
@@ -1855,7 +1909,7 @@ func (r RunOptions) generatePod() *corev1.Pod {
 
 			*/
 			Name:  "TFO_TASK",
-			Value: r.runType.String(),
+			Value: r.taskType.String(),
 		},
 		{
 			Name:  "TFO_TASK_EXEC_URL_SOURCE",
@@ -2140,7 +2194,7 @@ func (r RunOptions) generatePod() *corev1.Pod {
 	for key, value := range r.resourceLabels {
 		runnerLabels[key] = value
 	}
-	runnerLabels["app.kubernetes.io/instance"] = r.runType.String()
+	runnerLabels["app.kubernetes.io/instance"] = r.taskType.String()
 
 	// Make sure to use the same uid for containers so the dir in the
 	// PersistentVolume have the correct permissions for the user

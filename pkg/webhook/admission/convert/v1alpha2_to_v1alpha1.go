@@ -34,7 +34,7 @@ func ConvertV1alpha2ToV1alpha1(rawRequest []byte) ([]byte, runtime.Object, error
 		{
 			Generation:    have.Status.Stage.Generation,
 			State:         tfv1alpha1.StageState(have.Status.Stage.State),
-			PodType:       tfv1alpha1.PodType(have.Status.Stage.PodType),
+			PodType:       tfv1alpha1.PodType(have.Status.Stage.TaskType),
 			Interruptible: tfv1alpha1.Interruptible(have.Status.Stage.Interruptible),
 			Reason:        have.Status.Stage.Reason,
 			StartTime:     have.Status.Stage.StartTime,

@@ -188,7 +188,7 @@ func ConvertV1alpha1ToV1alpha2(rawRequest []byte) ([]byte, runtime.Object, error
 		want.Status.Stages = append(want.Status.Stages, tfv1alpha2.Stage{
 			Generation:    stage.Generation,
 			State:         tfv1alpha2.StageState(stage.State),
-			PodType:       runTypeFromPodType(stage.PodType),
+			TaskType:      runTypeFromPodType(stage.PodType),
 			Interruptible: tfv1alpha2.Interruptible(stage.Interruptible),
 			Reason:        stage.Reason,
 			StartTime:     stage.StartTime,
@@ -200,11 +200,13 @@ func ConvertV1alpha1ToV1alpha2(rawRequest []byte) ([]byte, runtime.Object, error
 		want.Status.Stage = tfv1alpha2.Stage{
 			Generation:    lastStage.Generation,
 			State:         tfv1alpha2.StageState(lastStage.State),
-			PodType:       runTypeFromPodType(lastStage.PodType),
+			TaskType:      runTypeFromPodType(lastStage.PodType),
 			Interruptible: tfv1alpha2.Interruptible(lastStage.Interruptible),
 			Reason:        lastStage.Reason,
 			StartTime:     lastStage.StartTime,
 			StopTime:      lastStage.StopTime,
+			PodName:       "",
+			Message:       "",
 		}
 	}
 	want.Status.Phase = tfv1alpha2.StatusPhase(have.Status.Phase)
