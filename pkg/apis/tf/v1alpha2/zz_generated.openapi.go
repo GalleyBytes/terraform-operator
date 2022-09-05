@@ -30,9 +30,675 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Terraform":       schema_pkg_apis_tf_v1alpha2_Terraform(ref),
-		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.TerraformSpec":   schema_pkg_apis_tf_v1alpha2_TerraformSpec(ref),
-		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.TerraformStatus": schema_pkg_apis_tf_v1alpha2_TerraformStatus(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.AWSCredentials":    schema_pkg_apis_tf_v1alpha2_AWSCredentials(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ConfigMapSelector": schema_pkg_apis_tf_v1alpha2_ConfigMapSelector(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Credentials":       schema_pkg_apis_tf_v1alpha2_Credentials(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.GitHTTPS":          schema_pkg_apis_tf_v1alpha2_GitHTTPS(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.GitSCM":            schema_pkg_apis_tf_v1alpha2_GitSCM(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.GitSSH":            schema_pkg_apis_tf_v1alpha2_GitSSH(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ImageConfig":       schema_pkg_apis_tf_v1alpha2_ImageConfig(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Images":            schema_pkg_apis_tf_v1alpha2_Images(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Module":            schema_pkg_apis_tf_v1alpha2_Module(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ProxyOpts":         schema_pkg_apis_tf_v1alpha2_ProxyOpts(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ResourceDownload":  schema_pkg_apis_tf_v1alpha2_ResourceDownload(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.SCMAuthMethod":     schema_pkg_apis_tf_v1alpha2_SCMAuthMethod(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.SSHKeySecretRef":   schema_pkg_apis_tf_v1alpha2_SSHKeySecretRef(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.SecretNameRef":     schema_pkg_apis_tf_v1alpha2_SecretNameRef(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Setup":             schema_pkg_apis_tf_v1alpha2_Setup(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.StageScript":       schema_pkg_apis_tf_v1alpha2_StageScript(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.TaskOption":        schema_pkg_apis_tf_v1alpha2_TaskOption(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Terraform":         schema_pkg_apis_tf_v1alpha2_Terraform(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.TerraformSpec":     schema_pkg_apis_tf_v1alpha2_TerraformSpec(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.TerraformStatus":   schema_pkg_apis_tf_v1alpha2_TerraformStatus(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.TokenSecretRef":    schema_pkg_apis_tf_v1alpha2_TokenSecretRef(ref),
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_AWSCredentials(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "AWSCredentials provides a few different k8s-specific methods of adding crednetials to pods. This includes KIAM and IRSA.\n\nTo use environment variables, use a secretNameRef instead.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"irsa": {
+						SchemaProps: spec.SchemaProps{
+							Description: "IRSA requires the irsa role-arn as the string input. This will create a serice account named tf-<resource-name>. In order for the pod to be able to use this role, the \"Trusted Entity\" of the IAM role must allow this serice account name and namespace.\n\nUsing a TrustEntity policy that includes \"StringEquals\" setting it as the serivce account name is the most secure way to use IRSA.\n\nHowever, for a reusable policy consider \"StringLike\" with a few wildcards to make the irsa role usable by pods created by terraform-operator. The example below is pretty liberal, but will work for any pod created by the terraform-operator.\n\n```json\n  {\n    \"Version\": \"2012-10-17\",\n    \"Statement\": [\n      {\n        \"Effect\": \"Allow\",\n        \"Principal\": {\n          \"Federated\": \"${OIDC_ARN}\"\n        },\n        \"Action\": \"sts:AssumeRoleWithWebIdentity\",\n        \"Condition\": {\n          \"StringLike\": {\n            \"${OIDC_URL}:sub\": \"system:serviceaccount:*:tf-*\"\n          }\n        }\n      }\n    ]\n  }\n```\n\nThis option is just a specialized version of Credentials.ServiceAccountAnnotations and will be a candidate of removal in the future.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"kiam": {
+						SchemaProps: spec.SchemaProps{
+							Description: "KIAM requires the kiam role-name as the string input. This will add the correct annotation to the terraform execution pod\n\nThis option is just a specialized version of Credentials.ServiceAccountAnnotations and will be a candidate of removal in the future.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_ConfigMapSelector(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "A simple selector for configmaps that can select on the name of the configmap with the optional key. The namespace is not an option since only runners with a namespace'd role will utilize this map.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"key": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+				},
+				Required: []string{"name"},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_Credentials(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "Credentials are used for adding credentials for terraform providers. For example, in AWS, the AWS Terraform Provider uses the default credential chain of the AWS SDK, one of which are environment variables (eg AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"secretNameRef": {
+						SchemaProps: spec.SchemaProps{
+							Description: "SecretNameRef will load environment variables into the terraform runner from a kubernetes secret",
+							Default:     map[string]interface{}{},
+							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.SecretNameRef"),
+						},
+					},
+					"aws": {
+						SchemaProps: spec.SchemaProps{
+							Description: "AWSCredentials contains the different methods to load AWS credentials for the Terraform AWS Provider. If using AWS_ACCESS_KEY_ID and/or environment variables for credentials, use fromEnvs.",
+							Default:     map[string]interface{}{},
+							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.AWSCredentials"),
+						},
+					},
+					"serviceAccountAnnotations": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ServiceAccountAnnotations allows the service account to be annotated with cloud IAM roles such as Workload Identity on GCP",
+							Type:        []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.AWSCredentials", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.SecretNameRef"},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_GitHTTPS(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "GitHTTPS configures the setup for git over https using tokens. Proxy is not supported in the terraform job pod at this moment",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"requireProxy": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"boolean"},
+							Format: "",
+						},
+					},
+					"tokenSecretRef": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.TokenSecretRef"),
+						},
+					},
+				},
+				Required: []string{"tokenSecretRef"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.TokenSecretRef"},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_GitSCM(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "GitSCM define the auth methods of git",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"ssh": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.GitSSH"),
+						},
+					},
+					"https": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.GitHTTPS"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.GitHTTPS", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.GitSSH"},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_GitSSH(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "GitSSH configurs the setup for git over ssh with optional proxy",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"requireProxy": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"boolean"},
+							Format: "",
+						},
+					},
+					"sshKeySecretRef": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.SSHKeySecretRef"),
+						},
+					},
+				},
+				Required: []string{"sshKeySecretRef"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.SSHKeySecretRef"},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_ImageConfig(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ImageConfig describes a task class's container image and image pull policy.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"image": {
+						SchemaProps: spec.SchemaProps{
+							Description: "The container image from the registry; tags must be omitted",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"imagePullPolicy": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always if :latest tag is specified, or IfNotPresent otherwise. Cannot be updated. More info: https://kubernetes.io/docs/concepts/containers/images#updating-images",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"image"},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_Images(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "Images describes the container images used by task classes",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"terraform": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Terraform task type container image definition",
+							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ImageConfig"),
+						},
+					},
+					"script": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Script task type container image definition",
+							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ImageConfig"),
+						},
+					},
+					"setup": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Setup task type container image definition",
+							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ImageConfig"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ImageConfig"},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_Module(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "Module has the different types of ways to define a terraform module. The order of precendence is\n    1. inline\n    2. configMapSelector\n    3. source[/version]",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"source": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Source accepts a subset of the terraform \"Module Source\" ways of defining a module. Terraform Operator prefers modules that are defined in a git repo as opposed to other scm types. Refer to https://www.terraform.io/language/modules/sources#module-sources for more details.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"version": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Version to select from a terraform registry. For version to be used, source must be defined. Refer to https://www.terraform.io/language/modules/sources#module-sources for more details",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"configMapSeclector": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ConfigMapSelector is an option that points to an existing configmap on the executing cluster. The configmap is expected to contains has the terraform module (ie keys ending with .tf). The configmap would need to live in the same namespace as the tfo resource.\n\nThe configmap is mounted as a volume and put into the TFO_MAIN_MODULE path by the setup task.\n\nIf a key is defined, the value is used as the module else the entirety of the data objects will be loaded as files.",
+							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ConfigMapSelector"),
+						},
+					},
+					"inline": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Inline used to define an entire terraform module inline and then mounted in the TFO_MAIN_MODULE path.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ConfigMapSelector"},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_ProxyOpts(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ProxyOpts configures ssh tunnel/socks5 for downloading ssh/https resources",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"host": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"user": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"sshKeySecretRef": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.SSHKeySecretRef"),
+						},
+					},
+				},
+				Required: []string{"sshKeySecretRef"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.SSHKeySecretRef"},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_ResourceDownload(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ResourceDownload (formerly SrcOpts) defines a resource to fetch using one of the configured protocols: ssh|http|https (eg git::SSH or git::HTTPS)",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"address": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Address defines the source address resources to fetch.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"path": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Path will download the resources into this path which is relative to the main module directory.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"useAsVar": {
+						SchemaProps: spec.SchemaProps{
+							Description: "UseAsVar will add the file as a tfvar via the -var-file flag of the terraform plan command. The downloaded resource must not be a directory.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"address"},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_SCMAuthMethod(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "SCMAuthMethod definition of SCMs that require tokens/keys",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"host": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"git": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Git configuration options for auth methods of git",
+							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.GitSCM"),
+						},
+					},
+				},
+				Required: []string{"host"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.GitSCM"},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_SSHKeySecretRef(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "SSHKeySecretRef defines the secret where the SSH key (for the proxy, git, etc) is stored",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Name the secret name that has the SSH key",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"namespace": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Namespace of the secret; Default is the namespace of the terraform resource",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"key": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Key in the secret ref. Default to `id_rsa`",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"name"},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_SecretNameRef(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "SecretNameRef is the name of the kubernetes secret to use",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Name of the secret",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"namespace": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Namespace of the secret; Defaults to namespace of the tf resource",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"key": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Key of the secret",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"name"},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_Setup(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "Setup are things that only happen during the life of the setup task.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"resourceDownloads": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ResourceDownloads defines other files to download into the module directory that can be used by the terraform workflow runners. The `tfvar` type will also be fetched by the `exportRepo` option (if defined) to aggregate the set of tfvars to save to an scm system.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ResourceDownload"),
+									},
+								},
+							},
+						},
+					},
+					"cleanupDisk": {
+						SchemaProps: spec.SchemaProps{
+							Description: "CleanupDisk will clear out previous terraform run data from the persistent volume.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ResourceDownload"},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_StageScript(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "StageScript defines the different ways of sourcing execution scripts of tasks. There is an order of precendence of selecting which source is used, which is:\n    1. inline\n    2. configMapSelector\n    3. source",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"source": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Source is an http source that the task container will fetch and then execute.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"configMapSelector": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ConfigMapSelector reads a in a script from a configmap name+key",
+							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ConfigMapSelector"),
+						},
+					},
+					"inline": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Inline is used to write the entire task execution script in the tfo resource.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ConfigMapSelector"},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_TaskOption(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "TaskOption are different configuration options to be injected into task pods. Can apply to one ore more task pods.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"affects": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Affects is a list of tasks these options will get applied to.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"policyRules": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RunnerRules are RBAC rules that will be added to all runner pods.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("k8s.io/api/rbac/v1.PolicyRule"),
+									},
+								},
+							},
+						},
+					},
+					"labels": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Labels extra labels to add task pods.",
+							Type:        []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"annotations": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Annotaitons extra annotaitons to add the task pods",
+							Type:        []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"envFrom": {
+						SchemaProps: spec.SchemaProps{
+							Description: "List of sources to populate environment variables in the container. The keys defined within a source must be a C_IDENTIFIER. All invalid keys will be reported as an event when the container is starting. When a key exists in multiple sources, the value associated with the last source will take precedence. Values defined by an Env with a duplicate key will take precedence. Cannot be updated.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("k8s.io/api/core/v1.EnvFromSource"),
+									},
+								},
+							},
+						},
+					},
+					"env": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-patch-merge-key": "name",
+								"x-kubernetes-patch-strategy":  "merge",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "List of environment variables to set in the task pods.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("k8s.io/api/core/v1.EnvVar"),
+									},
+								},
+							},
+						},
+					},
+					"resources": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Compute Resources required by the task pods.",
+							Ref:         ref("k8s.io/api/core/v1.ResourceRequirements"),
+						},
+					},
+					"script": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Script is used to configure the source of the task's executable script.",
+							Default:     map[string]interface{}{},
+							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.StageScript"),
+						},
+					},
+				},
+				Required: []string{"affects"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.StageScript", "k8s.io/api/core/v1.EnvFromSource", "k8s.io/api/core/v1.EnvVar", "k8s.io/api/core/v1.ResourceRequirements", "k8s.io/api/rbac/v1.PolicyRule"},
 	}
 }
 
@@ -231,7 +897,7 @@ func schema_pkg_apis_tf_v1alpha2_TerraformSpec(ref common.ReferenceCallback) com
 					},
 					"backend": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Backend is mandatory terraform backend configuration. Must use a valid terraform backend block. For more information see https://www.terraform.io/language/settings/backends/configuration\n\nExample usage of the kubernetes cluster as a backend:\n\n  terraform {\n   backend \"kubernetes\" {\n    secret_suffix     = \"all-task-types\"\n    namespace         = \"default\"\n    in_cluster_config = true\n   }\n  }\n\nExample of a remote backend:\n\n  terraform {\n   backend \"remote\" {\n    organization = \"example_corp\"\n    workspaces {\n      name = \"my-app-prod\"\n    }\n   }\n  }",
+							Description: "Backend is mandatory terraform backend configuration. Must use a valid terraform backend block. For more information see https://www.terraform.io/language/settings/backends/configuration\n\nExample usage of the kubernetes cluster as a backend:\n\n```hcl\n  terraform {\n   backend \"kubernetes\" {\n    secret_suffix     = \"all-task-types\"\n    namespace         = \"default\"\n    in_cluster_config = true\n   }\n  }\n```\n\nExample of a remote backend:\n\n```hcl\n  terraform {\n   backend \"remote\" {\n    organization = \"example_corp\"\n    workspaces {\n      name = \"my-app-prod\"\n    }\n   }\n  }\n```\n\nUsage of the kubernetes backend is only available as of terraform v0.13+.",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
@@ -336,5 +1002,41 @@ func schema_pkg_apis_tf_v1alpha2_TerraformStatus(ref common.ReferenceCallback) c
 		},
 		Dependencies: []string{
 			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Stage"},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_TokenSecretRef(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "TokenSecretRef defines the token or password that can be used to log into a system (eg git)",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Name the secret name that has the token or password",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"namespace": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Namespace of the secret; Default is the namespace of the terraform resource",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"key": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Key in the secret ref. Default to `token`",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"name"},
+			},
+		},
 	}
 }

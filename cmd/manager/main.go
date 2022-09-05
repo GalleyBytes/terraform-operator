@@ -39,10 +39,10 @@ func main() {
 	var enableLeaderElection bool
 	var probeAddr string
 	var maxConcurrentReconciles int
-	var enableConversionWebhook bool
+	var disableConversionWebhook bool
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
-	flag.BoolVar(&enableConversionWebhook, "enable-conversion-webhook", false, "Enable the conversion webhook")
+	flag.BoolVar(&disableConversionWebhook, "disable-conversion-webhook", false, "Set to true to disable the conversion webhook")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -98,7 +98,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if enableConversionWebhook {
+	if !disableConversionWebhook {
 		mgr.GetWebhookServer().Register("/conversion", admission.NewConversionWebhook(ctrl.Log.WithName("conversion")))
 	}
 

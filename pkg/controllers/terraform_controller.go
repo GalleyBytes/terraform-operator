@@ -46,14 +46,10 @@ func (r *ReconcileTerraform) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	if os.Getenv("DO_NOT_RECONCILE") != "" {
-		/*
-
-			Webhooks only! useful for testing
-
-		*/
+		// This is useful for testing webhooks
 		return nil
 	}
-	// only listedn to v1alpha2
+	// only listen to v1alpha2
 	err := ctrl.NewControllerManagedBy(mgr).
 		For(&tfv1alpha2.Terraform{}).
 		Watches(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForOwner{
@@ -91,6 +87,7 @@ type ParsedAddress struct {
 	// Path the target path for the downloaded file or directory
 	Path string `json:"path"`
 
+	// The files downloaded get called out in the terraform plan as -var-file
 	UseAsVar bool `json:"useAsVar"`
 
 	// Url is the raw address + query
@@ -123,7 +120,7 @@ type ParsedAddress struct {
 	Repo string `json:"repo"`
 }
 
-type RunOptions struct {
+type TaskOptions struct {
 	annotations                         map[string]string
 	configMapSourceName                 string
 	configMapSourceKey                  string
@@ -143,7 +140,7 @@ type RunOptions struct {
 	prefixedName                        string
 	resourceLabels                      map[string]string
 	resourceName                        string
-	taskType                            tfv1alpha2.TaskType
+	task                                tfv1alpha2.TaskName
 	saveOutputs                         bool
 	secretData                          map[string][]byte
 	serviceAccount                      string
@@ -155,7 +152,7 @@ type RunOptions struct {
 	versionedName                       string
 }
 
-func newRunOptions(tf *tfv1alpha2.Terraform, runType tfv1alpha2.TaskType, generation int64) RunOptions {
+func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generation int64) TaskOptions {
 	// TODO Read the tfstate and decide IF_NEW_RESOURCE based on that
 	// applyAction := false
 	resourceName := tf.Name
@@ -181,8 +178,8 @@ func newRunOptions(tf *tfv1alpha2.Terraform, runType tfv1alpha2.TaskType, genera
 	// TaskOptions have data for all the tasks but since we're only interested
 	// in the ones for this taskType, extract and add them to RunOptions
 	for _, taskOption := range tf.Spec.TaskOptions {
-		if tfv1alpha2.ListContainsRunType(taskOption.TaskTypes, runType) ||
-			tfv1alpha2.ListContainsRunType(taskOption.TaskTypes, "*") {
+		if tfv1alpha2.ListContainsTask(taskOption.Affects, task) ||
+			tfv1alpha2.ListContainsTask(taskOption.Affects, "*") {
 			policyRules = append(policyRules, taskOption.PolicyRules...)
 			for key, value := range taskOption.Annotations {
 				annotations[key] = value
@@ -193,7 +190,7 @@ func newRunOptions(tf *tfv1alpha2.Terraform, runType tfv1alpha2.TaskType, genera
 			env = append(env, taskOption.Env...)
 			envFrom = append(envFrom, taskOption.EnvFrom...)
 		}
-		if tfv1alpha2.ListContainsRunType(taskOption.TaskTypes, runType) {
+		if tfv1alpha2.ListContainsTask(taskOption.Affects, task) {
 			urlSource = taskOption.Script.Source
 			if configMapSelector := taskOption.Script.ConfigMapSelector; configMapSelector != nil {
 				configMapSourceName = configMapSelector.Name
@@ -245,7 +242,7 @@ func newRunOptions(tf *tfv1alpha2.Terraform, runType tfv1alpha2.TaskType, genera
 		images.Script.Image = "ghcr.io/galleybytes/terraform-operator-script:1.0.0"
 	}
 
-	terraformRunTypes := []tfv1alpha2.TaskType{
+	terraformTasks := []tfv1alpha2.TaskName{
 		tfv1alpha2.RunInit,
 		tfv1alpha2.RunInitDelete,
 		tfv1alpha2.RunPlan,
@@ -254,7 +251,7 @@ func newRunOptions(tf *tfv1alpha2.Terraform, runType tfv1alpha2.TaskType, genera
 		tfv1alpha2.RunApplyDelete,
 	}
 
-	scriptRunTypes := []tfv1alpha2.TaskType{
+	scriptTasks := []tfv1alpha2.TaskName{
 		tfv1alpha2.RunPreInit,
 		tfv1alpha2.RunPreInitDelete,
 		tfv1alpha2.RunPostInit,
@@ -269,24 +266,24 @@ func newRunOptions(tf *tfv1alpha2.Terraform, runType tfv1alpha2.TaskType, genera
 		tfv1alpha2.RunPostApplyDelete,
 	}
 
-	setupRunTypes := []tfv1alpha2.TaskType{
+	setupTasks := []tfv1alpha2.TaskName{
 		tfv1alpha2.RunSetup,
 		tfv1alpha2.RunSetupDelete,
 	}
 
-	if tfv1alpha2.ListContainsRunType(terraformRunTypes, runType) {
+	if tfv1alpha2.ListContainsTask(terraformTasks, task) {
 		image = images.Terraform.Image
 		imagePullPolicy = images.Terraform.ImagePullPolicy
 		if urlSource == "" {
 			urlSource = "https://raw.githubusercontent.com/GalleyBytes/terraform-operator-tasks/master/tf.sh"
 		}
-	} else if tfv1alpha2.ListContainsRunType(scriptRunTypes, runType) {
+	} else if tfv1alpha2.ListContainsTask(scriptTasks, task) {
 		image = images.Script.Image
 		imagePullPolicy = images.Script.ImagePullPolicy
 		if urlSource == "" {
 			urlSource = "https://raw.githubusercontent.com/GalleyBytes/terraform-operator-tasks/master/noop.sh"
 		}
-	} else if tfv1alpha2.ListContainsRunType(setupRunTypes, runType) {
+	} else if tfv1alpha2.ListContainsTask(setupTasks, task) {
 		image = images.Setup.Image
 		imagePullPolicy = images.Setup.ImagePullPolicy
 		if urlSource == "" {
@@ -325,7 +322,7 @@ func newRunOptions(tf *tfv1alpha2.Terraform, runType tfv1alpha2.TaskType, genera
 		cleanupDisk = tf.Spec.Setup.CleanupDisk
 	}
 
-	return RunOptions{
+	return TaskOptions{
 		env:                                 env,
 		generation:                          generation,
 		configMapSourceName:                 configMapSourceName,
@@ -342,7 +339,7 @@ func newRunOptions(tf *tfv1alpha2.Terraform, runType tfv1alpha2.TaskType, genera
 		credentials:                         credentials,
 		terraformVersion:                    terraformVersion,
 		image:                               image,
-		taskType:                            runType,
+		task:                                task,
 		resourceLabels:                      resourceLabels,
 		serviceAccount:                      serviceAccount,
 		mainModuleAddonData:                 make(map[string]string),
@@ -438,10 +435,10 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 
 	// Add the first stage
 	if tf.Status.Stage.Generation == 0 {
-		runType := tfv1alpha2.RunSetup
+		task := tfv1alpha2.RunSetup
 		stageState := tfv1alpha2.StateInitializing
 		interruptible := tfv1alpha2.CanNotBeInterrupt
-		stage := newStage(tf, runType, "TF_RESOURCE_CREATED", interruptible, stageState)
+		stage := newStage(tf, task, "TF_RESOURCE_CREATED", interruptible, stageState)
 		if stage == nil {
 			return reconcile.Result{}, fmt.Errorf("failed to create a new stage")
 		}
@@ -495,7 +492,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	currentStage := tf.Status.Stage
 	podType := currentStage.TaskType
 	generation := currentStage.Generation
-	runOpts := newRunOptions(tf, currentStage.TaskType, generation)
+	runOpts := newTaskOptions(tf, currentStage.TaskType, generation)
 
 	if podType == tfv1alpha2.RunNil {
 		// podType is blank when the terraform workflow has completed for
@@ -695,7 +692,7 @@ func (r ReconcileTerraform) getTerraformResource(ctx context.Context, namespaced
 	return tf, nil
 }
 
-func newStage(tf *tfv1alpha2.Terraform, taskType tfv1alpha2.TaskType, reason string, interruptible tfv1alpha2.Interruptible, stageState tfv1alpha2.StageState) *tfv1alpha2.Stage {
+func newStage(tf *tfv1alpha2.Terraform, taskType tfv1alpha2.TaskName, reason string, interruptible tfv1alpha2.Interruptible, stageState tfv1alpha2.StageState) *tfv1alpha2.Stage {
 	if reason == "GENERATION_CHANGE" {
 		tf.Status.Exported = tfv1alpha2.ExportedFalse
 		tf.Status.Phase = tfv1alpha2.PhaseInitializing
@@ -716,8 +713,8 @@ func newStage(tf *tfv1alpha2.Terraform, taskType tfv1alpha2.TaskType, reason str
 	}
 }
 
-func getConfiguredTasks(taskOptions *[]tfv1alpha2.TaskOption) []tfv1alpha2.TaskType {
-	tasks := []tfv1alpha2.TaskType{
+func getConfiguredTasks(taskOptions *[]tfv1alpha2.TaskOption) []tfv1alpha2.TaskName {
+	tasks := []tfv1alpha2.TaskName{
 		tfv1alpha2.RunSetup,
 		tfv1alpha2.RunInit,
 		tfv1alpha2.RunPlan,
@@ -731,12 +728,12 @@ func getConfiguredTasks(taskOptions *[]tfv1alpha2.TaskOption) []tfv1alpha2.TaskT
 		return tasks
 	}
 	for _, taskOption := range *taskOptions {
-		for _, runType := range taskOption.TaskTypes {
-			if runType == "*" {
+		for _, affected := range taskOption.Affects {
+			if affected == "*" {
 				continue
 			}
-			if !tfv1alpha2.ListContainsRunType(tasks, runType) {
-				tasks = append(tasks, runType)
+			if !tfv1alpha2.ListContainsTask(tasks, affected) {
+				tasks = append(tasks, affected)
 			}
 		}
 	}
@@ -759,7 +756,7 @@ func getConfiguredTasks(taskOptions *[]tfv1alpha2.TaskOption) []tfv1alpha2.TaskT
 // case of the apply task, the workflow will be restarted.
 func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1alpha2.Terraform) *tfv1alpha2.Stage {
 	var isNewStage bool
-	var podType tfv1alpha2.TaskType
+	var podType tfv1alpha2.TaskName
 	var reason string
 	configuredTasks := getConfiguredTasks(&tf.Spec.TaskOptions)
 
@@ -892,8 +889,8 @@ func (r ReconcileTerraform) removeOldPlan(tf *tfv1alpha2.Terraform) error {
 
 // These are pods that are known to cause issues with terraform state when
 // not run to completion.
-func isTaskInterruptable(task tfv1alpha2.TaskType) tfv1alpha2.Interruptible {
-	uninterruptibleTasks := []tfv1alpha2.TaskType{
+func isTaskInterruptable(task tfv1alpha2.TaskName) tfv1alpha2.Interruptible {
+	uninterruptibleTasks := []tfv1alpha2.TaskName{
 		tfv1alpha2.RunInit,
 		tfv1alpha2.RunPlan,
 		tfv1alpha2.RunApply,
@@ -901,14 +898,14 @@ func isTaskInterruptable(task tfv1alpha2.TaskType) tfv1alpha2.Interruptible {
 		tfv1alpha2.RunPlanDelete,
 		tfv1alpha2.RunApplyDelete,
 	}
-	if tfv1alpha2.ListContainsRunType(uninterruptibleTasks, task) {
+	if tfv1alpha2.ListContainsTask(uninterruptibleTasks, task) {
 		return tfv1alpha2.CanNotBeInterrupt
 	}
 	return tfv1alpha2.CanBeInterrupt
 }
 
-func nextTask(currentTask tfv1alpha2.TaskType, configuredTasks []tfv1alpha2.TaskType) tfv1alpha2.TaskType {
-	tasksInOrder := []tfv1alpha2.TaskType{
+func nextTask(currentTask tfv1alpha2.TaskName, configuredTasks []tfv1alpha2.TaskName) tfv1alpha2.TaskName {
+	tasksInOrder := []tfv1alpha2.TaskName{
 		tfv1alpha2.RunSetup,
 		tfv1alpha2.RunPreInit,
 		tfv1alpha2.RunInit,
@@ -920,7 +917,7 @@ func nextTask(currentTask tfv1alpha2.TaskType, configuredTasks []tfv1alpha2.Task
 		tfv1alpha2.RunApply,
 		tfv1alpha2.RunPostApply,
 	}
-	deleteTasksInOrder := []tfv1alpha2.TaskType{
+	deleteTasksInOrder := []tfv1alpha2.TaskName{
 		tfv1alpha2.RunSetupDelete,
 		tfv1alpha2.RunPreInitDelete,
 		tfv1alpha2.RunInitDelete,
@@ -935,24 +932,24 @@ func nextTask(currentTask tfv1alpha2.TaskType, configuredTasks []tfv1alpha2.Task
 
 	next := tfv1alpha2.RunNil
 	isUpNext := false
-	if tfv1alpha2.ListContainsRunType(tasksInOrder, currentTask) {
+	if tfv1alpha2.ListContainsTask(tasksInOrder, currentTask) {
 		for _, task := range tasksInOrder {
 			if task == currentTask {
 				isUpNext = true
 				continue
 			}
-			if isUpNext && tfv1alpha2.ListContainsRunType(configuredTasks, task) {
+			if isUpNext && tfv1alpha2.ListContainsTask(configuredTasks, task) {
 				next = task
 				break
 			}
 		}
-	} else if tfv1alpha2.ListContainsRunType(deleteTasksInOrder, currentTask) {
+	} else if tfv1alpha2.ListContainsTask(deleteTasksInOrder, currentTask) {
 		for _, task := range deleteTasksInOrder {
 			if task == currentTask {
 				isUpNext = true
 				continue
 			}
-			if isUpNext && tfv1alpha2.ListContainsRunType(configuredTasks, task) {
+			if isUpNext && tfv1alpha2.ListContainsTask(configuredTasks, task) {
 				next = task
 				break
 			}
@@ -1222,7 +1219,7 @@ func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, tf *tfv1alph
 	return dataAsByte, nil
 }
 
-func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts RunOptions) error {
+func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
 	reqLogger := r.Log.WithValues("Terraform", types.NamespacedName{Name: tf.Name, Namespace: tf.Namespace}.String())
 	var err error
 
@@ -1284,11 +1281,11 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha2.Ter
 
 		for _, taskOption := range tf.Spec.TaskOptions {
 			if inlineScript := taskOption.Script.Inline; inlineScript != "" {
-				for _, taskType := range taskOption.TaskTypes {
-					if taskType.String() == "*" {
+				for _, affected := range taskOption.Affects {
+					if affected.String() == "*" {
 						continue
 					}
-					runOpts.mainModuleAddonData[fmt.Sprintf("inline-%s.sh", taskType)] = inlineScript
+					runOpts.mainModuleAddonData[fmt.Sprintf("inline-%s.sh", affected)] = inlineScript
 				}
 			}
 		}
@@ -1446,7 +1443,7 @@ func (r ReconcileTerraform) checkPersistentVolumeClaimExists(ctx context.Context
 	return resource, true, nil
 }
 
-func (r ReconcileTerraform) createPVC(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts RunOptions) error {
+func (r ReconcileTerraform) createPVC(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
 	kind := "PersistentVolumeClaim"
 	_, found, err := r.checkPersistentVolumeClaimExists(ctx, types.NamespacedName{
 		Name:      runOpts.prefixedName,
@@ -1503,7 +1500,7 @@ func (r ReconcileTerraform) deleteConfigMapIfExists(ctx context.Context, name, n
 	return nil
 }
 
-func (r ReconcileTerraform) createConfigMap(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts RunOptions) error {
+func (r ReconcileTerraform) createConfigMap(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
 	kind := "ConfigMap"
 
 	resource := runOpts.generateConfigMap()
@@ -1552,7 +1549,7 @@ func (r ReconcileTerraform) deleteSecretIfExists(ctx context.Context, name, name
 	return nil
 }
 
-func (r ReconcileTerraform) createSecret(ctx context.Context, tf *tfv1alpha2.Terraform, name, namespace string, data map[string][]byte, recreate bool, labelsToOmit []string, runOpts RunOptions) error {
+func (r ReconcileTerraform) createSecret(ctx context.Context, tf *tfv1alpha2.Terraform, name, namespace string, data map[string][]byte, recreate bool, labelsToOmit []string, runOpts TaskOptions) error {
 	kind := "Secret"
 
 	// Must make a clean map of labels since the memory address is shared
@@ -1620,7 +1617,7 @@ func (r ReconcileTerraform) deleteServiceAccountIfExists(ctx context.Context, na
 	return nil
 }
 
-func (r ReconcileTerraform) createServiceAccount(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts RunOptions) error {
+func (r ReconcileTerraform) createServiceAccount(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
 	kind := "ServiceAccount"
 
 	resource := runOpts.generateServiceAccount()
@@ -1668,7 +1665,7 @@ func (r ReconcileTerraform) deleteRoleIfExists(ctx context.Context, name, namesp
 	return nil
 }
 
-func (r ReconcileTerraform) createRole(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts RunOptions) error {
+func (r ReconcileTerraform) createRole(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
 	kind := "Role"
 
 	resource := runOpts.generateRole()
@@ -1716,7 +1713,7 @@ func (r ReconcileTerraform) deleteRoleBindingIfExists(ctx context.Context, name,
 	return nil
 }
 
-func (r ReconcileTerraform) createRoleBinding(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts RunOptions) error {
+func (r ReconcileTerraform) createRoleBinding(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
 	kind := "RoleBinding"
 
 	resource := runOpts.generateRoleBinding()
@@ -1735,7 +1732,7 @@ func (r ReconcileTerraform) createRoleBinding(ctx context.Context, tf *tfv1alpha
 	return nil
 }
 
-func (r ReconcileTerraform) createPod(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts RunOptions) error {
+func (r ReconcileTerraform) createPod(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
 	kind := "Pod"
 
 	resource := runOpts.generatePod()
@@ -1750,7 +1747,7 @@ func (r ReconcileTerraform) createPod(ctx context.Context, tf *tfv1alpha2.Terraf
 	return nil
 }
 
-func (r RunOptions) generateConfigMap() *corev1.ConfigMap {
+func (r TaskOptions) generateConfigMap() *corev1.ConfigMap {
 
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1763,7 +1760,7 @@ func (r RunOptions) generateConfigMap() *corev1.ConfigMap {
 	return cm
 }
 
-func (r RunOptions) generateServiceAccount() *corev1.ServiceAccount {
+func (r TaskOptions) generateServiceAccount() *corev1.ServiceAccount {
 	annotations := make(map[string]string)
 
 	for _, c := range r.credentials {
@@ -1786,7 +1783,7 @@ func (r RunOptions) generateServiceAccount() *corev1.ServiceAccount {
 	return sa
 }
 
-func (r RunOptions) generateRole() *rbacv1.Role {
+func (r TaskOptions) generateRole() *rbacv1.Role {
 	// TODO tighten up default rbac security since all the cm and secret names
 	// can be predicted.
 
@@ -1843,7 +1840,7 @@ func (r RunOptions) generateRole() *rbacv1.Role {
 	return role
 }
 
-func (r RunOptions) generateRoleBinding() *rbacv1.RoleBinding {
+func (r TaskOptions) generateRoleBinding() *rbacv1.RoleBinding {
 	rb := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.versionedName,
@@ -1866,7 +1863,7 @@ func (r RunOptions) generateRoleBinding() *rbacv1.RoleBinding {
 	return rb
 }
 
-func (r RunOptions) generatePVC(size resource.Quantity) *corev1.PersistentVolumeClaim {
+func (r TaskOptions) generatePVC(size resource.Quantity) *corev1.PersistentVolumeClaim {
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.prefixedName,
@@ -1888,10 +1885,10 @@ func (r RunOptions) generatePVC(size resource.Quantity) *corev1.PersistentVolume
 
 // generatePod puts together all the contents required to execute the taskType.
 // Although most of the tasks use similar.... (TODO EDIT ME)
-func (r RunOptions) generatePod() *corev1.Pod {
+func (r TaskOptions) generatePod() *corev1.Pod {
 
 	home := "/home/tfo-runner"
-	generateName := r.versionedName + "-" + r.taskType.String() + "-"
+	generateName := r.versionedName + "-" + r.task.String() + "-"
 	generationPath := fmt.Sprintf("%s/generations/%d", home, r.generation)
 
 	runnerLabels := r.labels
@@ -1909,7 +1906,7 @@ func (r RunOptions) generatePod() *corev1.Pod {
 
 			*/
 			Name:  "TFO_TASK",
-			Value: r.taskType.String(),
+			Value: r.task.String(),
 		},
 		{
 			Name:  "TFO_TASK_EXEC_URL_SOURCE",
@@ -2194,7 +2191,7 @@ func (r RunOptions) generatePod() *corev1.Pod {
 	for key, value := range r.resourceLabels {
 		runnerLabels[key] = value
 	}
-	runnerLabels["app.kubernetes.io/instance"] = r.taskType.String()
+	runnerLabels["app.kubernetes.io/instance"] = r.task.String()
 
 	// Make sure to use the same uid for containers so the dir in the
 	// PersistentVolume have the correct permissions for the user
@@ -2242,7 +2239,7 @@ func (r RunOptions) generatePod() *corev1.Pod {
 	return pod
 }
 
-func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *tfv1alpha2.Terraform, runOpts RunOptions, isNewGeneration, isFirstInstall bool) (err error) {
+func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *tfv1alpha2.Terraform, runOpts TaskOptions, isNewGeneration, isFirstInstall bool) (err error) {
 
 	if isFirstInstall || isNewGeneration {
 		if err := r.createPVC(ctx, tf, runOpts); err != nil {
@@ -2371,7 +2368,7 @@ func (r ReconcileTerraform) loadSecret(ctx context.Context, name, namespace stri
 	return secret, nil
 }
 
-func (r RunOptions) generateSecret(name, namespace string, data map[string][]byte, labels map[string]string) *corev1.Secret {
+func (r TaskOptions) generateSecret(name, namespace string, data map[string][]byte, labels map[string]string) *corev1.Secret {
 	secretObject := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,

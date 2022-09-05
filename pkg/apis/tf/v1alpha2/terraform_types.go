@@ -99,6 +99,7 @@ type TerraformSpec struct {
 	//
 	// Example usage of the kubernetes cluster as a backend:
 	//
+	// ```hcl
 	//   terraform {
 	//    backend "kubernetes" {
 	//     secret_suffix     = "all-task-types"
@@ -106,9 +107,11 @@ type TerraformSpec struct {
 	//     in_cluster_config = true
 	//    }
 	//   }
+	// ```
 	//
 	// Example of a remote backend:
 	//
+	// ```hcl
 	//   terraform {
 	//    backend "remote" {
 	//     organization = "example_corp"
@@ -117,8 +120,9 @@ type TerraformSpec struct {
 	//     }
 	//    }
 	//   }
+	// ```
 	//
-	//
+	// Usage of the kubernetes backend is only available as of terraform v0.13+.
 	Backend string `json:"backend"`
 
 	// TaskOptions are a list of configuration options to be injected into task pods.
@@ -126,6 +130,7 @@ type TerraformSpec struct {
 }
 
 // Setup are things that only happen during the life of the setup task.
+// +k8s:openapi-gen=true
 type Setup struct {
 	// ResourceDownloads defines other files to download into the module directory that can be used by the
 	// terraform workflow runners. The `tfvar` type will also be fetched by the `exportRepo` option
@@ -136,7 +141,8 @@ type Setup struct {
 	CleanupDisk bool `json:"cleanupDisk,omitempty"`
 }
 
-// // Images describes the container images used by task classes
+// Images describes the container images used by task classes
+// +k8s:openapi-gen=true
 type Images struct {
 	// Terraform task type container image definition
 	Terraform *ImageConfig `json:"terraform,omitempty"`
@@ -147,6 +153,7 @@ type Images struct {
 }
 
 // ImageConfig describes a task class's container image and image pull policy.
+// +k8s:openapi-gen=true
 type ImageConfig struct {
 
 	// The container image from the registry; tags must be omitted
@@ -165,6 +172,7 @@ type ImageConfig struct {
 //     1. inline
 //     2. configMapSelector
 //     3. source[/version]
+// +k8s:openapi-gen=true
 type Module struct {
 	// Source accepts a subset of the terraform "Module Source" ways of defining a module.
 	// Terraform Operator prefers modules that are defined in a git repo as opposed to other scm types.
@@ -188,44 +196,45 @@ type Module struct {
 	Inline string `json:"inline,omitempty"`
 }
 
-type TaskType string
+type TaskName string
 
-func (t TaskType) String() string {
+func (t TaskName) String() string {
 	return string(t)
 }
 
 const (
-	RunSetupDelete     TaskType = "setup-delete"
-	RunPreInitDelete   TaskType = "preinit-delete"
-	RunInitDelete      TaskType = "init-delete"
-	RunPostInitDelete  TaskType = "postinit-delete"
-	RunPrePlanDelete   TaskType = "preplan-delete"
-	RunPlanDelete      TaskType = "plan-delete"
-	RunPostPlanDelete  TaskType = "postplan-delete"
-	RunPreApplyDelete  TaskType = "preapply-delete"
-	RunApplyDelete     TaskType = "apply-delete"
-	RunPostApplyDelete TaskType = "postapply-delete"
+	RunSetupDelete     TaskName = "setup-delete"
+	RunPreInitDelete   TaskName = "preinit-delete"
+	RunInitDelete      TaskName = "init-delete"
+	RunPostInitDelete  TaskName = "postinit-delete"
+	RunPrePlanDelete   TaskName = "preplan-delete"
+	RunPlanDelete      TaskName = "plan-delete"
+	RunPostPlanDelete  TaskName = "postplan-delete"
+	RunPreApplyDelete  TaskName = "preapply-delete"
+	RunApplyDelete     TaskName = "apply-delete"
+	RunPostApplyDelete TaskName = "postapply-delete"
 
-	RunSetup     TaskType = "setup"
-	RunPreInit   TaskType = "preinit"
-	RunInit      TaskType = "init"
-	RunPostInit  TaskType = "postinit"
-	RunPrePlan   TaskType = "preplan"
-	RunPlan      TaskType = "plan"
-	RunPostPlan  TaskType = "postplan"
-	RunPreApply  TaskType = "preapply"
-	RunApply     TaskType = "apply"
-	RunPostApply TaskType = "postapply"
-	RunNil       TaskType = ""
+	RunSetup     TaskName = "setup"
+	RunPreInit   TaskName = "preinit"
+	RunInit      TaskName = "init"
+	RunPostInit  TaskName = "postinit"
+	RunPrePlan   TaskName = "preplan"
+	RunPlan      TaskName = "plan"
+	RunPostPlan  TaskName = "postplan"
+	RunPreApply  TaskName = "preapply"
+	RunApply     TaskName = "apply"
+	RunPostApply TaskName = "postapply"
+	RunNil       TaskName = ""
 
 	// RunExport RunType = "export"
 )
 
 // TaskOption are different configuration options to be injected into task pods. Can apply to
 // one ore more task pods.
+// +k8s:openapi-gen=true
 type TaskOption struct {
-	// TaskTypes is a list of tasks these options will get applied to.
-	TaskTypes []TaskType `json:"runTypes"`
+	// Affects is a list of tasks these options will get applied to.
+	Affects []TaskName `json:"affects"`
 
 	// RunnerRules are RBAC rules that will be added to all runner pods.
 	PolicyRules []rbacv1.PolicyRule `json:"policyRules,omitempty"`
@@ -246,12 +255,17 @@ type TaskOption struct {
 	EnvFrom []corev1.EnvFromSource `json:"envFrom,omitempty" protobuf:"bytes,19,rep,name=envFrom"`
 
 	// List of environment variables to set in the task pods.
+	// +optional
+	// +patchMergeKey=name
+	// +patchStrategy=merge
 	Env []corev1.EnvVar `json:"env,omitempty" patchStrategy:"merge" patchMergeKey:"name" protobuf:"bytes,7,rep,name=env"`
 
 	// Compute Resources required by the task pods.
-	Resources corev1.ResourceRequirements `json:"resources,omitempty" protobuf:"bytes,8,opt,name=resources"`
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty" protobuf:"bytes,8,opt,name=resources"`
 
 	// Script is used to configure the source of the task's executable script.
+	// +optional
 	Script StageScript `json:"script,omitempty"`
 }
 
@@ -260,6 +274,7 @@ type TaskOption struct {
 //     1. inline
 //     2. configMapSelector
 //     3. source
+// +k8s:openapi-gen=true
 type StageScript struct {
 	// Source is an http source that the task container will fetch and then execute.
 	Source string `json:"source,omitempty"`
@@ -274,12 +289,14 @@ type StageScript struct {
 // A simple selector for configmaps that can select on the name of the configmap
 // with the optional key. The namespace is not an option since only runners
 // with a namespace'd role will utilize this map.
+// +k8s:openapi-gen=true
 type ConfigMapSelector struct {
 	Name string `json:"name"`
 	Key  string `json:"key,omitempty"`
 }
 
 // SCMAuthMethod definition of SCMs that require tokens/keys
+// +k8s:openapi-gen=true
 type SCMAuthMethod struct {
 	Host string `json:"host"`
 
@@ -288,12 +305,14 @@ type SCMAuthMethod struct {
 }
 
 // GitSCM define the auth methods of git
+// +k8s:openapi-gen=true
 type GitSCM struct {
 	SSH   *GitSSH   `json:"ssh,omitempty"`
 	HTTPS *GitHTTPS `json:"https,omitempty"`
 }
 
 // GitSSH configurs the setup for git over ssh with optional proxy
+// +k8s:openapi-gen=true
 type GitSSH struct {
 	RequireProxy    bool             `json:"requireProxy,omitempty"`
 	SSHKeySecretRef *SSHKeySecretRef `json:"sshKeySecretRef"`
@@ -302,6 +321,7 @@ type GitSSH struct {
 // GitHTTPS configures the setup for git over https using tokens. Proxy is not
 // supported in the terraform job pod at this moment
 // TODO HTTPS Proxy support
+// +k8s:openapi-gen=true
 type GitHTTPS struct {
 	RequireProxy   bool            `json:"requireProxy,omitempty"`
 	TokenSecretRef *TokenSecretRef `json:"tokenSecretRef"`
@@ -318,6 +338,7 @@ type TerraformList struct {
 
 // ResourceDownload (formerly SrcOpts) defines a resource to fetch using one
 // of the configured protocols: ssh|http|https (eg git::SSH or git::HTTPS)
+// +k8s:openapi-gen=true
 type ResourceDownload struct {
 
 	// Address defines the source address resources to fetch.
@@ -333,6 +354,7 @@ type ResourceDownload struct {
 }
 
 // ProxyOpts configures ssh tunnel/socks5 for downloading ssh/https resources
+// +k8s:openapi-gen=true
 type ProxyOpts struct {
 	Host            string          `json:"host,omitempty"`
 	User            string          `json:"user,omitempty"`
@@ -340,6 +362,7 @@ type ProxyOpts struct {
 }
 
 // SSHKeySecretRef defines the secret where the SSH key (for the proxy, git, etc) is stored
+// +k8s:openapi-gen=true
 type SSHKeySecretRef struct {
 	// Name the secret name that has the SSH key
 	Name string `json:"name"`
@@ -350,6 +373,7 @@ type SSHKeySecretRef struct {
 }
 
 // TokenSecretRef defines the token or password that can be used to log into a system (eg git)
+// +k8s:openapi-gen=true
 type TokenSecretRef struct {
 	// Name the secret name that has the token or password
 	Name string `json:"name"`
@@ -362,6 +386,7 @@ type TokenSecretRef struct {
 // Credentials are used for adding credentials for terraform providers.
 // For example, in AWS, the AWS Terraform Provider uses the default credential chain
 // of the AWS SDK, one of which are environment variables (eg AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)
+// +k8s:openapi-gen=true
 type Credentials struct {
 	// SecretNameRef will load environment variables into the terraform runner
 	// from a kubernetes secret
@@ -382,6 +407,7 @@ type Credentials struct {
 // crednetials to pods. This includes KIAM and IRSA.
 //
 // To use environment variables, use a secretNameRef instead.
+// +k8s:openapi-gen=true
 type AWSCredentials struct {
 	// IRSA requires the irsa role-arn as the string input. This will create a
 	// serice account named tf-<resource-name>. In order for the pod to be able to
@@ -395,31 +421,40 @@ type AWSCredentials struct {
 	// the irsa role usable by pods created by terraform-operator. The example below is
 	// pretty liberal, but will work for any pod created by the terraform-operator.
 	//
-	// {
-	//   "Version": "2012-10-17",
-	//   "Statement": [
-	//     {
-	//       "Effect": "Allow",
-	//       "Principal": {
-	//         "Federated": "${OIDC_ARN}"
-	//       },
-	//       "Action": "sts:AssumeRoleWithWebIdentity",
-	//       "Condition": {
-	//         "StringLike": {
-	//           "${OIDC_URL}:sub": "system:serviceaccount:*:tf-*"
+	// ```json
+	//   {
+	//     "Version": "2012-10-17",
+	//     "Statement": [
+	//       {
+	//         "Effect": "Allow",
+	//         "Principal": {
+	//           "Federated": "${OIDC_ARN}"
+	//         },
+	//         "Action": "sts:AssumeRoleWithWebIdentity",
+	//         "Condition": {
+	//           "StringLike": {
+	//             "${OIDC_URL}:sub": "system:serviceaccount:*:tf-*"
+	//           }
 	//         }
 	//       }
-	//     }
-	//   ]
-	// }
+	//     ]
+	//   }
+	// ```
+	//
+	// This option is just a specialized version of Credentials.ServiceAccountAnnotations and will
+	// be a candidate of removal in the future.
 	IRSA string `json:"irsa,omitempty"`
 
 	// KIAM requires the kiam role-name as the string input. This will add the
 	// correct annotation to the terraform execution pod
+	//
+	// This option is just a specialized version of Credentials.ServiceAccountAnnotations and will
+	// be a candidate of removal in the future.
 	KIAM string `json:"kiam,omitempty"`
 }
 
 // SecretNameRef is the name of the kubernetes secret to use
+// +k8s:openapi-gen=true
 type SecretNameRef struct {
 	// Name of the secret
 	Name string `json:"name"`
@@ -479,7 +514,7 @@ const (
 type Stage struct {
 	Generation int64      `json:"generation"`
 	State      StageState `json:"state"`
-	TaskType   TaskType   `json:"podType"`
+	TaskType   TaskName   `json:"podType"`
 
 	// Interruptible is set to false when the pod should not be terminated
 	// such as when doing a terraform apply

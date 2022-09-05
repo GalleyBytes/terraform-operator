@@ -3,7 +3,7 @@ DOCKER_REPO ?= isaaguilar
 IMAGE_NAME ?= terraform-operator
 DEPLOYMENT ?= ${IMAGE_NAME}
 NAMESPACE ?= tf-system
-VERSION ?= $(shell git ls-remote .|grep $$(git rev-parse HEAD).*tags|head -n1|sed "s/^.*\///")
+VERSION ?= $(shell  git describe --tags --dirty)
 ifeq ($(VERSION),)
 VERSION := v0.0.0
 endif
@@ -31,7 +31,7 @@ ifeq (, $(shell which controller-gen))
 	CONTROLLER_GEN_TMP_DIR=$$(mktemp -d) ;\
 	cd $$CONTROLLER_GEN_TMP_DIR ;\
 	go mod init tmp ;\
-	go get sigs.k8s.io/controller-tools/cmd/controller-gen@v0.8.0 ;\
+	go get sigs.k8s.io/controller-tools/cmd/controller-gen@v0.9.2 ;\
 	rm -rf $$CONTROLLER_GEN_TMP_DIR ;\
 	}
 CONTROLLER_GEN=$(GOBIN)/controller-gen
@@ -86,6 +86,9 @@ openapi-gen: openapi-gen-bin
 	$(OPENAPI_GEN) --logtostderr=true -o "" -i github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1 -O zz_generated.openapi -p pkg/apis/tf/v1alpha1 -h ./hack/boilerplate.go.txt -r "-"
 	$(OPENAPI_GEN) --logtostderr=true -o "" -i github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2 -O zz_generated.openapi -p pkg/apis/tf/v1alpha2 -h ./hack/boilerplate.go.txt -r "-"
 
+docs:
+	/bin/bash hack/docs.sh ${VERSION}
+
 client-gen: client-gen-bin
 	$(CLIENT_GEN) -n versioned --input-base ""  --input ${PKG}/pkg/apis/tf/v1alpha1 -p ${PKG}/pkg/client/clientset -h ./hack/boilerplate.go.txt
 	$(CLIENT_GEN) -n versioned --input-base ""  --input ${PKG}/pkg/apis/tf/v1alpha2 -p ${PKG}/pkg/client/clientset -h ./hack/boilerplate.go.txt
@@ -115,6 +118,13 @@ docker-build-job:
 docker-push-job:
 	docker images ${DOCKER_REPO}/tfops --format '{{ .Repository }}:{{ .Tag }}'| grep -v '<none>'|xargs -n1 -t docker push
 
+docker-build-gencert:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -v -o projects/gencert/bin/gencert projects/gencert/main.go
+	docker build -t ${DOCKER_REPO}/${IMAGE_NAME}-gencert:${VERSION} -f projects/gencert/Dockerfile projects/gencert/
+
+docker-push-gencert:
+	docker push ${DOCKER_REPO}/${IMAGE_NAME}-gencert:${VERSION}
+
 deploy:
 	kubectl delete pod --selector name=${DEPLOYMENT} --namespace ${NAMESPACE} && sleep 4
 	kubectl logs -f --selector name=${DEPLOYMENT} --namespace ${NAMESPACE}
@@ -130,10 +140,12 @@ vet:
 install: crds
 	kubectl apply -f deploy/crds/tf.isaaguilar.com_terraforms_crd.yaml
 
+bundle: crds
+	/bin/bash hack/bundler.sh ${VERSION}
 
 # Run against the configured Kubernetes cluster in ~/.kube/config
 run: fmt vet
-	go run cmd/manager/main.go --max-concurrent-reconciles 10 --zap-log-level=5
+	go run cmd/manager/main.go --max-concurrent-reconciles 10 --disable-conversion-webhook --zap-log-level=5
 
 # Run tests
 ENVTEST_ASSETS_DIR=$(shell pwd)/testbin

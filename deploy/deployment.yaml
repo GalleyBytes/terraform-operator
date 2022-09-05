@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: terraform-operator
+  namespace: tf-system
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  selector:
+    matchLabels:
+      app: terraform-operator
+      release: terraform-operator
+  template:
+    metadata:
+      labels:
+        app: terraform-operator
+        release: terraform-operator
+    spec:
+      serviceAccountName: terraform-operator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      initContainers:
+      - name: gencert
+        image: localhost:5000/gencert:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: SERVICE
+          value: terraform-operator-webhook
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: SECRET
+          value: terraform-operator-selfsigned
+      containers:
+      - name: terraform-operator
+        image: "localhost:5000/terraform-operator:v0.0.0"
+        imagePullPolicy: IfNotPresent
+        command:
+        - terraform-operator
+        args:
+        - --zap-log-level=debug
+        - --zap-encoder=console
+        env:
+        - name: WATCH_NAMESPACE # Leave blank to watch all namespaces
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: OPERATOR_NAME
+          value: terraform-operator
+        resources:
+          limits:
+            cpu: 50m
+            memory: 128M
+          requests:
+            cpu: 25m
+            memory: 128M
+        ports:
+        - name: https
+          containerPort: 9443
+          protocol: TCP
+        volumeMounts:
+        - name: certs
+          mountPath: /tmp/k8s-webhook-server/serving-certs
+          readOnly: true
+      volumes:
+      - name: certs
+        secret:
+          secretName: terraform-operator-selfsigned
+          optional: true

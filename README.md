@@ -1,11 +1,10 @@
 # Terraform Operator
 
-> A Kubernetes CRD and Controller to handle Terraform operations by generating k8s jobs catered to perform Terraform workflows
+> A Kubernetes CRD and Controller to handle Terraform operations by generating k8s pods catered to perform Terraform workflows
 
 <p align="center">
 <img src="https://s3.amazonaws.com/classic.isaaguilar.com/tfo-worm-logo-text.png" alt="Terraform Operator Logo"></img>
 </p>
-
 
 
 ## What is terraform-operator?
@@ -21,17 +20,35 @@ This project is not:
 - An HCL to YAML converter or vice versa
 - A Terraform Module or Registry
 
+## Installation
+
+The preferred method is to use helm. See [Install using Helm](http://tf.isaaguilar.com/docs/getting-started/installation/#install-using-helm) on the docs.
+
+Another simple method is to install the resources under `deploy` & `deploy/crds`
+
+```bash
+git clone https://github.com/isaaguilar/terraform-operator.git
+cd terraform-operator
+apply -f deploy/crds,deploy/
+```
+
+See [more installation options](http://tf.isaaguilar.com/docs/getting-started/installation/).
 
 ## Docs
 
-Visit [http://tf.isaaguilar.com](http://tf.isaaguilar.com) for docs for version >= `v0.5.x`.
+Visit [http://tf.isaaguilar.com](http://tf.isaaguilar.com) to read the docs.
 
 <p align="center">
-<img src="https://s3.amazonaws.com/classic.isaaguilar.com/tfo-workflow-diagram.png" alt="Terraform Operator Workflow Diagram"></img>
+<img src="https://s3.amazonaws.com/classic.isaaguilar.com/tfo-workflow-diagramv2.png" alt="Terraform Operator Workflow Diagram"></img>
 </p>
 
 
-## Debug With `tfo` CLI
+## Related Projects and Tools
+
+Here are some other projects that enhance the experience of Terraform Operator.
+
+
+### Debug With `tfo` CLI
 
 Terraform is great, but every now and then, a module takes a turn for the worse and the workflow fails. When this happens, a terraform workflow will need to be "debugged."
 
@@ -52,6 +69,7 @@ Try running 'terraform init'
 ```
 
 Happy debugging!
+
 
 ## Join the Community
 
