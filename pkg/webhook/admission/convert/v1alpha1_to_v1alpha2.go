@@ -107,7 +107,7 @@ func ConvertV1alpha1ToV1alpha2(rawRequest []byte) ([]byte, runtime.Object, error
 		len(have.Spec.RunnerLabels) > 0 {
 
 		taskOption := tfv1alpha2.TaskOption{
-			TaskTypes: []tfv1alpha2.TaskType{"*"},
+			Affects: []tfv1alpha2.TaskName{"*"},
 		}
 
 		if len(have.Spec.Env) > 0 {
@@ -188,7 +188,7 @@ func ConvertV1alpha1ToV1alpha2(rawRequest []byte) ([]byte, runtime.Object, error
 		want.Status.Stages = append(want.Status.Stages, tfv1alpha2.Stage{
 			Generation:    stage.Generation,
 			State:         tfv1alpha2.StageState(stage.State),
-			TaskType:      runTypeFromPodType(stage.PodType),
+			TaskType:      TaskNameFromPodType(stage.PodType),
 			Interruptible: tfv1alpha2.Interruptible(stage.Interruptible),
 			Reason:        stage.Reason,
 			StartTime:     stage.StartTime,
@@ -200,7 +200,7 @@ func ConvertV1alpha1ToV1alpha2(rawRequest []byte) ([]byte, runtime.Object, error
 		want.Status.Stage = tfv1alpha2.Stage{
 			Generation:    lastStage.Generation,
 			State:         tfv1alpha2.StageState(lastStage.State),
-			TaskType:      runTypeFromPodType(lastStage.PodType),
+			TaskType:      TaskNameFromPodType(lastStage.PodType),
 			Interruptible: tfv1alpha2.Interruptible(lastStage.Interruptible),
 			Reason:        lastStage.Reason,
 			StartTime:     lastStage.StartTime,
@@ -218,9 +218,9 @@ func ConvertV1alpha1ToV1alpha2(rawRequest []byte) ([]byte, runtime.Object, error
 	return rawResponse, &want, nil
 }
 
-func runTypeFromPodType(podType tfv1alpha1.PodType) tfv1alpha2.TaskType {
+func TaskNameFromPodType(podType tfv1alpha1.PodType) tfv1alpha2.TaskName {
 
-	conversionMap := map[tfv1alpha1.PodType]tfv1alpha2.TaskType{
+	conversionMap := map[tfv1alpha1.PodType]tfv1alpha2.TaskName{
 		tfv1alpha1.PodSetupDelete:     tfv1alpha2.RunSetupDelete,
 		tfv1alpha1.PodPreInitDelete:   tfv1alpha2.RunPreInitDelete,
 		tfv1alpha1.PodInitDelete:      tfv1alpha2.RunInitDelete,
@@ -249,10 +249,10 @@ func runTypeFromPodType(podType tfv1alpha1.PodType) tfv1alpha2.TaskType {
 
 }
 
-func convertRunScriptsToTaskConfigMapSelector(configMapSelector *tfv1alpha1.ConfigMapSelector, runType tfv1alpha2.TaskType, taskOptions *[]tfv1alpha2.TaskOption) {
+func convertRunScriptsToTaskConfigMapSelector(configMapSelector *tfv1alpha1.ConfigMapSelector, task tfv1alpha2.TaskName, taskOptions *[]tfv1alpha2.TaskOption) {
 	if configMapSelector != nil {
 		*taskOptions = append(*taskOptions, tfv1alpha2.TaskOption{
-			TaskTypes: []tfv1alpha2.TaskType{runType},
+			Affects: []tfv1alpha2.TaskName{task},
 			Script: tfv1alpha2.StageScript{
 				ConfigMapSelector: (*tfv1alpha2.ConfigMapSelector)(configMapSelector),
 			},
@@ -260,10 +260,10 @@ func convertRunScriptsToTaskConfigMapSelector(configMapSelector *tfv1alpha1.Conf
 	}
 }
 
-func convertRunScriptsToTaskInlineScripts(inlineScript string, runType tfv1alpha2.TaskType, taskOptions *[]tfv1alpha2.TaskOption) {
+func convertRunScriptsToTaskInlineScripts(inlineScript string, task tfv1alpha2.TaskName, taskOptions *[]tfv1alpha2.TaskOption) {
 	if inlineScript != "" {
 		*taskOptions = append(*taskOptions, tfv1alpha2.TaskOption{
-			TaskTypes: []tfv1alpha2.TaskType{runType},
+			Affects: []tfv1alpha2.TaskName{task},
 			Script: tfv1alpha2.StageScript{
 				Inline: inlineScript,
 			},

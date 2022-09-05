@@ -117,3 +117,6 @@ bin
 .builds
 # my release management dir
 .rmgmt
+
+# Bundles that are dirty
+deploy/bundles/*dirty*

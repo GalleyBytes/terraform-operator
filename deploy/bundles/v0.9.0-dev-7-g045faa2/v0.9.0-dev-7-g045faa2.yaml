@@ -1,4 +1,235 @@
 ---
+# namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tf-system
+
+
+---
+# serviceaccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: terraform-operator
+  namespace: tf-system
+
+
+---
+# service
+apiVersion: v1
+kind: Service
+metadata:
+  name: terraform-operator-webhook
+  namespace: tf-system
+spec:
+  ports:
+  - name: https
+    port: 443
+    protocol: TCP
+    targetPort: 9443
+  selector:
+    app: terraform-operator
+    release: terraform-operator
+  sessionAffinity: None
+  type: ClusterIP
+
+---
+# clusterrole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: terraform-operator
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - services
+  - services/finalizers
+  - endpoints
+  - persistentvolumeclaims
+  - events
+  - configmaps
+  - secrets
+  - serviceaccounts
+  - nodes
+  verbs:
+  - '*'
+
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  - rolebindings
+  - clusterroles
+  - clusterrolebindings
+  verbs:
+  - '*'
+
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - daemonsets
+  - replicasets
+  - statefulsets
+  verbs:
+  - '*'
+
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - '*'
+
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - servicemonitors
+  verbs:
+  - get
+  - create
+
+- apiGroups:
+  - apps
+  resourceNames:
+  - terraform-operator
+  resources:
+  - deployments/finalizers
+  verbs:
+  - update
+
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+
+- apiGroups:
+  - apps
+  resources:
+  - replicasets
+  verbs:
+  - get
+
+- apiGroups:
+  - tf.isaaguilar.com
+  resources:
+  - '*'
+  verbs:
+  - '*'
+
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  resourceNames:
+  - terraforms.tf.isaaguilar.com
+  verbs:
+  - '*'
+
+---
+# clusterrolebinding
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: terraform-operator
+subjects:
+- kind: ServiceAccount
+  name: terraform-operator
+  namespace: tf-system
+roleRef:
+  kind: ClusterRole
+  name: terraform-operator
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: terraform-operator
+  namespace: tf-system
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  selector:
+    matchLabels:
+      app: terraform-operator
+      release: terraform-operator
+  template:
+    metadata:
+      labels:
+        app: terraform-operator
+        release: terraform-operator
+    spec:
+      serviceAccountName: terraform-operator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      initContainers:
+      - name: gencert
+        image: localhost:5000/gencert:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: SERVICE
+          value: terraform-operator-webhook
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: SECRET
+          value: terraform-operator-selfsigned
+      containers:
+      - name: terraform-operator
+        image: "localhost:5000/terraform-operator:v0.0.0"
+        imagePullPolicy: IfNotPresent
+        command:
+        - terraform-operator
+        args:
+        - --zap-log-level=debug
+        - --zap-encoder=console
+        env:
+        - name: WATCH_NAMESPACE # Leave blank to watch all namespaces
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: OPERATOR_NAME
+          value: terraform-operator
+        resources:
+          limits:
+            cpu: 50m
+            memory: 128M
+          requests:
+            cpu: 25m
+            memory: 128M
+        ports:
+        - name: https
+          containerPort: 9443
+          protocol: TCP
+        volumeMounts:
+        - name: certs
+          mountPath: /tmp/k8s-webhook-server/serving-certs
+          readOnly: true
+      volumes:
+      - name: certs
+        secret:
+          secretName: terraform-operator-selfsigned
+          optional: true
+
+---
+# crd
+---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
@@ -1069,8 +1300,8 @@ spec:
                   description: TaskOption are different configuration options to be
                     injected into task pods. Can apply to one ore more task pods.
                   properties:
-                    affects:
-                      description: Affects is a list of tasks these options will get
+                    affect:
+                      description: Affect is a list of tasks these options will get
                         applied to.
                       items:
                         type: string
@@ -1346,7 +1577,7 @@ spec:
                           type: string
                       type: object
                   required:
-                  - affects
+                  - affect
                   type: object
                 type: array
               terraformModule:
