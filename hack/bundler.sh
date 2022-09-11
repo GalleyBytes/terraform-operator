@@ -26,7 +26,7 @@ cat deploy/clusterrole.yaml >> $bundle
 printf -- '\n\n---\n# clusterrolebinding\n' >>  $bundle
 cat deploy/clusterrolebinding.yaml >> $bundle
 printf -- '\n\n---\n# deployment\n' >>  $bundle
-cat deploy/deployment.yaml >> $bundle
+yq write deploy/deployment.yaml spec.template.spec.containers[0].image "isaaguilar/terraform-operator:$ver" >> $bundle
 printf -- '\n\n---\n# crd\n' >>  $bundle
 cat deploy/crds/tf.isaaguilar.com_terraforms_crd.yaml >> $bundle
 

@@ -118,12 +118,13 @@ docker-build-job:
 docker-push-job:
 	docker images ${DOCKER_REPO}/tfops --format '{{ .Repository }}:{{ .Tag }}'| grep -v '<none>'|xargs -n1 -t docker push
 
+GENCERT_VERSION ?= v1.0.0
 docker-build-gencert:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -v -o projects/gencert/bin/gencert projects/gencert/main.go
-	docker build -t ${DOCKER_REPO}/${IMAGE_NAME}-gencert:${VERSION} -f projects/gencert/Dockerfile projects/gencert/
+	docker build -t localhost:5000/terraform-operator-gencert:${GENCERT_VERSION} -f projects/gencert/Dockerfile projects/gencert/
 
-docker-push-gencert:
-	docker push ${DOCKER_REPO}/${IMAGE_NAME}-gencert:${VERSION}
+release-gencert:
+	/bin/bash hack/release-gencert.sh ${GENCERT_VERSION}
 
 deploy:
 	kubectl delete pod --selector name=${DEPLOYMENT} --namespace ${NAMESPACE} && sleep 4

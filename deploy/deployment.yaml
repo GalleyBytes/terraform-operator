@@ -26,7 +26,7 @@ spec:
         runAsUser: 1001
       initContainers:
       - name: gencert
-        image: localhost:5000/gencert:latest
+        image: "isaaguilar/terraform-operator-gencert:v1.0.0"
         imagePullPolicy: IfNotPresent
         env:
         - name: SERVICE
@@ -40,7 +40,7 @@ spec:
           value: terraform-operator-selfsigned
       containers:
       - name: terraform-operator
-        image: "localhost:5000/terraform-operator:v0.0.0"
+        image: "isaaguilar/terraform-operator:latest"
         imagePullPolicy: IfNotPresent
         command:
         - terraform-operator
