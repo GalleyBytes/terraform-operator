@@ -210,7 +210,7 @@ func ConvertV1alpha1ToV1alpha2(rawRequest []byte) ([]byte, runtime.Object, error
 		}
 	}
 	want.Status.Phase = tfv1alpha2.StatusPhase(have.Status.Phase)
-	want.Status.Exported = tfv1alpha2.Exported(have.Status.Exported)
+	want.Status.Plugins = []tfv1alpha2.TaskName{}
 	want.Status.LastCompletedGeneration = have.Status.LastCompletedGeneration
 
 	rawResponse, _ := json.Marshal(want)

@@ -39,12 +39,14 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ImageConfig":       schema_pkg_apis_tf_v1alpha2_ImageConfig(ref),
 		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Images":            schema_pkg_apis_tf_v1alpha2_Images(ref),
 		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Module":            schema_pkg_apis_tf_v1alpha2_Module(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Plugin":            schema_pkg_apis_tf_v1alpha2_Plugin(ref),
 		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ProxyOpts":         schema_pkg_apis_tf_v1alpha2_ProxyOpts(ref),
 		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ResourceDownload":  schema_pkg_apis_tf_v1alpha2_ResourceDownload(ref),
 		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.SCMAuthMethod":     schema_pkg_apis_tf_v1alpha2_SCMAuthMethod(ref),
 		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.SSHKeySecretRef":   schema_pkg_apis_tf_v1alpha2_SSHKeySecretRef(ref),
 		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.SecretNameRef":     schema_pkg_apis_tf_v1alpha2_SecretNameRef(ref),
 		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Setup":             schema_pkg_apis_tf_v1alpha2_Setup(ref),
+		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Stage":             schema_pkg_apis_tf_v1alpha2_Stage(ref),
 		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.StageScript":       schema_pkg_apis_tf_v1alpha2_StageScript(ref),
 		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.TaskOption":        schema_pkg_apis_tf_v1alpha2_TaskOption(ref),
 		"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Terraform":         schema_pkg_apis_tf_v1alpha2_Terraform(ref),
@@ -63,14 +65,14 @@ func schema_pkg_apis_tf_v1alpha2_AWSCredentials(ref common.ReferenceCallback) co
 				Properties: map[string]spec.Schema{
 					"irsa": {
 						SchemaProps: spec.SchemaProps{
-							Description: "IRSA requires the irsa role-arn as the string input. This will create a serice account named tf-<resource-name>. In order for the pod to be able to use this role, the \"Trusted Entity\" of the IAM role must allow this serice account name and namespace.\n\nUsing a TrustEntity policy that includes \"StringEquals\" setting it as the serivce account name is the most secure way to use IRSA.\n\nHowever, for a reusable policy consider \"StringLike\" with a few wildcards to make the irsa role usable by pods created by terraform-operator. The example below is pretty liberal, but will work for any pod created by the terraform-operator.\n\n```json\n  {\n    \"Version\": \"2012-10-17\",\n    \"Statement\": [\n      {\n        \"Effect\": \"Allow\",\n        \"Principal\": {\n          \"Federated\": \"${OIDC_ARN}\"\n        },\n        \"Action\": \"sts:AssumeRoleWithWebIdentity\",\n        \"Condition\": {\n          \"StringLike\": {\n            \"${OIDC_URL}:sub\": \"system:serviceaccount:*:tf-*\"\n          }\n        }\n      }\n    ]\n  }\n```\n\nThis option is just a specialized version of Credentials.ServiceAccountAnnotations and will be a candidate of removal in the future.",
+							Description: "IRSA requires the irsa role-arn as the string input. This will create a serice account named tf-<resource-name>. In order for the pod to be able to use this role, the \"Trusted Entity\" of the IAM role must allow this serice account name and namespace.\n\nUsing a TrustEntity policy that includes \"StringEquals\" setting it as the serivce account name is the most secure way to use IRSA.\n\nHowever, for a reusable policy consider \"StringLike\" with a few wildcards to make the irsa role usable by pods created by terraform-operator. The example below is pretty liberal, but will work for any pod created by the terraform-operator.\n\n```json\n  {\n    \"Version\": \"2012-10-17\",\n    \"Statement\": [\n      {\n        \"Effect\": \"Allow\",\n        \"Principal\": {\n          \"Federated\": \"${OIDC_ARN}\"\n        },\n        \"Action\": \"sts:AssumeRoleWithWebIdentity\",\n        \"Condition\": {\n          \"StringLike\": {\n            \"${OIDC_URL}:sub\": \"system:serviceaccount:*:tf-*\"\n          }\n        }\n      }\n    ]\n  }\n```\n\n<note>This option is just a specialized version of Credentials.ServiceAccountAnnotations and will be a candidate of removal in the future.</note>",
 							Type:        []string{"string"},
 							Format:      "",
 						},
 					},
 					"kiam": {
 						SchemaProps: spec.SchemaProps{
-							Description: "KIAM requires the kiam role-name as the string input. This will add the correct annotation to the terraform execution pod\n\nThis option is just a specialized version of Credentials.ServiceAccountAnnotations and will be a candidate of removal in the future.",
+							Description: "KIAM requires the kiam role-name as the string input. This will add the correct annotation to the terraform execution pod\n\n<note>This option is just a specialized version of Credentials.ServiceAccountAnnotations and will be a candidate of removal in the future.</note>",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -336,6 +338,51 @@ func schema_pkg_apis_tf_v1alpha2_Module(ref common.ReferenceCallback) common.Ope
 	}
 }
 
+func schema_pkg_apis_tf_v1alpha2_Plugin(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "Plugin Define additional pods to run during a workflow",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"image": {
+						SchemaProps: spec.SchemaProps{
+							Description: "The container image from the registry; tags must be omitted",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"imagePullPolicy": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Image pull policy. One of Always, Never, IfNotPresent. Defaults to Always if :latest tag is specified, or IfNotPresent otherwise. Cannot be updated. More info: https://kubernetes.io/docs/concepts/containers/images#updating-images",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"when": {
+						SchemaProps: spec.SchemaProps{
+							Description: "When is a keyword of a two-part selector of when the plugin gets run in the workflow. The value must be one of\n\n- <code>At</code> to run at the same time as the defined task\n\n- <code>After</code> to run after the defined task has completed.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"task": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Task is the second part of a two-part selector of when the plugin gets run in the workflow. This should correspond to one of the tfo task names.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"image", "when", "task"},
+			},
+		},
+	}
+}
+
 func schema_pkg_apis_tf_v1alpha2_ProxyOpts(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -540,6 +587,90 @@ func schema_pkg_apis_tf_v1alpha2_Setup(ref common.ReferenceCallback) common.Open
 		},
 		Dependencies: []string{
 			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ResourceDownload"},
+	}
+}
+
+func schema_pkg_apis_tf_v1alpha2_Stage(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "Stage is the current task of the workflow.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"generation": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Generation is the generation of the resource when the task got started.",
+							Default:     0,
+							Type:        []string{"integer"},
+							Format:      "int64",
+						},
+					},
+					"state": {
+						SchemaProps: spec.SchemaProps{
+							Description: "State is the phase of the task pod.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"podType": {
+						SchemaProps: spec.SchemaProps{
+							Description: "TaskType is which task is currently running.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"interruptible": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Interruptible is set to false when the pod should not be terminated such as when doing a terraform apply.",
+							Default:     false,
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+					"reason": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Reason is a message of what is happening with the pod. The controller uses this field when certain reasons occur to make scheduling decisions.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"startTime": {
+						SchemaProps: spec.SchemaProps{
+							Description: "StartTime is when the task got created by the controller, not when a pod got started.",
+							Default:     map[string]interface{}{},
+							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+						},
+					},
+					"stopTime": {
+						SchemaProps: spec.SchemaProps{
+							Description: "StopTime is when the task went into a stopped phase.",
+							Default:     map[string]interface{}{},
+							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+						},
+					},
+					"message": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Message stores the last message displayed in the logs. It is stored and checked by the controller to reduce the noise in the logs by only displying the message once.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"podName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PodName is the pod assigned to execute the stage.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"generation", "state", "podType", "interruptible", "reason"},
+			},
+		},
+		Dependencies: []string{
+			"k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
 	}
 }
 
@@ -917,12 +1048,27 @@ func schema_pkg_apis_tf_v1alpha2_TerraformSpec(ref common.ReferenceCallback) com
 							},
 						},
 					},
+					"plugins": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Plugins are tasks that run during a workflow but are not part of the main workflow. Plugins can be treated as just another task, however, plugins do not have completion or failure detection.\n\nExample definition of a plugin:\n\n```yaml\n  plugins:\n  - monitor:\n     image: ghcr.io/galleybytes/monitor:latest\n     imagePullPolicy: IfNotPresent\n     when: After\n     task: setup\n```\n\nThe above plugin task will run after the setup task has completed.\n\nAlternatively, a plugin can be triggered to start at the same time of another task. For example:\n\n```yaml\n  plugins:\n  - monitor:\n     image: ghcr.io/galleybytes/monitor:latest\n     imagePullPolicy: IfNotPresent\n     when: At\n     task: setup\n```\n\nEach plugin is run once per generation. Plugins that are older than the current generation are automatically reaped.",
+							Type:        []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Plugin"),
+									},
+								},
+							},
+						},
+					},
 				},
 				Required: []string{"terraformModule", "terraformVersion", "backend"},
 			},
 		},
 		Dependencies: []string{
-			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Credentials", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Images", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Module", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.SCMAuthMethod", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Setup", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.TaskOption", "k8s.io/apimachinery/pkg/api/resource.Quantity"},
+			"github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Credentials", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Images", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Module", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Plugin", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.ProxyOpts", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.SCMAuthMethod", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Setup", "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.TaskOption", "k8s.io/apimachinery/pkg/api/resource.Quantity"},
 	}
 }
 
@@ -989,11 +1135,19 @@ func schema_pkg_apis_tf_v1alpha2_TerraformStatus(ref common.ReferenceCallback) c
 							Ref:     ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.Stage"),
 						},
 					},
-					"exported": {
+					"plugins": {
 						SchemaProps: spec.SchemaProps{
-							Description: "ExportReady bool - when try can run eport on it... no tracking on it ExportStatus string - mostly the same thing, just easier to understand\n\nOr just move export to an entirely different controller. Accepts the same fileds of export, and reads in tf resource as ref. Benifit will run in foreround instead of background. The cons are a new controller to maintain. Status of export if used",
-							Type:        []string{"string"},
-							Format:      "",
+							Description: "Plugins is a list of plugins that have been executed by the controller. Will get refreshed each generation.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
 						},
 					},
 				},

@@ -1,10 +1,12 @@
 package utils
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -183,4 +185,17 @@ func PrettyStruct(data interface{}) (string, error) {
 		return "", err
 	}
 	return string(val), nil
+}
+
+func Pprint(o interface{}) {
+	b, err := json.Marshal(o)
+	if err != nil {
+		log.Panic(err)
+	}
+	var out bytes.Buffer
+	err = json.Indent(&out, b, "", "  ")
+	if err != nil {
+		log.Panic(err)
+	}
+	fmt.Println(out.String())
 }

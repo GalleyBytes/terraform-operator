@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"os"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -40,6 +41,7 @@ func main() {
 	var probeAddr string
 	var maxConcurrentReconciles int
 	var disableConversionWebhook bool
+
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&disableConversionWebhook, "disable-conversion-webhook", false, "Set to true to disable the conversion webhook")
@@ -53,6 +55,20 @@ func main() {
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	globalEnvFromConfigmapData := make(map[string]string)
+	globalEnvFromSecretData := make(map[string][]byte)
+	for _, env := range os.Environ() {
+		key := strings.Split(env, "=")[0]
+		if strings.HasPrefix(key, "TFO_VAR_") {
+
+			globalEnvFromConfigmapData[strings.TrimPrefix(key, "TFO_VAR_")] = os.Getenv(key)
+
+		}
+		if strings.HasPrefix(key, "TFO_SECRET_") {
+			globalEnvFromSecretData[strings.TrimPrefix(key, "TFO_SECRET_")] = []byte(os.Getenv(key))
+		}
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 	c := localcache.New(60*time.Second, 3600*time.Second)
@@ -71,12 +87,15 @@ func main() {
 	}
 
 	if err = (&controllers.ReconcileTerraform{
-		Client:                  mgr.GetClient(),
-		Log:                     ctrl.Log.WithName("terraform_controller"),
-		Recorder:                mgr.GetEventRecorderFor("terraform-controller"),
-		Scheme:                  mgr.GetScheme(),
-		MaxConcurrentReconciles: maxConcurrentReconciles,
-		Cache:                   c,
+		Client:                     mgr.GetClient(),
+		Log:                        ctrl.Log.WithName("terraform_controller"),
+		Recorder:                   mgr.GetEventRecorderFor("terraform-controller"),
+		Scheme:                     mgr.GetScheme(),
+		MaxConcurrentReconciles:    maxConcurrentReconciles,
+		Cache:                      c,
+		GlobalEnvFromConfigmapData: globalEnvFromConfigmapData,
+		GlobalEnvFromSecretData:    globalEnvFromSecretData,
+		GlobalEnvSuffix:            "global-envs",
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Cluster")
 		os.Exit(1)

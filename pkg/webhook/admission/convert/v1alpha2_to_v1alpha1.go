@@ -2,7 +2,8 @@ package convert
 
 import (
 	"encoding/json"
-	"fmt"
+	"log"
+	"time"
 
 	tfv1alpha1 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1"
 	tfv1alpha2 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2"
@@ -11,7 +12,7 @@ import (
 )
 
 func ConvertV1alpha2ToV1alpha1(rawRequest []byte) ([]byte, runtime.Object, error) {
-
+	start := time.Now()
 	want := tfv1alpha1.Terraform{}
 	have := tfv1alpha2.Terraform{}
 
@@ -20,7 +21,7 @@ func ConvertV1alpha2ToV1alpha1(rawRequest []byte) ([]byte, runtime.Object, error
 		return []byte{}, &want, err
 	}
 
-	fmt.Printf("Should convert %s/%s from %s to %s\n", have.Namespace, have.Name, tfv1alpha2.SchemeGroupVersion, tfv1alpha1.SchemeGroupVersion)
+	log.Printf("Should convert %s/%s from %s to %s\n", have.Namespace, have.Name, tfv1alpha2.SchemeGroupVersion, tfv1alpha1.SchemeGroupVersion)
 
 	want.TypeMeta = metav1.TypeMeta{
 		Kind:       "Terraform",
@@ -42,9 +43,9 @@ func ConvertV1alpha2ToV1alpha1(rawRequest []byte) ([]byte, runtime.Object, error
 		},
 	}
 	want.Status.Phase = tfv1alpha1.StatusPhase(have.Status.Phase)
-	want.Status.Exported = tfv1alpha1.Exported(have.Status.Exported)
+	want.Status.Exported = tfv1alpha1.ExportedFalse
 	want.Status.LastCompletedGeneration = have.Status.LastCompletedGeneration
 	rawResponse, _ := json.Marshal(want)
-
+	log.Print("took ", time.Since(start).String(), " to complete conversion")
 	return rawResponse, &want, nil
 }
