@@ -127,6 +127,39 @@ type TerraformSpec struct {
 
 	// TaskOptions are a list of configuration options to be injected into task pods.
 	TaskOptions []TaskOption `json:"taskOptions,omitempty"`
+
+	// Plugins are tasks that run during a workflow but are not part of the main workflow.
+	// Plugins can be treated as just another task, however, plugins do not have completion or failure
+	// detection.
+	//
+	// Example definition of a plugin:
+	//
+	// ```yaml
+	//   plugins:
+	//   - monitor:
+	//      image: ghcr.io/galleybytes/monitor:latest
+	//      imagePullPolicy: IfNotPresent
+	//      when: After
+	//      task: setup
+	// ```
+	//
+	// The above plugin task will run after the setup task has completed.
+	//
+	// Alternatively, a plugin can be triggered to start at the same time of another task. For example:
+	//
+	// ```yaml
+	//   plugins:
+	//   - monitor:
+	//      image: ghcr.io/galleybytes/monitor:latest
+	//      imagePullPolicy: IfNotPresent
+	//      when: At
+	//      task: setup
+	// ```
+	//
+	// Each plugin is run once per generation. Plugins that are older than the current generation
+	// are automatically reaped.
+	// +optional
+	Plugins map[TaskName]Plugin `json:"plugins,omitempty"`
 }
 
 // Setup are things that only happen during the life of the setup task.
@@ -202,6 +235,55 @@ func (t TaskName) String() string {
 	return string(t)
 }
 
+func (t TaskName) ID() int {
+	switch t {
+	case RunNil:
+		return -1
+	case RunSetup:
+		return 1
+	case RunPreInit:
+		return 2
+	case RunInit:
+		return 3
+	case RunPostInit:
+		return 4
+	case RunPrePlan:
+		return 5
+	case RunPlan:
+		return 6
+	case RunPostPlan:
+		return 7
+	case RunPreApply:
+		return 8
+	case RunApply:
+		return 9
+	case RunPostApply:
+		return 10
+	case RunSetupDelete:
+		return 101
+	case RunPreInitDelete:
+		return 102
+	case RunInitDelete:
+		return 103
+	case RunPostInitDelete:
+		return 104
+	case RunPrePlanDelete:
+		return 105
+	case RunPlanDelete:
+		return 106
+	case RunPostPlanDelete:
+		return 107
+	case RunPreApplyDelete:
+		return 108
+	case RunApplyDelete:
+		return 109
+	case RunPostApplyDelete:
+		return 110
+	default:
+		return -2
+	}
+}
+
 const (
 	RunSetupDelete     TaskName = "setup-delete"
 	RunPreInitDelete   TaskName = "preinit-delete"
@@ -228,6 +310,25 @@ const (
 
 	// RunExport RunType = "export"
 )
+
+// Plugin Define additional pods to run during a workflow
+// +k8s:openapi-gen=true
+type Plugin struct {
+	// Plugin container image definition
+	ImageConfig `json:",inline"`
+
+	// When is a keyword of a two-part selector of when the plugin gets run in the workflow. The value
+	// must be one of
+	//
+	// - <code>At</code> to run at the same time as the defined task
+	//
+	// - <code>After</code> to run after the defined task has completed.
+	When string `json:"when"`
+
+	// Task is the second part of a two-part selector of when the plugin gets run in the workflow. This
+	// should correspond to one of the tfo task names.
+	Task TaskName `json:"task"`
+}
 
 // TaskOption are different configuration options to be injected into task pods. Can apply to
 // one ore more task pods.
@@ -441,15 +542,15 @@ type AWSCredentials struct {
 	//   }
 	// ```
 	//
-	// This option is just a specialized version of Credentials.ServiceAccountAnnotations and will
-	// be a candidate of removal in the future.
+	// <note>This option is just a specialized version of Credentials.ServiceAccountAnnotations and will
+	// be a candidate of removal in the future.</note>
 	IRSA string `json:"irsa,omitempty"`
 
 	// KIAM requires the kiam role-name as the string input. This will add the
 	// correct annotation to the terraform execution pod
 	//
-	// This option is just a specialized version of Credentials.ServiceAccountAnnotations and will
-	// be a candidate of removal in the future.
+	// <note>This option is just a specialized version of Credentials.ServiceAccountAnnotations and will
+	// be a candidate of removal in the future.</note>
 	KIAM string `json:"kiam,omitempty"`
 }
 
@@ -488,16 +589,10 @@ type TerraformStatus struct {
 	// // RerunAttempt	number is increased if a new pod is detected for the same stage.
 	// CurrentAttempt int64 `json:"currentAttempt"`
 
-	// TODO maybe change this to
-	// ExportReady bool - when try can run eport on it... no tracking on it
-	// ExportStatus string - mostly the same thing, just easier to understand
-	//
-	// Or just move export to an entirely different controller. Accepts the same
-	// fileds of export, and reads in tf resource as ref. Benifit will run in
-	// foreround instead of background. The cons are a new controller to
-	// maintain.
-	// Status of export if used
-	Exported Exported `json:"exported,omitempty"`
+	// Plugins is a list of plugins that have been executed by the controller. Will get
+	// refreshed each generation.
+	// +optional
+	Plugins []TaskName `json:"plugins,omitempty"`
 }
 
 type Exported string
@@ -511,17 +606,31 @@ const (
 	ExportCreating     Exported = "creating"
 )
 
+// Stage is the current task of the workflow.
+// +k8s:openapi-gen=true
 type Stage struct {
-	Generation int64      `json:"generation"`
-	State      StageState `json:"state"`
-	TaskType   TaskName   `json:"podType"`
+	// Generation is the generation of the resource when the task got started.
+	Generation int64 `json:"generation"`
+
+	// State is the phase of the task pod.
+	State StageState `json:"state"`
+
+	// TaskType is which task is currently running.
+	TaskType TaskName `json:"podType"`
 
 	// Interruptible is set to false when the pod should not be terminated
-	// such as when doing a terraform apply
+	// such as when doing a terraform apply.
 	Interruptible Interruptible `json:"interruptible"`
-	Reason        string        `json:"reason"`
-	StartTime     metav1.Time   `json:"startTime,omitempty"`
-	StopTime      metav1.Time   `json:"stopTime,omitempty"`
+
+	// Reason is a message of what is happening with the pod. The controller uses this field
+	// when certain reasons occur to make scheduling decisions.
+	Reason string `json:"reason"`
+
+	// StartTime is when the task got created by the controller, not when a pod got started.
+	StartTime metav1.Time `json:"startTime,omitempty"`
+
+	// StopTime is when the task went into a stopped phase.
+	StopTime metav1.Time `json:"stopTime,omitempty"`
 
 	// Message stores the last message displayed in the logs. It is stored and checked by the
 	// controller to reduce the noise in the logs by only displying the message once.
@@ -531,6 +640,29 @@ type Stage struct {
 	// PodName is the pod assigned to execute the stage.
 	// +optional
 	PodName string `json:"podName,omitempty"`
+}
+
+// IsEqual checks desired stage if equal to current stage
+func (s Stage) IsEqual(desired Stage) string {
+	if s.Generation != desired.Generation {
+		return "generation"
+	}
+	if s.TaskType != desired.TaskType {
+		return "taskType"
+	}
+	if s.Interruptible != desired.Interruptible {
+		return "interruptible"
+	}
+	if s.Reason != desired.Reason {
+		return "reason"
+	}
+	if s.Message != desired.Message {
+		return "message"
+	}
+	if s.PodName != desired.PodName {
+		return "podName"
+	}
+	return ""
 }
 
 type StatusPhase string

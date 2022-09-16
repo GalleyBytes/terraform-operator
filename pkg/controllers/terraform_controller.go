@@ -39,13 +39,124 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
+// ReconcileTerraform reconciles a Terraform object
+type ReconcileTerraform struct {
+	// This client, initialized using mgr.Client() above, is a split client
+	// that reads objects from the cache and writes to the apiserver
+	Client                  client.Client
+	Scheme                  *runtime.Scheme
+	Recorder                record.EventRecorder
+	Log                     logr.Logger
+	MaxConcurrentReconciles int
+	Cache                   *localcache.Cache
+
+	GlobalEnvFromConfigmapData map[string]string
+	GlobalEnvFromSecretData    map[string][]byte
+	GlobalEnvSuffix            string
+}
+
+// createEnvFromSources adds any of the global environment vars defined at the controller scope
+// and generates a configmap or secret that will be loaded into the resource Task pods.
+//
+// TODO Each time a new generation is created of the tfo resource, this "global" env from vars should
+// generate a new configap and secret. The reason for this is to prevent a generation from producing a
+// different plan when is was the controller that changed options. A new generation should be forced
+// if the plan needs to change.
+func (r ReconcileTerraform) createEnvFromSources(ctx context.Context, tf *tfv1alpha2.Terraform) error {
+
+	resourceName := tf.Name
+	resourceNamespace := tf.Namespace
+	name := fmt.Sprintf("%s-%s", resourceName, r.GlobalEnvSuffix)
+	if len(r.GlobalEnvFromConfigmapData) > 0 {
+		configMap := corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: resourceNamespace,
+			},
+			Data: r.GlobalEnvFromConfigmapData,
+		}
+		controllerutil.SetControllerReference(tf, &configMap, r.Scheme)
+		errOnCreate := r.Client.Create(ctx, &configMap)
+		if errOnCreate != nil {
+			if errors.IsAlreadyExists(errOnCreate) {
+				errOnUpdate := r.Client.Update(ctx, &configMap)
+				if errOnUpdate != nil {
+					return errOnUpdate
+				}
+			} else {
+				return errOnCreate
+			}
+		}
+	}
+
+	if len(r.GlobalEnvFromSecretData) > 0 {
+		secret := corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: resourceNamespace,
+			},
+			Data: r.GlobalEnvFromSecretData,
+		}
+		controllerutil.SetControllerReference(tf, &secret, r.Scheme)
+		errOnCreate := r.Client.Create(ctx, &secret)
+		if errOnCreate != nil {
+			if errors.IsAlreadyExists(errOnCreate) {
+				errOnUpdate := r.Client.Update(ctx, &secret)
+				if errOnUpdate != nil {
+					return errOnUpdate
+				}
+			} else {
+				return errOnCreate
+			}
+		}
+	}
+
+	return nil
+}
+
+// listEnvFromSources makes an assumption that if global envs are defined in the controller, the
+// configmap and secrets for the envs have been created or updated when initializing the workflow.
+//
+// This function will return the envFrom of the resources that should exist but does not validate that
+// they do exist. If the configmap or secret is missing, force the generation of the tfo resource to update
+// and the controller will recreate the missing resources.
+func (r ReconcileTerraform) listEnvFromSources(tf *tfv1alpha2.Terraform) []corev1.EnvFromSource {
+	envFrom := []corev1.EnvFromSource{}
+	resourceName := tf.Name
+	name := fmt.Sprintf("%s-%s", resourceName, r.GlobalEnvSuffix)
+
+	if len(r.GlobalEnvFromConfigmapData) > 0 {
+		// ConfigMap that should exist
+		envFrom = append(envFrom, corev1.EnvFromSource{
+			ConfigMapRef: &corev1.ConfigMapEnvSource{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: name,
+				},
+			},
+		})
+	}
+
+	if len(r.GlobalEnvFromSecretData) > 0 {
+		// Secret that should exist
+		envFrom = append(envFrom, corev1.EnvFromSource{
+			SecretRef: &corev1.SecretEnvSource{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: name,
+				},
+			},
+		})
+	}
+
+	return envFrom
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *ReconcileTerraform) SetupWithManager(mgr ctrl.Manager) error {
 	controllerOptions := runtimecontroller.Options{
 		MaxConcurrentReconciles: r.MaxConcurrentReconciles,
 	}
 
-	if os.Getenv("DO_NOT_RECONCILE") != "" {
+	if os.Getenv("DO_NOT_RECONCILE") == "true" {
 		// This is useful for testing webhooks
 		return nil
 	}
@@ -62,18 +173,6 @@ func (r *ReconcileTerraform) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 	return nil
-}
-
-// ReconcileTerraform reconciles a Terraform object
-type ReconcileTerraform struct {
-	// This client, initialized using mgr.Client() above, is a split client
-	// that reads objects from the cache and writes to the apiserver
-	Client                  client.Client
-	Scheme                  *runtime.Scheme
-	Recorder                record.EventRecorder
-	Log                     logr.Logger
-	MaxConcurrentReconciles int
-	Cache                   *localcache.Cache
 }
 
 // ParsedAddress uses go-getter's detect mechanism to get the parsed url
@@ -131,7 +230,7 @@ type TaskOptions struct {
 	image                               string
 	imagePullPolicy                     corev1.PullPolicy
 	labels                              map[string]string
-	mainModuleAddonData                 map[string]string
+	mainModulePluginData                map[string]string
 	namespace                           string
 	outputsSecretName                   string
 	outputsToInclude                    []string
@@ -140,6 +239,7 @@ type TaskOptions struct {
 	prefixedName                        string
 	resourceLabels                      map[string]string
 	resourceName                        string
+	resourceUUID                        string
 	task                                tfv1alpha2.TaskName
 	saveOutputs                         bool
 	secretData                          map[string][]byte
@@ -152,10 +252,11 @@ type TaskOptions struct {
 	versionedName                       string
 }
 
-func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generation int64) TaskOptions {
+func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generation int64, globalEnvFrom []corev1.EnvFromSource) TaskOptions {
 	// TODO Read the tfstate and decide IF_NEW_RESOURCE based on that
 	// applyAction := false
 	resourceName := tf.Name
+	resourceUUID := string(tf.UID)
 	prefixedName := tf.Status.PodNamePrefix
 	versionedName := prefixedName + "-v" + fmt.Sprint(tf.Generation)
 	terraformVersion := tf.Spec.TerraformVersion
@@ -169,7 +270,7 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 	labels := make(map[string]string)
 	annotations := make(map[string]string)
 	env := []corev1.EnvVar{}
-	envFrom := []corev1.EnvFromSource{}
+	envFrom := globalEnvFrom
 	cleanupDisk := false
 	urlSource := ""
 	configMapSourceName := ""
@@ -316,10 +417,23 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 	outputsToInclude := tf.Spec.OutputsToInclude
 	outputsToOmit := tf.Spec.OutputsToOmit
 
-	resourceLabels := make(map[string]string)
-
 	if tf.Spec.Setup != nil {
 		cleanupDisk = tf.Spec.Setup.CleanupDisk
+	}
+
+	resourceLabels := map[string]string{
+		"terraforms.tf.isaaguilar.com/generation":       fmt.Sprintf("%d", generation),
+		"terraforms.tf.isaaguilar.com/resourceName":     resourceName,
+		"terraforms.tf.isaaguilar.com/podPrefix":        prefixedName,
+		"terraforms.tf.isaaguilar.com/terraformVersion": terraformVersion,
+		"app.kubernetes.io/name":                        "terraform-operator",
+		"app.kubernetes.io/component":                   "terraform-operator-runner",
+		"app.kubernetes.io/created-by":                  "controller",
+	}
+
+	if task.ID() == -2 {
+		// This is not one of the main tasks so it's probably an plugin
+		resourceLabels["terraforms.tf.isaaguilar.com/isPlugin"] = "true"
 	}
 
 	return TaskOptions{
@@ -341,8 +455,9 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 		image:                               image,
 		task:                                task,
 		resourceLabels:                      resourceLabels,
+		resourceUUID:                        resourceUUID,
 		serviceAccount:                      serviceAccount,
-		mainModuleAddonData:                 make(map[string]string),
+		mainModulePluginData:                make(map[string]string),
 		secretData:                          make(map[string][]byte),
 		cleanupDisk:                         cleanupDisk,
 		outputsSecretName:                   outputsSecretName,
@@ -373,8 +488,8 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	}
 	r.Cache.Set(lockKey, reconcilerID, -1)
 	defer r.Cache.Delete(lockKey)
-	defer reqLogger.V(2).Info("Request has released reconcile lock")
-	reqLogger.V(2).Info("Request has acquired reconcile lock")
+	defer reqLogger.V(6).Info("Request has released reconcile lock")
+	reqLogger.V(6).Info("Request has acquired reconcile lock")
 
 	tf, err := r.getTerraformResource(ctx, request.NamespacedName, 3, reqLogger)
 	if err != nil {
@@ -443,7 +558,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			return reconcile.Result{}, fmt.Errorf("failed to create a new stage")
 		}
 		tf.Status.Stage = *stage
-		tf.Status.Exported = tfv1alpha2.ExportedFalse
+		tf.Status.Plugins = []tfv1alpha2.TaskName{}
 
 		err := r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 		if err != nil {
@@ -489,10 +604,14 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		return reconcile.Result{}, nil
 	}
 
+	globalEnvFrom := r.listEnvFromSources(tf)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 	currentStage := tf.Status.Stage
 	podType := currentStage.TaskType
 	generation := currentStage.Generation
-	runOpts := newTaskOptions(tf, currentStage.TaskType, generation)
+	runOpts := newTaskOptions(tf, currentStage.TaskType, generation, globalEnvFrom)
 
 	if podType == tfv1alpha2.RunNil {
 		// podType is blank when the terraform workflow has completed for
@@ -588,7 +707,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		}
 		tf.Status.Stage.State = tfv1alpha2.StateInProgress
 
-		// TODO Becuase the pod is already running, is it critical that the
+		// TODO because the pod is already running, is it critical that the
 		// phase and state be updated. The updateStatus function needs to retry
 		// if it fails to update.
 		err = r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
@@ -599,6 +718,26 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		// When the pod is created, don't requeue. The pod's status changes
 		// will trigger tfo to reconcile.
 		return reconcile.Result{}, nil
+	}
+
+	// By now, the task pod exists and the controller has to check and update on the status of the pod.
+	for pluginTaskName, pluginConfig := range tf.Spec.Plugins {
+		if tfv1alpha2.ListContainsTask(tf.Status.Plugins, pluginTaskName) {
+			continue
+		}
+
+		when := pluginConfig.When
+		whenTask := pluginConfig.Task
+		switch when {
+		case "After":
+			if whenTask.ID() < podType.ID() {
+				return r.createPluginPod(ctx, reqLogger, tf, pluginTaskName, pluginConfig, globalEnvFrom)
+			}
+		case "At":
+			if whenTask.ID() == podType.ID() {
+				return r.createPluginPod(ctx, reqLogger, tf, pluginTaskName, pluginConfig, globalEnvFrom)
+			}
+		}
 	}
 
 	// At this point, a pod is found for the current stage. We can check the
@@ -694,7 +833,7 @@ func (r ReconcileTerraform) getTerraformResource(ctx context.Context, namespaced
 
 func newStage(tf *tfv1alpha2.Terraform, taskType tfv1alpha2.TaskName, reason string, interruptible tfv1alpha2.Interruptible, stageState tfv1alpha2.StageState) *tfv1alpha2.Stage {
 	if reason == "GENERATION_CHANGE" {
-		tf.Status.Exported = tfv1alpha2.ExportedFalse
+		tf.Status.Plugins = []tfv1alpha2.TaskName{}
 		tf.Status.Phase = tfv1alpha2.PhaseInitializing
 	}
 	startTime := metav1.NewTime(time.Now())
@@ -779,7 +918,7 @@ func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1alpha2
 
 	// resource status
 	if currentStageCanNotBeInterrupted && currentStageIsRunning {
-		// Cannot change to the next stage becuase the current stage cannot be
+		// Cannot change to the next stage because the current stage cannot be
 		// interrupted and is currently running
 		isNewStage = false
 	} else if isNewGeneration && tfIsNotFinalizing {
@@ -966,6 +1105,21 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1alpha2.Terra
 		return
 	}
 
+	// Before running a deletion, make sure we've got the most up-to-date resource in case a background
+	// process takes longer than normal to complete.
+	ctx := context.TODO()
+	namespacedName := types.NamespacedName{Namespace: tf.Namespace, Name: tf.Name}
+	tf, err := r.getTerraformResource(ctx, namespacedName, 3, logger)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			logger.V(1).Info("Terraform resource not found. Ignoring since object must be deleted")
+			return
+		}
+		// Error reading the object - requeue the request.
+		logger.Error(err, "Failed to get Terraform")
+		return
+	}
+
 	// The labels required are read as:
 	// 1. The terraforms.tf.isaaguilar.com/generation key MUST exist
 	// 2. The terraforms.tf.isaaguilar.com/generation value MUST match the current resource generation
@@ -1062,6 +1216,86 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1alpha2.Terra
 	}
 }
 
+func (r ReconcileTerraform) reapPlugins(tf *tfv1alpha2.Terraform, attempt int) {
+	logger := r.Log.WithName("ReaperPlugins").WithValues("Terraform", fmt.Sprintf("%s/%s", tf.Namespace, tf.Name))
+	if attempt > 20 {
+		// TODO explain what and way resources cannot be reaped
+		logger.Info("Could not reap resources: Max attempts to reap old-generation resources")
+		return
+	}
+	// Before running a deletion, make sure we've got the most up-to-date resource in case a background
+	// process takes longer than normal to complete.
+	ctx := context.TODO()
+	namespacedName := types.NamespacedName{Namespace: tf.Namespace, Name: tf.Name}
+	tf, err := r.getTerraformResource(ctx, namespacedName, 3, logger)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			logger.V(1).Info("Terraform resource not found. Ignoring since object must be deleted")
+			return
+		}
+		// Error reading the object - requeue the request.
+		logger.Error(err, "Failed to get Terraform")
+		return
+	}
+
+	// Delete old plugins regardless of pod phase
+	labelSelectorForPlugins, err := labels.Parse(fmt.Sprintf("terraforms.tf.isaaguilar.com/isPlugin=true,terraforms.tf.isaaguilar.com/generation,terraforms.tf.isaaguilar.com/generation!=%d,terraforms.tf.isaaguilar.com/resourceName,terraforms.tf.isaaguilar.com/resourceName=%s", tf.Generation, tf.Name))
+	if err != nil {
+		logger.Error(err, "Could not parse labels")
+	}
+	err = r.Client.DeleteAllOf(context.TODO(), &corev1.Pod{}, &client.DeleteAllOfOptions{
+		ListOptions: client.ListOptions{
+			LabelSelector: labelSelectorForPlugins,
+			Namespace:     tf.Namespace,
+		},
+	})
+	if err != nil {
+		logger.Error(err, "Could not reap old generation pods")
+	}
+
+	// Wait for all the pods of the previous generations to be gone. Only after
+	// the pods are cleaned up, clean up other associated resources like roles
+	// and rolebindings.
+	podList := corev1.PodList{}
+	err = r.Client.List(context.TODO(), &podList, &client.ListOptions{
+		LabelSelector: labelSelectorForPlugins,
+		Namespace:     tf.Namespace,
+	})
+	if err != nil {
+		logger.Error(err, "Could not list pods to reap")
+	}
+	if len(podList.Items) > 0 {
+		// There are still some pods from a previous generation hanging around
+		// for some reason. Wait some time and try to reap again later.
+		time.Sleep(30 * time.Second)
+		attempt++
+		go r.reapPlugins(tf, attempt)
+	}
+}
+
+// createPluginPod will attempt to create the plugin pod and mark it as added in the resource's status.
+// No logic is used to determine if the plugin was successful. If the createPod function errors, a log event
+// is recorded in the controller.
+func (r ReconcileTerraform) createPluginPod(ctx context.Context, logger logr.Logger, tf *tfv1alpha2.Terraform, pluginTaskName tfv1alpha2.TaskName, pluginConfig tfv1alpha2.Plugin, globalEnvFrom []corev1.EnvFromSource) (reconcile.Result, error) {
+	pluginRunOpts := newTaskOptions(tf, pluginTaskName, tf.Generation, globalEnvFrom)
+	pluginRunOpts.image = pluginConfig.Image
+	pluginRunOpts.imagePullPolicy = pluginConfig.ImagePullPolicy
+
+	go func() {
+		err := r.createPod(ctx, tf, pluginRunOpts)
+		if err != nil {
+			logger.Error(err, fmt.Sprintf("Failed creating plugin pod %s", pluginTaskName))
+		}
+	}()
+	logger.Info(fmt.Sprintf("Starting the plugin pod '%s'", pluginTaskName.String()))
+	tf.Status.Plugins = append(tf.Status.Plugins, pluginTaskName)
+	err := r.updateStatusWithRetry(ctx, tf, &tf.Status, logger)
+	if err != nil {
+		logger.V(1).Info(err.Error())
+	}
+	return reconcile.Result{}, err
+}
+
 // updateFinalizer sets and unsets the finalizer on the tf resource. When
 // IgnoreDelete is true, the finalizer is removed. When IgnoreDelete is false,
 // the finalizer is added.
@@ -1110,6 +1344,7 @@ func (r ReconcileTerraform) updateStatus(ctx context.Context, tf *tfv1alpha2.Ter
 }
 
 func (r ReconcileTerraform) updateStatusWithRetry(ctx context.Context, tf *tfv1alpha2.Terraform, desiredStatus *tfv1alpha2.TerraformStatus, logger logr.Logger) error {
+	resourceNamespacedName := types.NamespacedName{Namespace: tf.Namespace, Name: tf.Name}
 	var getResourceErr error
 	var updateErr error
 	for i := 0; i < 10; i++ {
@@ -1117,9 +1352,9 @@ func (r ReconcileTerraform) updateStatusWithRetry(ctx context.Context, tf *tfv1a
 			n := math.Pow(2, float64(i+3))
 			backoffTime := math.Ceil(.5 * (n - 1))
 			time.Sleep(time.Duration(backoffTime) * time.Millisecond)
-			tf, getResourceErr = r.getTerraformResource(ctx, types.NamespacedName{Namespace: tf.Namespace, Name: tf.Name}, 10, logger)
+			tf, getResourceErr = r.getTerraformResource(ctx, resourceNamespacedName, 10, logger)
 			if getResourceErr != nil {
-				return fmt.Errorf("failed to get latest terraform: %s", getResourceErr)
+				return fmt.Errorf("failed to get latest terraform while updating status: %s", getResourceErr)
 			}
 			if desiredStatus != nil {
 				tf.Status = *desiredStatus
@@ -1127,9 +1362,49 @@ func (r ReconcileTerraform) updateStatusWithRetry(ctx context.Context, tf *tfv1a
 		}
 		updateErr = r.Client.Status().Update(ctx, tf)
 		if updateErr != nil {
+			logger.V(7).Info(fmt.Sprintf("Retrying to update status because an error has occurred while updating: %s", updateErr))
 			continue
 		}
-		break
+
+		// Confirm the status is up to date
+		isUpdateConfirmed := false
+		for j := 0; j < 10; j++ {
+			tf, updatedResourceErr := r.getTerraformResource(ctx, resourceNamespacedName, 10, logger)
+			if updatedResourceErr != nil {
+				return fmt.Errorf("failed to get latest terraform while validating status: %s", updatedResourceErr)
+			}
+
+			if !tfv1alpha2.TaskListsAreEqual(tf.Status.Plugins, desiredStatus.Plugins) {
+				logger.V(7).Info(fmt.Sprintf("Failed to confirm the status update because plugins did not equal. Have %s and Want %s", tf.Status.Plugins, desiredStatus.Plugins))
+
+			} else if stageItem := tf.Status.Stage.IsEqual(desiredStatus.Stage); stageItem != "" {
+				logger.V(7).Info(fmt.Sprintf("Failed to confirm the status update because stage item %s did not equal", stageItem))
+
+			} else if tf.Status.Phase != desiredStatus.Phase {
+				logger.V(7).Info("Failed to confirm the status update because phase did not equal")
+
+			} else if tf.Status.PodNamePrefix != desiredStatus.PodNamePrefix {
+				logger.V(7).Info("Failed to confirm the status update because podNamePrefix did not equal")
+
+			} else {
+				isUpdateConfirmed = true
+			}
+
+			if isUpdateConfirmed {
+				break
+			}
+
+			logger.V(7).Info("Retrying to confirm the status update")
+			n := math.Pow(2, float64(j+3))
+			backoffTime := math.Ceil(.5 * (n - 1))
+			time.Sleep(time.Duration(backoffTime) * time.Millisecond)
+		}
+
+		if isUpdateConfirmed {
+			break
+		}
+		logger.V(7).Info("Retrying to update status because the update was not confirmed")
+
 	}
 	if updateErr != nil {
 		return fmt.Errorf("failed to update tf status: %s", updateErr)
@@ -1223,7 +1498,6 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha2.Ter
 	reqLogger := r.Log.WithValues("Terraform", types.NamespacedName{Name: tf.Name, Namespace: tf.Namespace}.String())
 	var err error
 
-	generation := runOpts.generation
 	reason := tf.Status.Stage.Reason
 	isNewGeneration := reason == "GENERATION_CHANGE" || reason == "TF_RESOURCE_DELETED"
 	isFirstInstall := reason == "TF_RESOURCE_CREATED"
@@ -1240,20 +1514,10 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha2.Ter
 		}
 	}
 
-	/*
-
-
-		Load the terraform module from one of source, inline, or configmap
-
-
-		To test new version, just load the source version.
-
-	*/
-
 	if tf.Spec.TerraformModule.Inline != "" {
 		// Add add inline to configmap and instruct the pod to fetch the
 		// configmap as the main module
-		runOpts.mainModuleAddonData["inline-module.tf"] = tf.Spec.TerraformModule.Inline
+		runOpts.mainModulePluginData["inline-module.tf"] = tf.Spec.TerraformModule.Inline
 	}
 
 	if tf.Spec.TerraformModule.ConfigMapSelector != nil {
@@ -1262,7 +1526,7 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha2.Ter
 		if err != nil {
 			return err
 		}
-		runOpts.mainModuleAddonData[".__TFO__ConfigMapModule.json"] = string(b)
+		runOpts.mainModulePluginData[".__TFO__ConfigMapModule.json"] = string(b)
 	}
 
 	if tf.Spec.TerraformModule.Source != "" {
@@ -1272,12 +1536,14 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha2.Ter
 		}
 	} else {
 
-		// TODO REMOVE ME
+		// Make this a legit error, must have a module to run else this is not a tf workflow
 		return fmt.Errorf("for testing, only allow the terraform module from source")
 
 	}
 
 	if isChanged {
+
+		go r.reapPlugins(tf, 0)
 
 		for _, taskOption := range tf.Spec.TaskOptions {
 			if inlineScript := taskOption.Script.Inline; inlineScript != "" {
@@ -1285,7 +1551,7 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha2.Ter
 					if affected.String() == "*" {
 						continue
 					}
-					runOpts.mainModuleAddonData[fmt.Sprintf("inline-%s.sh", affected)] = inlineScript
+					runOpts.mainModulePluginData[fmt.Sprintf("inline-%s.sh", affected)] = inlineScript
 				}
 			}
 		}
@@ -1350,10 +1616,10 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha2.Ter
 		}
 		resourceDownloads := string(b)
 
-		runOpts.mainModuleAddonData[".__TFO__ResourceDownloads.json"] = resourceDownloads
+		runOpts.mainModulePluginData[".__TFO__ResourceDownloads.json"] = resourceDownloads
 
 		// Override the backend.tf by inserting a custom backend
-		runOpts.mainModuleAddonData["backend_override.tf"] = tf.Spec.Backend
+		runOpts.mainModulePluginData["backend_override.tf"] = tf.Spec.Backend
 
 		/*
 
@@ -1413,14 +1679,6 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha2.Ter
 		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostApplyDelete)] = tf.Spec.PostApplyDeleteScript
 		// }
 	}
-
-	runOpts.resourceLabels["terraforms.tf.isaaguilar.com/generation"] = fmt.Sprintf("%d", generation)
-	runOpts.resourceLabels["terraforms.tf.isaaguilar.com/resourceName"] = runOpts.resourceName
-	runOpts.resourceLabels["terraforms.tf.isaaguilar.com/podPrefix"] = runOpts.prefixedName
-	runOpts.resourceLabels["terraforms.tf.isaaguilar.com/terraformVersion"] = runOpts.terraformVersion
-	runOpts.resourceLabels["app.kubernetes.io/name"] = "terraform-operator"
-	runOpts.resourceLabels["app.kubernetes.io/component"] = "terraform-operator-runner"
-	runOpts.resourceLabels["app.kubernetes.io/created-by"] = "controller"
 
 	// RUN
 	err = r.run(ctx, reqLogger, tf, runOpts, isNewGeneration, isFirstInstall)
@@ -1755,7 +2013,7 @@ func (r TaskOptions) generateConfigMap() *corev1.ConfigMap {
 			Namespace: r.namespace,
 			Labels:    r.resourceLabels,
 		},
-		Data: r.mainModuleAddonData,
+		Data: r.mainModulePluginData,
 	}
 	return cm
 }
@@ -1806,7 +2064,7 @@ func (r TaskOptions) generateRole() *rbacv1.Role {
 		APIGroups: []string{"coordination.k8s.io"},
 		Resources: []string{"leases"},
 	}
-	if r.mainModuleAddonData["backend_override.tf"] != "" {
+	if r.mainModulePluginData["backend_override.tf"] != "" {
 		// parse the backennd string the way most people write it
 		// example:
 		// terraform {
@@ -1814,7 +2072,7 @@ func (r TaskOptions) generateRole() *rbacv1.Role {
 		//     ...
 		//   }
 		// }
-		s := strings.Split(r.mainModuleAddonData["backend_override.tf"], "\n")
+		s := strings.Split(r.mainModulePluginData["backend_override.tf"], "\n")
 		for _, line := range s {
 			// Assuming that config lines contain an equal sign
 			// All other lines are discarded
@@ -1923,6 +2181,10 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 		{
 			Name:  "TFO_RESOURCE",
 			Value: r.resourceName,
+		},
+		{
+			Name:  "TFO_RESOURCE_UUID",
+			Value: r.resourceUUID,
 		},
 		{
 			Name:  "TFO_NAMESPACE",
@@ -2068,11 +2330,11 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 		},
 	}...)
 
-	mainModuleAddonsConfigMapName := "main-module-addons"
-	mainModuleAddonsConfigMapPath := "/tmp/main-module-addons"
+	mainModulePluginsConfigMapName := "main-module-addons"
+	mainModulePluginsConfigMapPath := "/tmp/main-module-addons"
 	volumes = append(volumes, []corev1.Volume{
 		{
-			Name: mainModuleAddonsConfigMapName,
+			Name: mainModulePluginsConfigMapName,
 			VolumeSource: corev1.VolumeSource{
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{
@@ -2084,14 +2346,14 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 	}...)
 	volumeMounts = append(volumeMounts, []corev1.VolumeMount{
 		{
-			Name:      mainModuleAddonsConfigMapName,
-			MountPath: mainModuleAddonsConfigMapPath,
+			Name:      mainModulePluginsConfigMapName,
+			MountPath: mainModulePluginsConfigMapPath,
 		},
 	}...)
 	envs = append(envs, []corev1.EnvVar{
 		{
 			Name:  "TFO_MAIN_MODULE_ADDONS",
-			Value: mainModuleAddonsConfigMapPath,
+			Value: mainModulePluginsConfigMapPath,
 		},
 	}...)
 
@@ -2242,6 +2504,10 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *tfv1alpha2.Terraform, runOpts TaskOptions, isNewGeneration, isFirstInstall bool) (err error) {
 
 	if isFirstInstall || isNewGeneration {
+		if err := r.createEnvFromSources(ctx, tf); err != nil {
+			return err
+		}
+
 		if err := r.createPVC(ctx, tf, runOpts); err != nil {
 			return err
 		}

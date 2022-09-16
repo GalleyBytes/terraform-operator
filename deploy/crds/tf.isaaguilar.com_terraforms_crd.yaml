@@ -794,16 +794,16 @@ spec:
                             [ { \"Effect\": \"Allow\", \"Principal\": { \"Federated\":
                             \"${OIDC_ARN}\" }, \"Action\": \"sts:AssumeRoleWithWebIdentity\",
                             \"Condition\": { \"StringLike\": { \"${OIDC_URL}:sub\":
-                            \"system:serviceaccount:*:tf-*\" } } } ] } ``` \n This
+                            \"system:serviceaccount:*:tf-*\" } } } ] } ``` \n <note>This
                             option is just a specialized version of Credentials.ServiceAccountAnnotations
-                            and will be a candidate of removal in the future."
+                            and will be a candidate of removal in the future.</note>"
                           type: string
                         kiam:
                           description: "KIAM requires the kiam role-name as the string
                             input. This will add the correct annotation to the terraform
-                            execution pod \n This option is just a specialized version
-                            of Credentials.ServiceAccountAnnotations and will be a
-                            candidate of removal in the future."
+                            execution pod \n <note>This option is just a specialized
+                            version of Credentials.ServiceAccountAnnotations and will
+                            be a candidate of removal in the future.</note>"
                           type: string
                       type: object
                     secretNameRef:
@@ -920,6 +920,49 @@ spec:
                   is used.
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
+              plugins:
+                additionalProperties:
+                  description: Plugin Define additional pods to run during a workflow
+                  properties:
+                    image:
+                      description: The container image from the registry; tags must
+                        be omitted
+                      type: string
+                    imagePullPolicy:
+                      description: 'Image pull policy. One of Always, Never, IfNotPresent.
+                        Defaults to Always if :latest tag is specified, or IfNotPresent
+                        otherwise. Cannot be updated. More info: https://kubernetes.io/docs/concepts/containers/images#updating-images'
+                      type: string
+                    task:
+                      description: Task is the second part of a two-part selector
+                        of when the plugin gets run in the workflow. This should correspond
+                        to one of the tfo task names.
+                      type: string
+                    when:
+                      description: "When is a keyword of a two-part selector of when
+                        the plugin gets run in the workflow. The value must be one
+                        of \n - <code>At</code> to run at the same time as the defined
+                        task \n - <code>After</code> to run after the defined task
+                        has completed."
+                      type: string
+                  required:
+                  - image
+                  - task
+                  - when
+                  type: object
+                description: "Plugins are tasks that run during a workflow but are
+                  not part of the main workflow. Plugins can be treated as just another
+                  task, however, plugins do not have completion or failure detection.
+                  \n Example definition of a plugin: \n ```yaml plugins: - monitor:
+                  image: ghcr.io/galleybytes/monitor:latest imagePullPolicy: IfNotPresent
+                  when: After task: setup ``` \n The above plugin task will run after
+                  the setup task has completed. \n Alternatively, a plugin can be
+                  triggered to start at the same time of another task. For example:
+                  \n ```yaml plugins: - monitor: image: ghcr.io/galleybytes/monitor:latest
+                  imagePullPolicy: IfNotPresent when: At task: setup ``` \n Each plugin
+                  is run once per generation. Plugins that are older than the current
+                  generation are automatically reaped."
+                type: object
               scmAuthMethods:
                 description: SCMAuthMethods define multiple SCMs that require tokens/keys
                 items:
@@ -1406,15 +1449,6 @@ spec:
           status:
             description: TerraformStatus defines the observed state of Terraform
             properties:
-              exported:
-                description: "TODO maybe change this to ExportReady bool - when try
-                  can run eport on it... no tracking on it ExportStatus string - mostly
-                  the same thing, just easier to understand \n Or just move export
-                  to an entirely different controller. Accepts the same fileds of
-                  export, and reads in tf resource as ref. Benifit will run in foreround
-                  instead of background. The cons are a new controller to maintain.
-                  Status of export if used"
-                type: string
               lastCompletedGeneration:
                 format: int64
                 type: integer
@@ -1424,6 +1458,12 @@ spec:
                 type: object
               phase:
                 type: string
+              plugins:
+                description: Plugins is a list of plugins that have been executed
+                  by the controller. Will get refreshed each generation.
+                items:
+                  type: string
+                type: array
               podNamePrefix:
                 description: PodNamePrefix is used to identify this installation of
                   the resource. For very long resource names, like those greater than
@@ -1434,13 +1474,16 @@ spec:
                   nil.
                 type: string
               stage:
+                description: Stage is the current task of the workflow.
                 properties:
                   generation:
+                    description: Generation is the generation of the resource when
+                      the task got started.
                     format: int64
                     type: integer
                   interruptible:
                     description: Interruptible is set to false when the pod should
-                      not be terminated such as when doing a terraform apply
+                      not be terminated such as when doing a terraform apply.
                     type: boolean
                   message:
                     description: Message stores the last message displayed in the
@@ -1451,15 +1494,23 @@ spec:
                     description: PodName is the pod assigned to execute the stage.
                     type: string
                   podType:
+                    description: TaskType is which task is currently running.
                     type: string
                   reason:
+                    description: Reason is a message of what is happening with the
+                      pod. The controller uses this field when certain reasons occur
+                      to make scheduling decisions.
                     type: string
                   startTime:
+                    description: StartTime is when the task got created by the controller,
+                      not when a pod got started.
                     format: date-time
                     type: string
                   state:
+                    description: State is the phase of the task pod.
                     type: string
                   stopTime:
+                    description: StopTime is when the task went into a stopped phase.
                     format: date-time
                     type: string
                 required:
@@ -1471,13 +1522,16 @@ spec:
                 type: object
               stages:
                 items:
+                  description: Stage is the current task of the workflow.
                   properties:
                     generation:
+                      description: Generation is the generation of the resource when
+                        the task got started.
                       format: int64
                       type: integer
                     interruptible:
                       description: Interruptible is set to false when the pod should
-                        not be terminated such as when doing a terraform apply
+                        not be terminated such as when doing a terraform apply.
                       type: boolean
                     message:
                       description: Message stores the last message displayed in the
@@ -1488,15 +1542,23 @@ spec:
                       description: PodName is the pod assigned to execute the stage.
                       type: string
                     podType:
+                      description: TaskType is which task is currently running.
                       type: string
                     reason:
+                      description: Reason is a message of what is happening with the
+                        pod. The controller uses this field when certain reasons occur
+                        to make scheduling decisions.
                       type: string
                     startTime:
+                      description: StartTime is when the task got created by the controller,
+                        not when a pod got started.
                       format: date-time
                       type: string
                     state:
+                      description: State is the phase of the task pod.
                       type: string
                     stopTime:
+                      description: StopTime is when the task went into a stopped phase.
                       format: date-time
                       type: string
                   required:
