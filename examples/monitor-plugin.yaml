@@ -1,0 +1,32 @@
+apiVersion: tf.isaaguilar.com/v1alpha2
+kind: Terraform
+metadata:
+  name: monitor-plugin-example
+  namespace: default
+spec:
+  terraformVersion: 1.0.0
+  # Pull this module to execute
+  terraformModule:
+    source: https://github.com/cloudposse/terraform-example-module.git?ref=main
+
+  # Use kubernetes as a backend which is available for terraform >= v0.13
+  backend: |-
+    terraform {
+      backend "kubernetes" {
+        secret_suffix    = "monitor-plugin-example"
+        in_cluster_config  = true
+        namespace = "default"
+      }
+    }
+  ignoreDelete: false
+  keepLatestPodsOnly: true
+
+  plugins:
+    monitor:
+      image: isaaguilar/tfomonitor:latest
+      imagePullPolicy: IfNotPresent
+      when: After
+      task: setup
+
+
+

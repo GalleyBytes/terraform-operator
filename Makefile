@@ -97,20 +97,25 @@ k8s-gen: crds generate openapi-gen client-gen
 
 docker-build:
 	docker build -t ${IMG} -f build/Dockerfile .
+	docker push ${IMG}
 
 docker-build-local:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -v -o build/_output/manager cmd/manager/main.go
-	docker build -t ${IMG} -f build/Dockerfile.local build/
+	docker build -t ${IMG}-amd64 -f build/Dockerfile.local build/
 
 docker-build-local-arm:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GO111MODULE=on go build -v -o build/_output/manager cmd/manager/main.go
-	docker build -t ${IMG}-arm64 -f build/Dockerfile.local build/
+	docker build -t "${IMG}-arm64v8" --build-arg ARCH=arm64v8 -f build/Dockerfile.local build/
 
 docker-push:
-	docker push ${IMG}
+	docker push "${IMG}-amd64"
 
 docker-push-arm:
-	docker push ${IMG}-arm64
+	docker push "${IMG}-arm64v8"
+
+docker-release:
+	docker manifest create "${IMG}"  --amend "${IMG}-amd64" "${IMG}-arm64v8"
+	docker manifest push "${IMG}"
 
 docker-build-job:
 	DOCKER_REPO=${DOCKER_REPO} /bin/bash docker/terraform/build.sh
@@ -120,8 +125,8 @@ docker-push-job:
 
 GENCERT_VERSION ?= v1.0.0
 docker-build-gencert:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -v -o projects/gencert/bin/gencert projects/gencert/main.go
-	docker build -t localhost:5000/terraform-operator-gencert:${GENCERT_VERSION} -f projects/gencert/Dockerfile projects/gencert/
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -v -o projects/gencert/bin/gencert-amd64 projects/gencert/main.go
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GO111MODULE=on go build -v -o projects/gencert/bin/gencert-arm64 projects/gencert/main.go
 
 release-gencert:
 	/bin/bash hack/release-gencert.sh ${GENCERT_VERSION}

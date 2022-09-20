@@ -330,7 +330,7 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 	}
 
 	if images.Setup.Image == "" {
-		images.Setup.Image = "ghcr.io/galleybytes/terraform-operator-setup:1.0.0"
+		images.Setup.Image = "ghcr.io/galleybytes/terraform-operator-setup:1.0.1"
 	}
 
 	if images.Script == nil {

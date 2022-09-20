@@ -953,12 +953,12 @@ spec:
                 description: "Plugins are tasks that run during a workflow but are
                   not part of the main workflow. Plugins can be treated as just another
                   task, however, plugins do not have completion or failure detection.
-                  \n Example definition of a plugin: \n ```yaml plugins: - monitor:
+                  \n Example definition of a plugin: \n ```yaml plugins: monitor:
                   image: ghcr.io/galleybytes/monitor:latest imagePullPolicy: IfNotPresent
                   when: After task: setup ``` \n The above plugin task will run after
                   the setup task has completed. \n Alternatively, a plugin can be
                   triggered to start at the same time of another task. For example:
-                  \n ```yaml plugins: - monitor: image: ghcr.io/galleybytes/monitor:latest
+                  \n ```yaml plugins: monitor: image: ghcr.io/galleybytes/monitor:latest
                   imagePullPolicy: IfNotPresent when: At task: setup ``` \n Each plugin
                   is run once per generation. Plugins that are older than the current
                   generation are automatically reaped."

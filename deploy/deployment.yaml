@@ -26,7 +26,7 @@ spec:
         runAsUser: 1001
       initContainers:
       - name: gencert
-        image: "isaaguilar/terraform-operator-gencert:v1.0.0"
+        image: "ghcr.io/galleybytes/terraform-operator-gencert:1.0.0"
         imagePullPolicy: IfNotPresent
         env:
         - name: SERVICE
