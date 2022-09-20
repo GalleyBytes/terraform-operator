@@ -136,11 +136,11 @@ type TerraformSpec struct {
 	//
 	// ```yaml
 	//   plugins:
-	//   - monitor:
-	//      image: ghcr.io/galleybytes/monitor:latest
-	//      imagePullPolicy: IfNotPresent
-	//      when: After
-	//      task: setup
+	//     monitor:
+	//       image: ghcr.io/galleybytes/monitor:latest
+	//       imagePullPolicy: IfNotPresent
+	//       when: After
+	//       task: setup
 	// ```
 	//
 	// The above plugin task will run after the setup task has completed.
@@ -149,11 +149,11 @@ type TerraformSpec struct {
 	//
 	// ```yaml
 	//   plugins:
-	//   - monitor:
-	//      image: ghcr.io/galleybytes/monitor:latest
-	//      imagePullPolicy: IfNotPresent
-	//      when: At
-	//      task: setup
+	//     monitor:
+	//       image: ghcr.io/galleybytes/monitor:latest
+	//       imagePullPolicy: IfNotPresent
+	//       when: At
+	//       task: setup
 	// ```
 	//
 	// Each plugin is run once per generation. Plugins that are older than the current generation

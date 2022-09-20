@@ -1,3 +1,3 @@
 FROM scratch
-COPY bin/gencert /gencert
+COPY bin/gencert-arm64 /gencert
 ENTRYPOINT ["/gencert"]
