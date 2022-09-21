@@ -313,7 +313,7 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 	}
 
 	if images.Terraform.Image == "" {
-		images.Terraform.Image = fmt.Sprintf("ghcr.io/galleybytes/terraform-operator-tftaskv1:%s", terraformVersion)
+		images.Terraform.Image = fmt.Sprintf("%s:%s", tfv1alpha2.TerraformTaskImageRepoDefault, terraformVersion)
 	} else {
 		terraformImage := images.Terraform.Image
 		splitImage := strings.Split(images.Terraform.Image, ":")
@@ -330,7 +330,7 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 	}
 
 	if images.Setup.Image == "" {
-		images.Setup.Image = "ghcr.io/galleybytes/terraform-operator-setup:1.0.1"
+		images.Setup.Image = fmt.Sprintf("%s:%s", tfv1alpha2.SetupTaskImageRepoDefault, tfv1alpha2.SetupTaskImageTagDefault)
 	}
 
 	if images.Script == nil {
@@ -340,7 +340,7 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 	}
 
 	if images.Script.Image == "" {
-		images.Script.Image = "ghcr.io/galleybytes/terraform-operator-script:1.0.0"
+		images.Script.Image = fmt.Sprintf("%s:%s", tfv1alpha2.ScriptTaskImageRepoDefault, tfv1alpha2.ScriptTaskImageTagDefault)
 	}
 
 	terraformTasks := []tfv1alpha2.TaskName{
