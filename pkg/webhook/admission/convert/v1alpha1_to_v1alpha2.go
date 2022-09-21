@@ -274,15 +274,15 @@ func convertRunScriptsToTaskInlineScripts(inlineScript string, task tfv1alpha2.T
 func convertImageConfig(imageType, repo, version string, imagePullPolicy corev1.PullPolicy) *tfv1alpha2.ImageConfig {
 	defaults := map[string]map[string]string{
 		"script": {
-			"tag":   "1.0.0",
-			"image": "ghcr.io/galleybytes/terraform-operator-script",
+			"tag":   tfv1alpha2.ScriptTaskImageTagDefault,
+			"image": tfv1alpha2.ScriptTaskImageRepoDefault,
 		},
 		"terraform": {
-			"image": "ghcr.io/galleybytes/terraform-operator-tftaskv1",
+			"image": tfv1alpha2.TerraformTaskImageRepoDefault,
 		},
 		"setup": {
-			"image": "ghcr.io/galleybytes/terraform-operator-setup",
-			"tag":   "1.0.0",
+			"image": tfv1alpha2.SetupTaskImageRepoDefault,
+			"tag":   tfv1alpha2.SetupTaskImageTagDefault,
 		},
 	}
 	var imageConfig *tfv1alpha2.ImageConfig

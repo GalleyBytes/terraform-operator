@@ -7,8 +7,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+const (
+	SetupTaskImageRepoDefault     = "ghcr.io/galleybytes/terraform-operator-setup"
+	SetupTaskImageTagDefault      = "1.0.1"
+	TerraformTaskImageRepoDefault = "ghcr.io/galleybytes/terraform-operator-tftaskv1"
+	TerraformTaskImageTagDefault  = ""
+	ScriptTaskImageRepoDefault    = "ghcr.io/galleybytes/terraform-operator-script"
+	ScriptTaskImageTagDefault     = "1.0.0"
+)
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +genclient
