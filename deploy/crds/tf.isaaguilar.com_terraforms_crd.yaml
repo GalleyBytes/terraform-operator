@@ -1112,12 +1112,6 @@ spec:
                   description: TaskOption are different configuration options to be
                     injected into task pods. Can apply to one ore more task pods.
                   properties:
-                    affects:
-                      description: Affects is a list of tasks these options will get
-                        applied to.
-                      items:
-                        type: string
-                      type: array
                     annotations:
                       additionalProperties:
                         type: string
@@ -1279,6 +1273,12 @@ spec:
                             type: object
                         type: object
                       type: array
+                    for:
+                      description: For is a list of tasks these options will get applied
+                        to.
+                      items:
+                        type: string
+                      type: array
                     labels:
                       additionalProperties:
                         type: string
@@ -1389,7 +1389,7 @@ spec:
                           type: string
                       type: object
                   required:
-                  - affects
+                  - for
                   type: object
                 type: array
               terraformModule:

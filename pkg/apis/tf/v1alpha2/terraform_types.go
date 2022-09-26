@@ -341,8 +341,8 @@ type Plugin struct {
 // one ore more task pods.
 // +k8s:openapi-gen=true
 type TaskOption struct {
-	// Affects is a list of tasks these options will get applied to.
-	Affects []TaskName `json:"affects"`
+	// For is a list of tasks these options will get applied to.
+	For []TaskName `json:"for"`
 
 	// RunnerRules are RBAC rules that will be added to all runner pods.
 	PolicyRules []rbacv1.PolicyRule `json:"policyRules,omitempty"`
