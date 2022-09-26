@@ -279,8 +279,8 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 	// TaskOptions have data for all the tasks but since we're only interested
 	// in the ones for this taskType, extract and add them to RunOptions
 	for _, taskOption := range tf.Spec.TaskOptions {
-		if tfv1alpha2.ListContainsTask(taskOption.Affects, task) ||
-			tfv1alpha2.ListContainsTask(taskOption.Affects, "*") {
+		if tfv1alpha2.ListContainsTask(taskOption.For, task) ||
+			tfv1alpha2.ListContainsTask(taskOption.For, "*") {
 			policyRules = append(policyRules, taskOption.PolicyRules...)
 			for key, value := range taskOption.Annotations {
 				annotations[key] = value
@@ -291,7 +291,7 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 			env = append(env, taskOption.Env...)
 			envFrom = append(envFrom, taskOption.EnvFrom...)
 		}
-		if tfv1alpha2.ListContainsTask(taskOption.Affects, task) {
+		if tfv1alpha2.ListContainsTask(taskOption.For, task) {
 			urlSource = taskOption.Script.Source
 			if configMapSelector := taskOption.Script.ConfigMapSelector; configMapSelector != nil {
 				configMapSourceName = configMapSelector.Name
@@ -867,7 +867,7 @@ func getConfiguredTasks(taskOptions *[]tfv1alpha2.TaskOption) []tfv1alpha2.TaskN
 		return tasks
 	}
 	for _, taskOption := range *taskOptions {
-		for _, affected := range taskOption.Affects {
+		for _, affected := range taskOption.For {
 			if affected == "*" {
 				continue
 			}
@@ -1518,27 +1518,20 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha2.Ter
 		// Add add inline to configmap and instruct the pod to fetch the
 		// configmap as the main module
 		runOpts.mainModulePluginData["inline-module.tf"] = tf.Spec.TerraformModule.Inline
-	}
-
-	if tf.Spec.TerraformModule.ConfigMapSelector != nil {
+	} else if tf.Spec.TerraformModule.ConfigMapSelector != nil {
 		// Instruct the setup pod to fetch the configmap as the main module
 		b, err := json.Marshal(tf.Spec.TerraformModule.ConfigMapSelector)
 		if err != nil {
 			return err
 		}
 		runOpts.mainModulePluginData[".__TFO__ConfigMapModule.json"] = string(b)
-	}
-
-	if tf.Spec.TerraformModule.Source != "" {
+	} else if tf.Spec.TerraformModule.Source != "" {
 		runOpts.terraformModuleParsed, err = getParsedAddress(tf.Spec.TerraformModule.Source, "", false, scmMap)
 		if err != nil {
 			return err
 		}
 	} else {
-
-		// Make this a legit error, must have a module to run else this is not a tf workflow
-		return fmt.Errorf("for testing, only allow the terraform module from source")
-
+		return fmt.Errorf("no terraform module detected")
 	}
 
 	if isChanged {
@@ -1547,7 +1540,7 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha2.Ter
 
 		for _, taskOption := range tf.Spec.TaskOptions {
 			if inlineScript := taskOption.Script.Inline; inlineScript != "" {
-				for _, affected := range taskOption.Affects {
+				for _, affected := range taskOption.For {
 					if affected.String() == "*" {
 						continue
 					}

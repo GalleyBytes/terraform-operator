@@ -18,7 +18,22 @@ func ConvertV1alpha2ToV1alpha1(rawRequest []byte) ([]byte, runtime.Object, error
 
 	err := json.Unmarshal(rawRequest, &have)
 	if err != nil {
-		return []byte{}, &want, err
+		// The request to convert cannot be converted and will continue to fail because what is already
+		// stored in kubernetes has been malformed or corrupted.
+
+		// Perhaps the rawRequest accidentally has the wrong version stored. Can the request be
+		// unmarshalled as the desired response?
+		err := json.Unmarshal(rawRequest, &want)
+		if err != nil {
+			return []byte{}, &want, err
+		}
+		want.TypeMeta = metav1.TypeMeta{
+			Kind:       "Terraform",
+			APIVersion: tfv1alpha1.SchemeGroupVersion.String(),
+		}
+		rawResponse, _ := json.Marshal(want)
+		return rawResponse, &want, nil
+
 	}
 
 	log.Printf("Should convert %s/%s from %s to %s\n", have.Namespace, have.Name, tfv1alpha2.SchemeGroupVersion, tfv1alpha1.SchemeGroupVersion)

@@ -716,9 +716,9 @@ func schema_pkg_apis_tf_v1alpha2_TaskOption(ref common.ReferenceCallback) common
 				Description: "TaskOption are different configuration options to be injected into task pods. Can apply to one ore more task pods.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
-					"affects": {
+					"for": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Affects is a list of tasks these options will get applied to.",
+							Description: "For is a list of tasks these options will get applied to.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
@@ -825,7 +825,7 @@ func schema_pkg_apis_tf_v1alpha2_TaskOption(ref common.ReferenceCallback) common
 						},
 					},
 				},
-				Required: []string{"affects"},
+				Required: []string{"for"},
 			},
 		},
 		Dependencies: []string{
