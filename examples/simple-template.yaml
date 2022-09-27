@@ -28,7 +28,7 @@ spec:
 
   # Create a tfvar env for the terraform to use
   taskOptions:
-  - affects:
+  - for:
     - '*' # The following config affects all task pods
     env:
     - name: TF_VAR_name
