@@ -11,7 +11,7 @@ import (
 const (
 	SetupTaskImageRepoDefault     = "ghcr.io/galleybytes/terraform-operator-setup"
 	SetupTaskImageTagDefault      = "1.0.1"
-	TerraformTaskImageRepoDefault = "ghcr.io/galleybytes/terraform-operator-tftaskv1"
+	TerraformTaskImageRepoDefault = "ghcr.io/galleybytes/terraform-operator-tftaskv1.0.1"
 	TerraformTaskImageTagDefault  = ""
 	ScriptTaskImageRepoDefault    = "ghcr.io/galleybytes/terraform-operator-script"
 	ScriptTaskImageTagDefault     = "1.0.1"
