@@ -29,7 +29,7 @@ Another simple method is to install the resources under `deploy` & `deploy/crds`
 ```bash
 git clone https://github.com/isaaguilar/terraform-operator.git
 cd terraform-operator
-kubectl apply -f deploy/bundles/v0.9.0-pre3/v0.9.0-pre3.yaml
+kubectl apply -f deploy/bundles/v0.9.0-pre4/v0.9.0-pre4.yaml
 ```
 
 See [more installation options](http://tf.isaaguilar.com/docs/getting-started/installation/).
