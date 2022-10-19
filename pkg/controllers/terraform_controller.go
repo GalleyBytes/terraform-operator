@@ -2044,6 +2044,12 @@ func (r TaskOptions) generateRole() *rbacv1.Role {
 			APIGroups: []string{""},
 			Resources: []string{"configmaps"},
 		},
+		{
+			Verbs:         []string{"get"},
+			APIGroups:     []string{"tf.isaaguilar.com"},
+			Resources:     []string{"terraforms"},
+			ResourceNames: []string{r.resourceName},
+		},
 	}
 
 	// When using the Kubernetes backend, allow the operator to create secrets and leases
