@@ -157,6 +157,7 @@ func main() {
 		}
 	}
 
+	crd.Spec.PreserveUnknownFields = false
 	crd.Spec.Conversion = &apiextensionsv1.CustomResourceConversion{
 		Strategy: apiextensionsv1.WebhookConverter,
 		Webhook: &apiextensionsv1.WebhookConversion{
