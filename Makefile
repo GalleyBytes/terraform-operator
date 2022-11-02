@@ -123,11 +123,7 @@ docker-build-job:
 docker-push-job:
 	docker images ${DOCKER_REPO}/tfops --format '{{ .Repository }}:{{ .Tag }}'| grep -v '<none>'|xargs -n1 -t docker push
 
-GENCERT_VERSION ?= v1.0.0
-docker-build-gencert:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -v -o projects/gencert/bin/gencert-amd64 projects/gencert/main.go
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GO111MODULE=on go build -v -o projects/gencert/bin/gencert-arm64 projects/gencert/main.go
-
+GENCERT_VERSION ?= 1.0.2
 release-gencert:
 	/bin/bash hack/release-gencert.sh ${GENCERT_VERSION}
 

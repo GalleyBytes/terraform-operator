@@ -3,34 +3,22 @@ set -o nounset
 set -o errexit
 set -o pipefail
 
-export version="$1"
-export DOCKER_REPO=${DOCKER_REPO:-"isaaguilar"}
-export IMAGE_NAME=${IMAGE_NAME:-"terraform-operator-gencert"}
-repo="$DOCKER_REPO/$IMAGE_NAME"
+export tag="${1#v}"
+export host=${2:-"ghcr.io"}
+export org=${3:-"galleybytes"}
+export image_name=${4:-"terraform-operator-gencert"}
 
+# Execute at root of terraform-operator repo
+cd "$(git rev-parse --show-toplevel)"
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -v -o projects/gencert/bin/gencert-amd64 projects/gencert/main.go
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GO111MODULE=on go build -v -o projects/gencert/bin/gencert-arm64 projects/gencert/main.go
 
-cd $(git rev-parse --show-toplevel)
-existing_builds=($(
-    page="https://registry.hub.docker.com/v2/repositories/$repo/tags/?page=1"
-    while [[ $? -eq 0 ]]; do
-        results=$(curl -s "$page")
+tmpdir="$(mktemp -d)/terraform-operator-tasks"
+git clone https://github.com/GalleyBytes/terraform-operator-tasks.git "$tmpdir"
 
-        if [[ $(jq '.count' <<< "$results") -eq 0 ]]; then
-            break
-        fi
+# Copy the dockerfiles to the build dir
+cp -r projects/gencert/* "$tmpdir/images/"
 
-        jq -r '."results"[]["name"]' <<< "$results"
-        page=`jq -r '.next//empty' <<< "$results"`
-        if [[ -z "$page" ]]; then
-            break
-        fi
-    done
-))
-if [[ " ${existing_builds[*]} " =~ " $version " ]]; then
-    printf "\n\n----------------\n$IMG already exists\n"
-    exit 0
-fi
-
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -v -o projects/gencert/bin/gencert projects/gencert/main.go
-docker build -t ${repo}:${version} -f projects/gencert/Dockerfile projects/gencert/
-docker push ${repo}:${version}
+cd "$tmpdir/images"
+poetry install --no-root
+poetry run python builder.py --org "$org" --image "$image_name" --tag "$tag" --host "$host" --release

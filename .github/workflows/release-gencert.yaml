@@ -1,0 +1,39 @@
+name: Release gencert image
+
+on:
+  pull_request:
+    branches:
+    - master
+  push:
+    branches:
+    - master
+
+jobs:
+  build_and_release_gencert:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    - name: Python Version
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+
+    - name: Log in to registry
+      # This is where you will update the PAT to GITHUB_TOKEN
+      run: echo "${{ secrets.PKG_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
+
+    - name: Build and push
+      env:
+        GITHUB_TOKEN: ${{ secrets.PKG_TOKEN }}
+      run: |
+          if [[ $(git branch --show-current) != "master" ]];then
+            export GENCERT_VERSION=0.0.0-$(git rev-parse --short HEAD)
+          fi
+          make release-gencert
