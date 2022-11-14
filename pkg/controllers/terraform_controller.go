@@ -2154,6 +2154,14 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 	envs := r.env
 	envs = append(envs, []corev1.EnvVar{
 		{
+			Name: "POD_UID",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "metadata.uid",
+				},
+			},
+		},
+		{
 			/*
 
 				What is the significance of having an env about the TFO_RUNNER?
