@@ -250,6 +250,7 @@ type TaskOptions struct {
 	terraformVersion                    string
 	urlSource                           string
 	versionedName                       string
+	requireApproval                     bool
 }
 
 func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generation int64, globalEnvFrom []corev1.EnvFromSource) TaskOptions {
@@ -431,6 +432,8 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 		"app.kubernetes.io/created-by":                  "controller",
 	}
 
+	requireApproval := tf.Spec.RequireApproval
+
 	if task.ID() == -2 {
 		// This is not one of the main tasks so it's probably an plugin
 		resourceLabels["terraforms.tf.isaaguilar.com/isPlugin"] = "true"
@@ -466,6 +469,7 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 		outputsToInclude:                    outputsToInclude,
 		outputsToOmit:                       outputsToOmit,
 		urlSource:                           urlSource,
+		requireApproval:                     requireApproval,
 	}
 }
 
@@ -2228,6 +2232,10 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 		{
 			Name:  "TFO_OUTPUTS_TO_OMIT",
 			Value: strings.Join(r.outputsToOmit, ","),
+		},
+		{
+			Name:  "TFO_REQUIRE_APPROVAL",
+			Value: strconv.FormatBool(r.requireApproval),
 		},
 	}...)
 
