@@ -963,6 +963,19 @@ spec:
                   is run once per generation. Plugins that are older than the current
                   generation are automatically reaped."
                 type: object
+              requireApproval:
+                description: "RequireApproval will place a hold after completing a
+                  plan that prevents the workflow from continuing. However, the implementation
+                  of the hold takes place in the tf.sh script. (See https://github.com/GalleyBytes/terraform-operator-tasks/blob/master/tf.sh)
+                  \n Depending on the script that executes during the workflow, this
+                  field may be ignored if not implemented by the user properly. \n
+                  To approve a workflow using the official galleybytes implementation,
+                  a file needs to be placed on the workflow's persistent-volume: \n
+                  - $TFO_GENERATION_PATH/_approved_<uuid-of-plan-pod> - to approve
+                  the workflow \n - $TFO_GENERATION_PATH/_canceled_<uuid-of-plan-pod>
+                  - to deny and cancel the workflow \n Deleting the plan that is holding
+                  will spawn a new plan and a new approval will be required."
+                type: boolean
               scmAuthMethods:
                 description: SCMAuthMethods define multiple SCMs that require tokens/keys
                 items:
@@ -1443,6 +1456,7 @@ spec:
                 type: boolean
             required:
             - backend
+            - requireApproval
             - terraformModule
             - terraformVersion
             type: object
