@@ -10,11 +10,11 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 const (
 	SetupTaskImageRepoDefault     = "ghcr.io/galleybytes/terraform-operator-setup"
-	SetupTaskImageTagDefault      = "1.0.1"
-	TerraformTaskImageRepoDefault = "ghcr.io/galleybytes/terraform-operator-tftaskv1.0.1"
+	SetupTaskImageTagDefault      = "1.1.2"
+	TerraformTaskImageRepoDefault = "ghcr.io/galleybytes/terraform-operator-tftaskv1.1.0"
 	TerraformTaskImageTagDefault  = ""
 	ScriptTaskImageRepoDefault    = "ghcr.io/galleybytes/terraform-operator-script"
-	ScriptTaskImageTagDefault     = "1.0.1"
+	ScriptTaskImageTagDefault     = "1.1.2"
 )
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -170,17 +170,18 @@ type TerraformSpec struct {
 
 	// RequireApproval will place a hold after completing a plan that prevents the workflow from continuing.
 	// However, the implementation of the hold takes place in the tf.sh script.
+	//
+	//
 	// (See https://github.com/GalleyBytes/terraform-operator-tasks/blob/master/tf.sh)
 	//
-	// Depending on the script that executes during the workflow, this field may be ignored if not implemented
-	// by the user properly.
 	//
-	// To approve a workflow using the official galleybytes implementation, a file needs to be placed on the
+	// Depending on the script that executes during the workflow, this field may be ignored if not implemented
+	// by the user properly. To approve a workflow using the official galleybytes implementation, a file needs to be placed on the
 	// workflow's persistent-volume:
 	//
-	// - $TFO_GENERATION_PATH/_approved_<uuid-of-plan-pod> - to approve the workflow
+	// - <code>$TFO_GENERATION_PATH/\\_approved\\_\\<uuid-of-plan-pod></code> - to approve the workflow
 	//
-	// - $TFO_GENERATION_PATH/_canceled_<uuid-of-plan-pod> - to deny and cancel the workflow
+	// - <code>$TFO_GENERATION_PATH/\\_canceled\\_\\<uuid-of-plan-pod></code> - to deny and cancel the workflow
 	//
 	// Deleting the plan that is holding will spawn a new plan and a new approval will be required.
 	RequireApproval bool `json:"requireApproval"`
