@@ -213,6 +213,14 @@ func ConvertV1alpha1ToV1alpha2(rawRequest []byte) ([]byte, runtime.Object, error
 	want.Status.Plugins = []tfv1alpha2.TaskName{}
 	want.Status.LastCompletedGeneration = have.Status.LastCompletedGeneration
 
+	// Finally store the original v1alpha1 contents in it's entirety into an annotation that can be used to
+	// load into the old resource to continue to work with v1alpha1
+	if want.ObjectMeta.Annotations == nil {
+		want.ObjectMeta.Annotations = map[string]string{}
+	}
+	v1alpha1TerraformJSON, _ := json.Marshal(have)
+	want.ObjectMeta.Annotations["tf.isaaguilar.com/v1alpha1_terraforms"] = string(v1alpha1TerraformJSON)
+
 	rawResponse, _ := json.Marshal(want)
 
 	return rawResponse, &want, nil
