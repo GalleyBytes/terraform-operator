@@ -184,7 +184,8 @@ type TerraformSpec struct {
 	// - <code>$TFO_GENERATION_PATH/\\_canceled\\_\\<uuid-of-plan-pod></code> - to deny and cancel the workflow
 	//
 	// Deleting the plan that is holding will spawn a new plan and a new approval will be required.
-	RequireApproval bool `json:"requireApproval"`
+	// +optional
+	RequireApproval bool `json:"requireApproval,omitempty"`
 }
 
 // Setup are things that only happen during the life of the setup task.

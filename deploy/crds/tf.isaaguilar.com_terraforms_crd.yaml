@@ -1456,7 +1456,6 @@ spec:
                 type: boolean
             required:
             - backend
-            - requireApproval
             - terraformModule
             - terraformVersion
             type: object
