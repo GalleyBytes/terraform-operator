@@ -145,9 +145,6 @@ install: crds
 bundle: crds
 	/bin/bash hack/bundler.sh ${VERSION}
 
-# Run against the configured Kubernetes cluster in ~/.kube/config
-run: fmt vet
-	go run cmd/manager/main.go --max-concurrent-reconciles 10 --disable-conversion-webhook --zap-log-level=5
 
 # Run tests
 ENVTEST_ASSETS_DIR=$(shell pwd)/testbin
@@ -160,5 +157,16 @@ build: k8s-gen openapi-gen docker-build-local
 build-all: build docker-build-job
 push: docker-push
 push-all: push docker-push-job
+
+# Development Helpers
+
+# Run against the configured Kubernetes cluster in ~/.kube/config
+run: fmt vet
+	go run cmd/manager/main.go --max-concurrent-reconciles 10 --disable-conversion-webhook --zap-log-level=5
+
+install-webhook: fmt vet
+	find deploy -maxdepth 1 -type f -name 'webhook-*' -exec kubectl apply -f {} \;
+
+
 
 .PHONY: build push run install fmt vet docker-build docker-build-local docker-push deploy openapi-gen k8s-gen crds contoller-gen client-gen

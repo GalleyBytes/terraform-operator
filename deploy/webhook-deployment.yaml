@@ -1,10 +1,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: terraform-operator
+  name: terraform-operator-webhook
   namespace: tf-system
 spec:
-  replicas: 1
+  replicas: 2
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -13,17 +13,31 @@ spec:
   selector:
     matchLabels:
       app: terraform-operator
-      component: controller
+      component: webhook
   template:
     metadata:
       labels:
         app: terraform-operator
-        component: controller
+        component: webhook
     spec:
-      serviceAccountName: terraform-operator
+      serviceAccountName: terraform-operator-webhook
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
+      initContainers:
+      - name: gencert
+        image: "ghcr.io/galleybytes/terraform-operator-gencert:1.0.2"
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: SERVICE
+          value: terraform-operator-webhook
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: SECRET
+          value: terraform-operator-selfsigned
       containers:
       - name: terraform-operator
         image: "isaaguilar/terraform-operator:latest"
@@ -33,7 +47,7 @@ spec:
         args:
         - --zap-log-level=debug
         - --zap-encoder=console
-        - --disable-conversion-webhook
+        - --disable-reconciler
         env:
         - name: WATCH_NAMESPACE # Leave blank to watch all namespaces
         - name: POD_NAME
@@ -50,3 +64,16 @@ spec:
           requests:
             cpu: 25m
             memory: 128M
+        ports:
+        - name: https
+          containerPort: 9443
+          protocol: TCP
+        volumeMounts:
+        - name: certs
+          mountPath: /tmp/k8s-webhook-server/serving-certs
+          readOnly: true
+      volumes:
+      - name: certs
+        secret:
+          secretName: terraform-operator-selfsigned
+          optional: true
