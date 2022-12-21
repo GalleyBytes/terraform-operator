@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"net/url"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -156,10 +155,6 @@ func (r *ReconcileTerraform) SetupWithManager(mgr ctrl.Manager) error {
 		MaxConcurrentReconciles: r.MaxConcurrentReconciles,
 	}
 
-	if os.Getenv("DO_NOT_RECONCILE") == "true" {
-		// This is useful for testing webhooks
-		return nil
-	}
 	// only listen to v1alpha2
 	err := ctrl.NewControllerManagedBy(mgr).
 		For(&tfv1alpha2.Terraform{}).

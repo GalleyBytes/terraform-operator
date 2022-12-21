@@ -41,10 +41,12 @@ func main() {
 	var probeAddr string
 	var maxConcurrentReconciles int
 	var disableConversionWebhook bool
+	var disableReconciler bool
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&disableConversionWebhook, "disable-conversion-webhook", false, "Set to true to disable the conversion webhook")
+	flag.BoolVar(&disableReconciler, "disable-reconciler", false, "Set to true to disable the reconcile loop controller)")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -86,19 +88,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controllers.ReconcileTerraform{
-		Client:                     mgr.GetClient(),
-		Log:                        ctrl.Log.WithName("terraform_controller"),
-		Recorder:                   mgr.GetEventRecorderFor("terraform-controller"),
-		Scheme:                     mgr.GetScheme(),
-		MaxConcurrentReconciles:    maxConcurrentReconciles,
-		Cache:                      c,
-		GlobalEnvFromConfigmapData: globalEnvFromConfigmapData,
-		GlobalEnvFromSecretData:    globalEnvFromSecretData,
-		GlobalEnvSuffix:            "global-envs",
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Cluster")
-		os.Exit(1)
+	if !disableReconciler {
+		if err = (&controllers.ReconcileTerraform{
+			Client:                     mgr.GetClient(),
+			Log:                        ctrl.Log.WithName("terraform_controller"),
+			Recorder:                   mgr.GetEventRecorderFor("terraform-controller"),
+			Scheme:                     mgr.GetScheme(),
+			MaxConcurrentReconciles:    maxConcurrentReconciles,
+			Cache:                      c,
+			GlobalEnvFromConfigmapData: globalEnvFromConfigmapData,
+			GlobalEnvFromSecretData:    globalEnvFromSecretData,
+			GlobalEnvSuffix:            "global-envs",
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "Cluster")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 	cache := mgr.GetCache()

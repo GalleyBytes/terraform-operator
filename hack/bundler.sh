@@ -19,14 +19,22 @@ printf -- '---\n# namespace\n' >>  $bundle
 cat deploy/namespace.yaml >> $bundle
 printf -- '\n\n---\n# serviceaccount\n' >>  $bundle
 cat deploy/serviceaccount.yaml >> $bundle
-printf -- '\n\n---\n# service\n' >>  $bundle
-cat deploy/service.yaml >> $bundle
 printf -- '\n\n---\n# clusterrole\n' >>  $bundle
 cat deploy/clusterrole.yaml >> $bundle
 printf -- '\n\n---\n# clusterrolebinding\n' >>  $bundle
 cat deploy/clusterrolebinding.yaml >> $bundle
 printf -- '\n\n---\n# deployment\n' >>  $bundle
 yq write deploy/deployment.yaml spec.template.spec.containers[0].image "isaaguilar/terraform-operator:$ver" >> $bundle
+printf -- '\n\n---\n# webhook-clusterrole\n' >>  $bundle
+cat deploy/webhook-clusterrole.yaml >> $bundle
+printf -- '\n\n---\n# webhook-clusterrolebinding\n' >>  $bundle
+cat deploy/webhook-clusterrolebinding.yaml >> $bundle
+printf -- '\n\n---\n# webhook-deployment\n' >>  $bundle
+yq write deploy/webhook-deployment.yaml spec.template.spec.containers[0].image "isaaguilar/terraform-operator:$ver" >> $bundle
+printf -- '\n\n---\n# webhook-service\n' >>  $bundle
+cat deploy/webhook-service.yaml >> $bundle
+printf -- '\n\n---\n# webhook-serviceaccount\n' >>  $bundle
+cat deploy/webhook-serviceaccount.yaml >> $bundle
 printf -- '\n\n---\n# crd\n' >>  $bundle
 cat deploy/crds/tf.isaaguilar.com_terraforms_crd.yaml >> $bundle
 

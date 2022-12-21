@@ -11,6 +11,6 @@ spec:
     targetPort: 9443
   selector:
     app: terraform-operator
-    release: terraform-operator
+    component: webhook
   sessionAffinity: None
   type: ClusterIP
