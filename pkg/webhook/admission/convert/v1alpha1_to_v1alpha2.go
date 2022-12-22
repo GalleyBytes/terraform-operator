@@ -172,11 +172,12 @@ func ConvertV1alpha1ToV1alpha2(rawRequest []byte) ([]byte, runtime.Object, error
 	convertRunScriptsToTaskInlineScripts(have.Spec.PreApplyDeleteScript, tfv1alpha2.RunPreApplyDelete, &want.Spec.TaskOptions)
 	convertRunScriptsToTaskInlineScripts(have.Spec.PostApplyDeleteScript, tfv1alpha2.RunPostApplyDelete, &want.Spec.TaskOptions)
 
+	if want.Spec.Setup == nil {
+		want.Spec.Setup = &tfv1alpha2.Setup{}
+	}
+	want.Spec.Setup.CleanupDisk = have.Spec.CleanupDisk
 	for _, resourceDownload := range have.Spec.ResourceDownloads {
 		if resourceDownload != nil {
-			if want.Spec.Setup == nil {
-				want.Spec.Setup = &tfv1alpha2.Setup{}
-			}
 			want.Spec.Setup.ResourceDownloads = append(want.Spec.Setup.ResourceDownloads, tfv1alpha2.ResourceDownload(*resourceDownload))
 		}
 	}
