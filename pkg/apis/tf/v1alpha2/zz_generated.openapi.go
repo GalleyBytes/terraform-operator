@@ -824,6 +824,13 @@ func schema_pkg_apis_tf_v1alpha2_TaskOption(ref common.ReferenceCallback) common
 							Ref:         ref("github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2.StageScript"),
 						},
 					},
+					"restartPolicy": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RestartPolicy describes how the task should be restarted. Only one of the following restart policies may be specified.\n\n```go\n  const (\n    RestartPolicyAlways    RestartPolicy = \"Always\"\n    RestartPolicyOnFailure RestartPolicy = \"OnFailure\"\n    RestartPolicyNever     RestartPolicy = \"Never\"\n  )\n```\n\nIf no policy is specified, the restart policy is set to \"Never\".",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
 				},
 				Required: []string{"for"},
 			},

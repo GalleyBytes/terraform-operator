@@ -394,6 +394,20 @@ type TaskOption struct {
 	// Script is used to configure the source of the task's executable script.
 	// +optional
 	Script StageScript `json:"script,omitempty"`
+
+	// RestartPolicy describes how the task should be restarted. Only one of the following restart policies
+	// may be specified.
+	//
+	// ```go
+	//   const (
+	//     RestartPolicyAlways    RestartPolicy = "Always"
+	//     RestartPolicyOnFailure RestartPolicy = "OnFailure"
+	//     RestartPolicyNever     RestartPolicy = "Never"
+	//   )
+	// ```
+	//
+	// If no policy is specified, the restart policy is set to "Never".
+	RestartPolicy corev1.RestartPolicy `json:"restartPolicy,omitempty"`
 }
 
 // StageScript defines the different ways of sourcing execution scripts of tasks. There is an order of
