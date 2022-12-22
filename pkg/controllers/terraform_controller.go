@@ -246,6 +246,7 @@ type TaskOptions struct {
 	urlSource                           string
 	versionedName                       string
 	requireApproval                     bool
+	restartPolicy                       corev1.RestartPolicy
 }
 
 func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generation int64, globalEnvFrom []corev1.EnvFromSource) TaskOptions {
@@ -271,6 +272,7 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 	urlSource := ""
 	configMapSourceName := ""
 	configMapSourceKey := ""
+	restartPolicy := corev1.RestartPolicyNever
 
 	// TaskOptions have data for all the tasks but since we're only interested
 	// in the ones for this taskType, extract and add them to RunOptions
@@ -286,6 +288,9 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 			}
 			env = append(env, taskOption.Env...)
 			envFrom = append(envFrom, taskOption.EnvFrom...)
+			if taskOption.RestartPolicy != "" {
+				restartPolicy = taskOption.RestartPolicy
+			}
 		}
 		if tfv1alpha2.ListContainsTask(taskOption.For, task) {
 			urlSource = taskOption.Script.Source
@@ -465,6 +470,7 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 		outputsToOmit:                       outputsToOmit,
 		urlSource:                           urlSource,
 		requireApproval:                     requireApproval,
+		restartPolicy:                       restartPolicy,
 	}
 }
 
@@ -2475,7 +2481,7 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 		RunAsGroup:   &group,
 		RunAsNonRoot: &runAsNonRoot,
 	}
-	restartPolicy := corev1.RestartPolicyNever
+	restartPolicy := r.restartPolicy
 
 	containers := []corev1.Container{}
 	containers = append(containers, corev1.Container{
