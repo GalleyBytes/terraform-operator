@@ -256,6 +256,15 @@ func ConvertV1alpha2ToV1alpha1(rawRequest []byte) ([]byte, runtime.Object, error
 
 	}
 
+	if have.Spec.Setup != nil {
+		if have.Spec.Setup.ResourceDownloads != nil {
+			for _, resourceDownload := range have.Spec.Setup.ResourceDownloads {
+				want.Spec.ResourceDownloads = append(want.Spec.ResourceDownloads, (*tfv1alpha1.ResourceDownload)(&resourceDownload))
+			}
+		}
+		want.Spec.CleanupDisk = have.Spec.Setup.CleanupDisk
+	}
+
 	// Status is very important so TFO can continue where it left from last version
 	want.Status.PodNamePrefix = have.Status.PodNamePrefix
 	want.Status.Stages = []tfv1alpha1.Stage{
