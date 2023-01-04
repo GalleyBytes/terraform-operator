@@ -250,7 +250,91 @@ func ConvertV1alpha2ToV1alpha1(rawRequest []byte) ([]byte, runtime.Object, error
 				}
 			}
 
-			// TODO Extract TaskOptions for different task types
+			//
+			// The condition where there is a configmap for all terraform tasks translates to having TerraformRunnerExecutionScriptConfigMap
+			//
+			terraformTaskTypes := []tfv1alpha2.TaskName{
+				tfv1alpha2.RunInitDelete,
+				tfv1alpha2.RunPlanDelete,
+				tfv1alpha2.RunApplyDelete,
+				tfv1alpha2.RunInit,
+				tfv1alpha2.RunPlan,
+				tfv1alpha2.RunApply,
+			}
+			terraformTaskOptionsContainingConfigMapSelector := []tfv1alpha2.TaskName{}
+			terraformTaskOptionConfigMapSelector := &tfv1alpha2.ConfigMapSelector{}
+			for _, opts := range have.Spec.TaskOptions {
+				if len(opts.For) == 1 {
+					if tfv1alpha2.ListContainsTask(terraformTaskTypes, opts.For[0]) && opts.Script.ConfigMapSelector != nil {
+						if !tfv1alpha2.ListContainsTask(terraformTaskOptionsContainingConfigMapSelector, opts.For[0]) {
+							// Only true if the same configmap is used for all terraform tasks
+							if terraformTaskOptionConfigMapSelector.Name != "" && terraformTaskOptionConfigMapSelector.Name != opts.Script.ConfigMapSelector.Name {
+								break
+							}
+							if terraformTaskOptionConfigMapSelector.Key != "" && terraformTaskOptionConfigMapSelector.Key != opts.Script.ConfigMapSelector.Key {
+								break
+							}
+							terraformTaskOptionsContainingConfigMapSelector = append(terraformTaskOptionsContainingConfigMapSelector, opts.For[0])
+							terraformTaskOptionConfigMapSelector = opts.Script.ConfigMapSelector
+						}
+					}
+				}
+			}
+			if len(terraformTaskOptionsContainingConfigMapSelector) == len(terraformTaskTypes) && terraformTaskOptionConfigMapSelector != nil {
+				configMapKeySelector := corev1.ConfigMapKeySelector{
+					Key: terraformTaskOptionConfigMapSelector.Key,
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: terraformTaskOptionConfigMapSelector.Name,
+					},
+				}
+				want.Spec.TerraformRunnerExecutionScriptConfigMap = &configMapKeySelector
+			}
+
+			//
+			// The condition where there is a configmap for all setup tasks translates to having SetupRunnerExecutionScriptConfigMap
+			//
+			setupTaskTypes := []tfv1alpha2.TaskName{
+				tfv1alpha2.RunSetupDelete,
+				tfv1alpha2.RunSetup,
+			}
+			setupTaskOptionsContainingConfigMapSelector := []tfv1alpha2.TaskName{}
+			setupTaskOptionConfigMapSelector := &tfv1alpha2.ConfigMapSelector{}
+			for _, opts := range have.Spec.TaskOptions {
+				if len(opts.For) == 1 {
+					if tfv1alpha2.ListContainsTask(setupTaskTypes, opts.For[0]) && opts.Script.ConfigMapSelector != nil {
+						if !tfv1alpha2.ListContainsTask(setupTaskOptionsContainingConfigMapSelector, opts.For[0]) {
+							if setupTaskOptionConfigMapSelector.Name != "" && setupTaskOptionConfigMapSelector.Name != opts.Script.ConfigMapSelector.Name {
+								break
+							}
+							if setupTaskOptionConfigMapSelector.Key != "" && setupTaskOptionConfigMapSelector.Key != opts.Script.ConfigMapSelector.Key {
+								break
+							}
+							setupTaskOptionsContainingConfigMapSelector = append(setupTaskOptionsContainingConfigMapSelector, opts.For[0])
+							setupTaskOptionConfigMapSelector = opts.Script.ConfigMapSelector
+						}
+					}
+				}
+			}
+			if len(setupTaskOptionsContainingConfigMapSelector) == len(setupTaskTypes) && setupTaskOptionConfigMapSelector != nil {
+				configMapKeySelector := corev1.ConfigMapKeySelector{
+					Key: setupTaskOptionConfigMapSelector.Key,
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: setupTaskOptionConfigMapSelector.Name,
+					},
+				}
+				want.Spec.SetupRunnerExecutionScriptConfigMap = &configMapKeySelector
+			}
+
+			//
+			// Find inline scripts and translate them into spec.<scripts> (eg spec.prePlanScript)
+			//
+			for _, opts := range have.Spec.TaskOptions {
+				if len(opts.For) == 1 {
+					if opts.Script.Inline != "" {
+						convertInlineScriptFromTaskOptions(opts.For[0], opts.Script.Inline, &want)
+					}
+				}
+			}
 
 		}
 
@@ -283,4 +367,64 @@ func ConvertV1alpha2ToV1alpha1(rawRequest []byte) ([]byte, runtime.Object, error
 	rawResponse, _ := json.Marshal(want)
 	log.Print("took ", time.Since(start).String(), " to complete conversion")
 	return rawResponse, &want, nil
+}
+
+func PodTypeFromTaskName(taskName tfv1alpha2.TaskName) tfv1alpha1.PodType {
+
+	conversionMap := map[tfv1alpha2.TaskName]tfv1alpha1.PodType{
+		tfv1alpha2.RunSetupDelete:     tfv1alpha1.PodSetupDelete,
+		tfv1alpha2.RunPreInitDelete:   tfv1alpha1.PodPreInitDelete,
+		tfv1alpha2.RunInitDelete:      tfv1alpha1.PodInitDelete,
+		tfv1alpha2.RunPostInitDelete:  tfv1alpha1.PodPostInitDelete,
+		tfv1alpha2.RunPrePlanDelete:   tfv1alpha1.PodPrePlanDelete,
+		tfv1alpha2.RunPlanDelete:      tfv1alpha1.PodPlanDelete,
+		tfv1alpha2.RunPostPlanDelete:  tfv1alpha1.PodPostPlanDelete,
+		tfv1alpha2.RunPreApplyDelete:  tfv1alpha1.PodPreApplyDelete,
+		tfv1alpha2.RunApplyDelete:     tfv1alpha1.PodApplyDelete,
+		tfv1alpha2.RunPostApplyDelete: tfv1alpha1.PodPostApplyDelete,
+
+		tfv1alpha2.RunSetup:     tfv1alpha1.PodSetup,
+		tfv1alpha2.RunPreInit:   tfv1alpha1.PodPreInit,
+		tfv1alpha2.RunInit:      tfv1alpha1.PodInit,
+		tfv1alpha2.RunPostInit:  tfv1alpha1.PodPostInit,
+		tfv1alpha2.RunPrePlan:   tfv1alpha1.PodPrePlan,
+		tfv1alpha2.RunPlan:      tfv1alpha1.PodPlan,
+		tfv1alpha2.RunPostPlan:  tfv1alpha1.PodPostPlan,
+		tfv1alpha2.RunPreApply:  tfv1alpha1.PodPreApply,
+		tfv1alpha2.RunApply:     tfv1alpha1.PodApply,
+		tfv1alpha2.RunPostApply: tfv1alpha1.PodPostApply,
+		tfv1alpha2.RunNil:       tfv1alpha1.PodNil,
+	}
+
+	return conversionMap[taskName]
+
+}
+
+func convertInlineScriptFromTaskOptions(taskName tfv1alpha2.TaskName, scriptContents string, want *tfv1alpha1.Terraform) {
+	switch PodTypeFromTaskName(taskName) {
+	case tfv1alpha1.PodPreInit:
+		want.Spec.PreInitScript = scriptContents
+	case tfv1alpha1.PodPostInit:
+		want.Spec.PostInitScript = scriptContents
+	case tfv1alpha1.PodPrePlan:
+		want.Spec.PrePlanScript = scriptContents
+	case tfv1alpha1.PodPostPlan:
+		want.Spec.PostPlanScript = scriptContents
+	case tfv1alpha1.PodPreApply:
+		want.Spec.PreApplyScript = scriptContents
+	case tfv1alpha1.PodPostApply:
+		want.Spec.PostApplyScript = scriptContents
+	case tfv1alpha1.PodPreInitDelete:
+		want.Spec.PreInitDeleteScript = scriptContents
+	case tfv1alpha1.PodPostInitDelete:
+		want.Spec.PostInitDeleteScript = scriptContents
+	case tfv1alpha1.PodPrePlanDelete:
+		want.Spec.PrePlanDeleteScript = scriptContents
+	case tfv1alpha1.PodPostPlanDelete:
+		want.Spec.PostPlanDeleteScript = scriptContents
+	case tfv1alpha1.PodPreApplyDelete:
+		want.Spec.PreApplyDeleteScript = scriptContents
+	case tfv1alpha1.PodPostApplyDelete:
+		want.Spec.PostApplyDeleteScript = scriptContents
+	}
 }
