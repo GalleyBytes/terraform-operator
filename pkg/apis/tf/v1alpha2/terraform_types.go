@@ -14,7 +14,7 @@ const (
 	TerraformTaskImageRepoDefault = "ghcr.io/galleybytes/terraform-operator-tftaskv1.1.0"
 	TerraformTaskImageTagDefault  = ""
 	ScriptTaskImageRepoDefault    = "ghcr.io/galleybytes/terraform-operator-script"
-	ScriptTaskImageTagDefault     = "1.1.2"
+	ScriptTaskImageTagDefault     = "1.1.3"
 )
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
