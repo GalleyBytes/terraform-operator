@@ -42,6 +42,9 @@ func main() {
 	var maxConcurrentReconciles int
 	var disableConversionWebhook bool
 	var disableReconciler bool
+	var inheritNodeSelector bool
+	var inheritAffinty bool
+	var inheritTolerations bool
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -51,6 +54,9 @@ func main() {
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 1, "The max number of concurrent Reconciles for the controller")
+	flag.BoolVar(&inheritNodeSelector, "inherit-node-selector", false, "Use the controller's nodeSelector for every task created by the controller")
+	flag.BoolVar(&inheritAffinty, "inherit-affinity", false, "Use the controller's affinity rules for every task created by the controller")
+	flag.BoolVar(&inheritTolerations, "inherit-tolerations", false, "Use the controller's tolerations for every task created by the controller")
 	opts := zap.Options{
 		Development: true,
 		Level:       zapcore.DebugLevel,
@@ -99,6 +105,12 @@ func main() {
 			GlobalEnvFromConfigmapData: globalEnvFromConfigmapData,
 			GlobalEnvFromSecretData:    globalEnvFromSecretData,
 			GlobalEnvSuffix:            "global-envs",
+			InheritAffinity:            inheritAffinty,
+			AffinityCacheKey:           "inherited_affinity",
+			InheritNodeSelector:        inheritNodeSelector,
+			NodeSelectorCacheKey:       "inherited_nodeselector",
+			InheritTolerations:         inheritTolerations,
+			TolerationsCacheKey:        "inherited_tolerations",
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "Cluster")
 			os.Exit(1)

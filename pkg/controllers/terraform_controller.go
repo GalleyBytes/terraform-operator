@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	tfv1alpha2 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2"
 	"github.com/isaaguilar/terraform-operator/pkg/utils"
 	localcache "github.com/patrickmn/go-cache"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -52,6 +54,21 @@ type ReconcileTerraform struct {
 	GlobalEnvFromConfigmapData map[string]string
 	GlobalEnvFromSecretData    map[string][]byte
 	GlobalEnvSuffix            string
+
+	// InheritNodeSelector to use the controller's nodeSelectors for every task created by the controller.
+	// Value of this field will come from the owning deployment and cached.
+	InheritNodeSelector  bool
+	NodeSelectorCacheKey string
+
+	// InheritAffinity to use the controller's affinity rules for every task created by the controller
+	// Value of this field will come from the owning deployment and cached.
+	InheritAffinity  bool
+	AffinityCacheKey string
+
+	// InheritTolerations to use the controller's tolerations for every task created by the controller
+	// Value of this field will come from the owning deployment and cached.
+	InheritTolerations  bool
+	TolerationsCacheKey string
 }
 
 // createEnvFromSources adds any of the global environment vars defined at the controller scope
@@ -224,6 +241,9 @@ type TaskOptions struct {
 	generation                          int64
 	image                               string
 	imagePullPolicy                     corev1.PullPolicy
+	inheritedAffinity                   *corev1.Affinity
+	inheritedNodeSelector               map[string]string
+	inheritedTolerations                []corev1.Toleration
 	labels                              map[string]string
 	mainModulePluginData                map[string]string
 	namespace                           string
@@ -249,7 +269,7 @@ type TaskOptions struct {
 	restartPolicy                       corev1.RestartPolicy
 }
 
-func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generation int64, globalEnvFrom []corev1.EnvFromSource) TaskOptions {
+func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generation int64, globalEnvFrom []corev1.EnvFromSource, affinity *corev1.Affinity, nodeSelector map[string]string, tolerations []corev1.Toleration) TaskOptions {
 	// TODO Read the tfstate and decide IF_NEW_RESOURCE based on that
 	// applyAction := false
 	resourceName := tf.Name
@@ -449,6 +469,9 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 		annotations:                         annotations,
 		labels:                              labels,
 		imagePullPolicy:                     imagePullPolicy,
+		inheritedAffinity:                   affinity,
+		inheritedNodeSelector:               nodeSelector,
+		inheritedTolerations:                tolerations,
 		namespace:                           tf.Namespace,
 		resourceName:                        resourceName,
 		prefixedName:                        prefixedName,
@@ -482,9 +505,12 @@ const terraformFinalizer = "finalizer.tf.isaaguilar.com"
 // The Controller will requeue the Request to be processed again if the returned error is non-nil or
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
 func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
-
 	reconcilerID := string(uuid.NewUUID())
 	reqLogger := r.Log.WithValues("Terraform", request.NamespacedName, "id", reconcilerID)
+	err := r.cacheNodeSelectors(ctx, reqLogger)
+	if err != nil {
+		panic(err)
+	}
 	lockKey := request.String() + "-reconcile-lock"
 	lockOwner, lockFound := r.Cache.Get(lockKey)
 	if lockFound {
@@ -616,7 +642,8 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	currentStage := tf.Status.Stage
 	podType := currentStage.TaskType
 	generation := currentStage.Generation
-	runOpts := newTaskOptions(tf, currentStage.TaskType, generation, globalEnvFrom)
+	affinity, nodeSelector, tolerations := r.getNodeSelectorsFromCache()
+	runOpts := newTaskOptions(tf, currentStage.TaskType, generation, globalEnvFrom, affinity, nodeSelector, tolerations)
 
 	if podType == tfv1alpha2.RunNil {
 		// podType is blank when the terraform workflow has completed for
@@ -664,7 +691,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 				return reconcile.Result{}, err
 			}
 		}
-		return reconcile.Result{}, nil
+		return reconcile.Result{Requeue: false}, nil
 	}
 
 	// Check for the current stage pod
@@ -1278,11 +1305,35 @@ func (r ReconcileTerraform) reapPlugins(tf *tfv1alpha2.Terraform, attempt int) {
 	}
 }
 
+func (r ReconcileTerraform) getNodeSelectorsFromCache() (*corev1.Affinity, map[string]string, []corev1.Toleration) {
+	var affinity *corev1.Affinity
+	var nodeSelector map[string]string
+	var tolerations []corev1.Toleration
+	if r.InheritAffinity {
+		if obj, found := r.Cache.Get(r.AffinityCacheKey); found {
+			affinity = obj.(*corev1.Affinity)
+		}
+	}
+	if r.InheritNodeSelector {
+		if obj, found := r.Cache.Get(r.NodeSelectorCacheKey); found {
+			nodeSelector = obj.(map[string]string)
+		}
+	}
+	if r.InheritTolerations {
+		if obj, found := r.Cache.Get(r.TolerationsCacheKey); found {
+			tolerations = obj.([]corev1.Toleration)
+		}
+	}
+
+	return affinity, nodeSelector, tolerations
+}
+
 // createPluginPod will attempt to create the plugin pod and mark it as added in the resource's status.
 // No logic is used to determine if the plugin was successful. If the createPod function errors, a log event
 // is recorded in the controller.
 func (r ReconcileTerraform) createPluginPod(ctx context.Context, logger logr.Logger, tf *tfv1alpha2.Terraform, pluginTaskName tfv1alpha2.TaskName, pluginConfig tfv1alpha2.Plugin, globalEnvFrom []corev1.EnvFromSource) (reconcile.Result, error) {
-	pluginRunOpts := newTaskOptions(tf, pluginTaskName, tf.Generation, globalEnvFrom)
+	affinity, nodeSelector, tolerations := r.getNodeSelectorsFromCache()
+	pluginRunOpts := newTaskOptions(tf, pluginTaskName, tf.Generation, globalEnvFrom, affinity, nodeSelector, tolerations)
 	pluginRunOpts.image = pluginConfig.Image
 	pluginRunOpts.imagePullPolicy = pluginConfig.ImagePullPolicy
 
@@ -2506,6 +2557,9 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 			Annotations:  annotations,
 		},
 		Spec: corev1.PodSpec{
+			Affinity:           r.inheritedAffinity,
+			NodeSelector:       r.inheritedNodeSelector,
+			Tolerations:        r.inheritedTolerations,
 			SecurityContext:    &podSecurityContext,
 			ServiceAccountName: r.serviceAccount,
 			RestartPolicy:      restartPolicy,
@@ -2648,6 +2702,100 @@ func (r ReconcileTerraform) loadSecret(ctx context.Context, name, namespace stri
 		return secret, err
 	}
 	return secret, nil
+}
+
+func (r ReconcileTerraform) cacheNodeSelectors(ctx context.Context, logger logr.Logger) error {
+	var affinity *corev1.Affinity
+	var tolerations []corev1.Toleration
+	var nodeSelector map[string]string
+	if !r.InheritAffinity && !r.InheritNodeSelector && !r.InheritTolerations {
+		return nil
+	}
+	foundAll := true
+	_, found := r.Cache.Get(r.AffinityCacheKey)
+	if r.InheritAffinity && !found {
+		foundAll = false
+	}
+	_, found = r.Cache.Get(r.NodeSelectorCacheKey)
+	if r.InheritNodeSelector && !found {
+		foundAll = false
+	}
+	_, found = r.Cache.Get(r.TolerationsCacheKey)
+	if r.InheritTolerations && !found {
+		foundAll = false
+	}
+	if foundAll {
+		return nil
+	}
+	podNamespace := os.Getenv("POD_NAMESPACE")
+	if podNamespace == "" {
+		logger.Info("POD_NAMESPACE not found but required to get node selectors configs")
+		return nil
+	}
+	podName := os.Getenv("POD_NAME")
+	if podName == "" {
+		logger.Info("POD_NAME not found but required to get node selectors configs")
+		return nil
+	}
+	podNamespacedName := types.NamespacedName{Namespace: podNamespace, Name: podName}
+	pod := corev1.Pod{}
+	err := r.Client.Get(ctx, podNamespacedName, &pod)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Could not get pod '%s'", podNamespacedName.String()))
+		return nil
+	}
+	if len(pod.ObjectMeta.OwnerReferences) != 1 {
+		logger.Info(fmt.Sprintf("unexpected ownership for pod '%s'", podNamespacedName.String()))
+		return nil
+	}
+	if pod.ObjectMeta.OwnerReferences[0].Kind != "ReplicaSet" {
+		logger.Info(fmt.Sprintf("unexpected ownership kind for pod '%s'", podNamespacedName.String()))
+		return nil
+	}
+
+	replicaSetName := pod.ObjectMeta.OwnerReferences[0].Name
+	replicaSetNamespacedName := types.NamespacedName{Namespace: podNamespace, Name: replicaSetName}
+	replicaSet := appsv1.ReplicaSet{}
+	err = r.Client.Get(ctx, replicaSetNamespacedName, &replicaSet)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Could not get replicaset '%s'", replicaSetNamespacedName.String()))
+		return nil
+	}
+	if len(replicaSet.ObjectMeta.OwnerReferences) != 1 {
+		logger.Info(fmt.Sprintf("unexpected ownership for replicaSet '%s'", replicaSetNamespacedName.String()))
+		return nil
+	}
+	if replicaSet.ObjectMeta.OwnerReferences[0].Kind != "Deployment" {
+		logger.Info(fmt.Sprintf("unexpected ownership kind for replicaSet '%s'", replicaSetNamespacedName.String()))
+		return nil
+	}
+
+	deploymentName := replicaSet.ObjectMeta.OwnerReferences[0].Name
+	deploymentNamespacedName := types.NamespacedName{Namespace: podNamespace, Name: deploymentName}
+	deployment := appsv1.Deployment{}
+	err = r.Client.Get(ctx, deploymentNamespacedName, &deployment)
+	if err != nil {
+		logger.Info(fmt.Sprintf("Could not get deployment '%s'", deploymentNamespacedName.String()))
+		return nil
+	}
+
+	affinity = deployment.Spec.Template.Spec.Affinity
+	tolerations = deployment.Spec.Template.Spec.Tolerations
+	nodeSelector = deployment.Spec.Template.Spec.NodeSelector
+
+	if r.InheritAffinity {
+		r.Cache.Set(r.AffinityCacheKey, affinity, localcache.NoExpiration)
+	}
+
+	if r.InheritNodeSelector {
+		r.Cache.Set(r.NodeSelectorCacheKey, nodeSelector, localcache.NoExpiration)
+	}
+
+	if r.InheritTolerations {
+		r.Cache.Set(r.TolerationsCacheKey, tolerations, localcache.NoExpiration)
+	}
+
+	return nil
 }
 
 func (r TaskOptions) generateSecret(name, namespace string, data map[string][]byte, labels map[string]string) *corev1.Secret {

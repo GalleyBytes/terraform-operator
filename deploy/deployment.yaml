@@ -41,6 +41,11 @@ spec:
             fieldRef:
               apiVersion: v1
               fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
         - name: OPERATOR_NAME
           value: terraform-operator
         resources:
