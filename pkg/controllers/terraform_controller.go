@@ -1275,6 +1275,21 @@ func (r ReconcileTerraform) reapPlugins(tf *tfv1alpha2.Terraform, attempt int) {
 	if err != nil {
 		logger.Error(err, "Could not parse labels")
 	}
+
+	deleteProppagationBackground := metav1.DeletePropagationBackground
+	err = r.Client.DeleteAllOf(context.TODO(), &batchv1.Job{}, &client.DeleteAllOfOptions{
+		ListOptions: client.ListOptions{
+			LabelSelector: labelSelectorForPlugins,
+			Namespace:     tf.Namespace,
+		},
+		DeleteOptions: client.DeleteOptions{
+			PropagationPolicy: &deleteProppagationBackground,
+		},
+	})
+	if err != nil {
+		logger.Error(err, "Could not reap old generation jobs")
+	}
+
 	err = r.Client.DeleteAllOf(context.TODO(), &corev1.Pod{}, &client.DeleteAllOfOptions{
 		ListOptions: client.ListOptions{
 			LabelSelector: labelSelectorForPlugins,
@@ -1338,12 +1353,13 @@ func (r ReconcileTerraform) createPluginPod(ctx context.Context, logger logr.Log
 	pluginRunOpts.imagePullPolicy = pluginConfig.ImagePullPolicy
 
 	go func() {
-		err := r.createPod(ctx, tf, pluginRunOpts)
+		err := r.createJob(ctx, tf, pluginRunOpts)
 		if err != nil {
-			logger.Error(err, fmt.Sprintf("Failed creating plugin pod %s", pluginTaskName))
+			logger.Error(err, fmt.Sprintf("Failed creating plugin job %s", pluginTaskName))
+		} else {
+			logger.Info(fmt.Sprintf("Starting the plugin job '%s'", pluginTaskName.String()))
 		}
 	}()
-	logger.Info(fmt.Sprintf("Starting the plugin pod '%s'", pluginTaskName.String()))
 	tf.Status.Plugins = append(tf.Status.Plugins, pluginTaskName)
 	err := r.updateStatusWithRetry(ctx, tf, &tf.Status, logger)
 	if err != nil {
@@ -2052,6 +2068,51 @@ func (r ReconcileTerraform) createPod(ctx context.Context, tf *tfv1alpha2.Terraf
 	}
 	r.Recorder.Event(tf, "Normal", "SuccessfulCreate", fmt.Sprintf("Created %s: '%s'", kind, resource.Name))
 	return nil
+}
+
+func int32p(i int32) *int32 {
+	return &i
+}
+
+func (r ReconcileTerraform) createJob(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
+	kind := "Job"
+
+	resource := runOpts.generateJob()
+	controllerutil.SetControllerReference(tf, resource, r.Scheme)
+
+	err := r.Client.Create(ctx, resource)
+	if err != nil {
+		r.Recorder.Event(tf, "Warning", fmt.Sprintf("%sCreateError", kind), fmt.Sprintf("Could not create %s %v", kind, err))
+		return err
+	}
+	r.Recorder.Event(tf, "Normal", "SuccessfulCreate", fmt.Sprintf("Created %s: '%s'", kind, resource.Name))
+	return nil
+}
+
+func (r TaskOptions) generateJob() *batchv1.Job {
+	pod := r.generatePod()
+
+	// In a job, pod's can only have OnFailure or Never restart policies
+	if pod.Spec.RestartPolicy == corev1.RestartPolicyAlways || pod.Spec.RestartPolicy == corev1.RestartPolicyOnFailure {
+		pod.Spec.RestartPolicy = corev1.RestartPolicyOnFailure
+	} else {
+		pod.Spec.RestartPolicy = corev1.RestartPolicyNever
+	}
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:         pod.Name,
+			GenerateName: pod.GenerateName,
+			Labels:       pod.Labels,
+			Annotations:  pod.Annotations,
+			Namespace:    pod.Namespace,
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit: int32p(0),
+			Template: corev1.PodTemplateSpec{
+				Spec: pod.Spec,
+			},
+		},
+	}
 }
 
 func (r TaskOptions) generateConfigMap() *corev1.ConfigMap {
