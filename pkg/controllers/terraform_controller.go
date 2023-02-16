@@ -2107,7 +2107,7 @@ func (r TaskOptions) generateJob() *batchv1.Job {
 			Namespace:    pod.Namespace,
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit: int32p(0),
+			BackoffLimit: int32p(1000000),
 			Template: corev1.PodTemplateSpec{
 				Spec: pod.Spec,
 			},
