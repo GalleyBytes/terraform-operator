@@ -774,8 +774,9 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 
 	// At this point, a pod is found for the current stage. We can check the
 	// pod status to find out more info about the pod.
-	podName := pods.Items[0].ObjectMeta.Name
-	podPhase := pods.Items[0].Status.Phase
+	realPod := pods.Items[0]
+	podName := realPod.ObjectMeta.Name
+	podPhase := realPod.Status.Phase
 	msg := fmt.Sprintf("Pod '%s' %s", podName, podPhase)
 
 	// if tf.Status.Stage.PodName != podName {
@@ -786,6 +787,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	// 		tf.Status.Stage.RerunAttempt++
 	// 	}
 	// }
+	tf.Status.Stage.PodUID = string(realPod.UID)
 	tf.Status.Stage.PodName = podName
 	if tf.Status.Stage.Message != msg {
 		tf.Status.Stage.Message = msg
@@ -793,8 +795,8 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	}
 
 	// TODO Does the user need reason and message?
-	// reason := pods.Items[0].Status.Reason
-	// message := pods.Items[0].Status.Message
+	// reason := realPod.Status.Reason
+	// message := realPod.Status.Message
 	// if reason != "" {
 	// 	msg = fmt.Sprintf("%s %s", msg, reason)
 	// }
@@ -802,7 +804,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	// 	msg = fmt.Sprintf("%s %s", msg, message)
 	// }
 
-	if pods.Items[0].Status.Phase == corev1.PodFailed {
+	if realPod.Status.Phase == corev1.PodFailed {
 		tf.Status.Stage.State = tfv1alpha2.StateFailed
 		tf.Status.Stage.StopTime = metav1.NewTime(time.Now())
 		err = r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
@@ -813,7 +815,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		return reconcile.Result{}, nil
 	}
 
-	if pods.Items[0].Status.Phase == corev1.PodSucceeded {
+	if realPod.Status.Phase == corev1.PodSucceeded {
 		tf.Status.Stage.State = tfv1alpha2.StateComplete
 		tf.Status.Stage.StopTime = metav1.NewTime(time.Now())
 		err = r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
@@ -822,13 +824,14 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			return reconcile.Result{}, err
 		}
 		if !tf.Spec.KeepCompletedPods && !tf.Spec.KeepLatestPodsOnly {
-			err := r.Client.Delete(ctx, &pods.Items[0])
+			err := r.Client.Delete(ctx, &realPod)
 			if err != nil {
 				reqLogger.V(1).Info(err.Error())
 			}
 		}
 		return reconcile.Result{}, nil
 	}
+	tf.Status.Stage.State = tfv1alpha2.StageState(realPod.Status.Phase)
 
 	// Finally, update any statuses that have been changed if not already saved. This is probablye
 	// for pending condition that does not require anything to be done.

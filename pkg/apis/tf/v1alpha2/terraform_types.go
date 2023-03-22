@@ -228,9 +228,10 @@ type ImageConfig struct {
 }
 
 // Module has the different types of ways to define a terraform module. The order of precendence is
-//     1. inline
-//     2. configMapSelector
-//     3. source[/version]
+//  1. inline
+//  2. configMapSelector
+//  3. source[/version]
+//
 // +k8s:openapi-gen=true
 type Module struct {
 	// Source accepts a subset of the terraform "Module Source" ways of defining a module.
@@ -412,9 +413,10 @@ type TaskOption struct {
 
 // StageScript defines the different ways of sourcing execution scripts of tasks. There is an order of
 // precendence of selecting which source is used, which is:
-//     1. inline
-//     2. configMapSelector
-//     3. source
+//  1. inline
+//  2. configMapSelector
+//  3. source
+//
 // +k8s:openapi-gen=true
 type StageScript struct {
 	// Source is an http source that the task container will fetch and then execute.
@@ -680,6 +682,10 @@ type Stage struct {
 	// PodName is the pod assigned to execute the stage.
 	// +optional
 	PodName string `json:"podName,omitempty"`
+
+	// PodUID is the pod uid of the pod assigned to execute the stage.
+	// +optional
+	PodUID string `json:"podUID,omitempty"`
 }
 
 // IsEqual checks desired stage if equal to current stage

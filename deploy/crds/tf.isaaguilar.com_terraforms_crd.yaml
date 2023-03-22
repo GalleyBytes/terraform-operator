@@ -1517,6 +1517,10 @@ spec:
                   podType:
                     description: TaskType is which task is currently running.
                     type: string
+                  podUID:
+                    description: PodUID is the pod uid of the pod assigned to execute
+                      the stage.
+                    type: string
                   reason:
                     description: Reason is a message of what is happening with the
                       pod. The controller uses this field when certain reasons occur
@@ -1564,6 +1568,10 @@ spec:
                       type: string
                     podType:
                       description: TaskType is which task is currently running.
+                      type: string
+                    podUID:
+                      description: PodUID is the pod uid of the pod assigned to execute
+                        the stage.
                       type: string
                     reason:
                       description: Reason is a message of what is happening with the
