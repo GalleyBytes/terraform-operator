@@ -300,7 +300,7 @@ func schema_pkg_apis_tf_v1alpha2_Module(ref common.ReferenceCallback) common.Ope
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "Module has the different types of ways to define a terraform module. The order of precendence is\n    1. inline\n    2. configMapSelector\n    3. source[/version]",
+				Description: "Module has the different types of ways to define a terraform module. The order of precendence is\n 1. inline\n 2. configMapSelector\n 3. source[/version]",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"source": {
@@ -665,6 +665,13 @@ func schema_pkg_apis_tf_v1alpha2_Stage(ref common.ReferenceCallback) common.Open
 							Format:      "",
 						},
 					},
+					"podUID": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PodUID is the pod uid of the pod assigned to execute the stage.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
 				},
 				Required: []string{"generation", "state", "podType", "interruptible", "reason"},
 			},
@@ -678,7 +685,7 @@ func schema_pkg_apis_tf_v1alpha2_StageScript(ref common.ReferenceCallback) commo
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "StageScript defines the different ways of sourcing execution scripts of tasks. There is an order of precendence of selecting which source is used, which is:\n    1. inline\n    2. configMapSelector\n    3. source",
+				Description: "StageScript defines the different ways of sourcing execution scripts of tasks. There is an order of precendence of selecting which source is used, which is:\n 1. inline\n 2. configMapSelector\n 3. source",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"source": {
