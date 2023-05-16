@@ -68,6 +68,11 @@ type TerraformSpec struct {
 	// terraform run data. If not defined, a default of "2Gi" is used.
 	PersistentVolumeSize *resource.Quantity `json:"persistentVolumeSize,omitempty"` // NOT MUTABLE
 
+	// StorageClassName is the name of the volume that terraform-operator will use to store
+	// data. An empty value means that this volume does not belong to any StorageClassName and will
+	// use the clusters default StorageClassName
+	StorageClassName *string `json:"storageClassName,omitempty"`
+
 	// ServiceAccount use a specific kubernetes ServiceAccount for running the create + destroy pods.
 	// If not specified we create a new ServiceAccount per Terraform
 	ServiceAccount string `json:"serviceAccount,omitempty"`
