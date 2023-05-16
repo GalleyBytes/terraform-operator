@@ -1784,7 +1784,7 @@ func (r ReconcileTerraform) createPVC(ctx context.Context, tf *tfv1alpha2.Terraf
 	if tf.Spec.PersistentVolumeSize != nil {
 		persistentVolumeSize = *tf.Spec.PersistentVolumeSize
 	}
-	resource := runOpts.generatePVC(persistentVolumeSize)
+	resource := runOpts.generatePVC(persistentVolumeSize, tf.Spec.StorageClassName)
 	controllerutil.SetControllerReference(tf, resource, r.Scheme)
 
 	err = r.Client.Create(ctx, resource)
@@ -2240,7 +2240,7 @@ func (r TaskOptions) generateRoleBinding() *rbacv1.RoleBinding {
 	return rb
 }
 
-func (r TaskOptions) generatePVC(size resource.Quantity) *corev1.PersistentVolumeClaim {
+func (r TaskOptions) generatePVC(size resource.Quantity, storageClassName *string) *corev1.PersistentVolumeClaim {
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.prefixedName,
@@ -2251,6 +2251,7 @@ func (r TaskOptions) generatePVC(size resource.Quantity) *corev1.PersistentVolum
 			AccessModes: []corev1.PersistentVolumeAccessMode{
 				corev1.ReadWriteOnce,
 			},
+			StorageClassName: storageClassName,
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{
 					corev1.ResourceStorage: size,
