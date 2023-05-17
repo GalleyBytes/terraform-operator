@@ -30,6 +30,8 @@ jobs:
       run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
 
     - name: Build and push
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
           if [[ $(git branch --show-current) != "master" ]];then
             export GENCERT_VERSION=0.0.0-$(git rev-parse --short HEAD)
