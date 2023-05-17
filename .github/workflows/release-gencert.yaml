@@ -27,11 +27,9 @@ jobs:
 
     - name: Log in to registry
       # This is where you will update the PAT to GITHUB_TOKEN
-      run: echo "${{ secrets.PKG_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
+      run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
 
     - name: Build and push
-      env:
-        GITHUB_TOKEN: ${{ secrets.PKG_TOKEN }}
       run: |
           if [[ $(git branch --show-current) != "master" ]];then
             export GENCERT_VERSION=0.0.0-$(git rev-parse --short HEAD)
