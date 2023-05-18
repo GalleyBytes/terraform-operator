@@ -425,7 +425,7 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 
 	// Outputs will be saved as a secret that will have the same lifecycle
 	// as the Terraform CustomResource by adding the ownership metadata
-	outputsSecretName := prefixedName + "-outputs"
+	outputsSecretName := versionedName + "-outputs"
 	saveOutputs := false
 	stripGenerationLabelOnOutputsSecret := false
 	if tf.Spec.OutputsSecret != "" {
