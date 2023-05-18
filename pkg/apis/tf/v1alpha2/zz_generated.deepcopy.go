@@ -503,6 +503,11 @@ func (in *TerraformSpec) DeepCopyInto(out *TerraformSpec) {
 		x := (*in).DeepCopy()
 		*out = &x
 	}
+	if in.StorageClassName != nil {
+		in, out := &in.StorageClassName, &out.StorageClassName
+		*out = new(string)
+		**out = **in
+	}
 	if in.Credentials != nil {
 		in, out := &in.Credentials, &out.Credentials
 		*out = make([]Credentials, len(*in))

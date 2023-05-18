@@ -965,6 +965,13 @@ func schema_pkg_apis_tf_v1alpha2_TerraformSpec(ref common.ReferenceCallback) com
 							Ref:         ref("k8s.io/apimachinery/pkg/api/resource.Quantity"),
 						},
 					},
+					"storageClassName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "StorageClassName is the name of the volume that terraform-operator will use to store data. An empty value means that this volume does not belong to any StorageClassName and will use the clusters default StorageClassName",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
 					"serviceAccount": {
 						SchemaProps: spec.SchemaProps{
 							Description: "ServiceAccount use a specific kubernetes ServiceAccount for running the create + destroy pods. If not specified we create a new ServiceAccount per Terraform",

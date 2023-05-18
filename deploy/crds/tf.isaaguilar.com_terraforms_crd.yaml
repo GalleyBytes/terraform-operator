@@ -1118,6 +1118,12 @@ spec:
                 required:
                 - sshKeySecretRef
                 type: object
+              storageClassName:
+                description: StorageClassName is the name of the volume that terraform-operator
+                  will use to store data. An empty value means that this volume does
+                  not belong to any StorageClassName and will use the clusters default
+                  StorageClassName
+                type: string
               taskOptions:
                 description: TaskOptions are a list of configuration options to be
                   injected into task pods.
