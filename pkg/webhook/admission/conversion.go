@@ -3,7 +3,9 @@ package admission
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"strings"
 
 	"github.com/go-logr/logr"
 	"github.com/isaaguilar/terraform-operator/pkg/webhook/admission/convert"
@@ -32,31 +34,47 @@ func (c ConversionWebhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	convertReview.Response = c.converter(convertReview.Request)
-	w.WriteHeader(http.StatusOK)
+	response, status := c.converter(convertReview.Request)
+	convertReview.Response = response
+	w.WriteHeader(status)
+	if status == 200 {
+		log.Printf("Successfully converted resource(s): %s", objectNames(convertReview))
+	} else {
+		log.Printf("Failed to convert resource(s) %s: %s", objectNames(convertReview), response.Result.Status)
+	}
 	b, _ := json.Marshal(convertReview)
 	w.Write(b)
 }
 
+func objectNames(review *apiextensionsv1.ConversionReview) string {
+	names := []string{}
+	for _, obj := range review.Response.ConvertedObjects {
+		unstructured := unstructuredv1.Unstructured{}
+		err := json.Unmarshal(obj.Raw, &unstructured)
+		if err == nil {
+			names = append(names, unstructured.GetName())
+		}
+	}
+	return strings.Join(names, ",")
+}
+
 // helper to construct error response.
-func errored(uid types.UID, err error) *apiextensionsv1.ConversionResponse {
+func errored(uid types.UID, err error) (*apiextensionsv1.ConversionResponse, int) {
 	return &apiextensionsv1.ConversionResponse{
 		UID: uid,
 		Result: metav1.Status{
 			Status:  metav1.StatusFailure,
 			Message: err.Error(),
 		},
-	}
+	}, http.StatusBadRequest
 }
 
 // Takes a conversionRequest and always returns a conversionResponse.
-func (c ConversionWebhook) converter(request *apiextensionsv1.ConversionRequest) *apiextensionsv1.ConversionResponse {
-
+func (c ConversionWebhook) converter(request *apiextensionsv1.ConversionRequest) (*apiextensionsv1.ConversionResponse, int) {
 	desiredAPIVersion := request.DesiredAPIVersion
 	if desiredAPIVersion == "" {
 		return errored(request.UID, fmt.Errorf("conversion request did not have a desired api version"))
 	}
-
 	responseObjects := make([]runtime.RawExtension, len(request.Objects))
 	for i, obj := range request.Objects {
 		unstructured := unstructuredv1.Unstructured{}
@@ -109,5 +127,5 @@ func (c ConversionWebhook) converter(request *apiextensionsv1.ConversionRequest)
 		Result: metav1.Status{
 			Status: metav1.StatusSuccess,
 		},
-	}
+	}, http.StatusOK
 }

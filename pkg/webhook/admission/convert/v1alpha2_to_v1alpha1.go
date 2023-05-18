@@ -76,6 +76,13 @@ func ConvertV1alpha2ToV1alpha1(rawRequest []byte) ([]byte, runtime.Object, error
 		want.Spec.OutputsToOmit = have.Spec.OutputsToOmit
 		want.Spec.ServiceAccount = have.Spec.ServiceAccount
 
+		if have.Spec.StorageClassName != nil {
+			if want.Annotations == nil {
+				want.Annotations = map[string]string{}
+			}
+			want.Annotations["v1alpha2.tf.isaaguilar.com/storageClassName"] = *have.Spec.StorageClassName
+		}
+
 		if have.Spec.Images != nil {
 			if have.Spec.Images.Script != nil {
 				image := ""
