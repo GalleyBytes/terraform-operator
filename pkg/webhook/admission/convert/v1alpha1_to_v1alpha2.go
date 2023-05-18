@@ -43,6 +43,10 @@ func ConvertV1alpha1ToV1alpha2(rawRequest []byte) ([]byte, runtime.Object, error
 	want.Spec.OutputsToOmit = have.Spec.OutputsToOmit
 	want.Spec.ServiceAccount = have.Spec.ServiceAccount
 
+	if storageClassName, ok := have.Annotations["v1alpha2.tf.isaaguilar.com/storageClassName"]; ok {
+		want.Spec.StorageClassName = &storageClassName
+	}
+
 	scriptImageConfig := convertImageConfig("script", have.Spec.ScriptRunner, have.Spec.ScriptRunnerVersion, have.Spec.ScriptRunnerPullPolicy)
 	terraformImageConfig := convertImageConfig("terraform", have.Spec.TerraformRunner, "", have.Spec.TerraformRunnerPullPolicy)
 	setupImageConfig := convertImageConfig("setup", have.Spec.SetupRunner, have.Spec.SetupRunnerVersion, have.Spec.SetupRunnerPullPolicy)
