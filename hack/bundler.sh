@@ -40,3 +40,15 @@ cat deploy/crds/tf.isaaguilar.com_terraforms_crd.yaml >> $bundle
 
 >&2 printf "Saved "
 printf "$bundle\n"
+
+read -r -p 'Do you want to push new bundle to origin master? ' choice
+case "$choice" in
+  n|N) exit 0;;
+  *) echo '';;
+esac
+sed -i '' s,deploy/bundles/.*,$bundle, README.md
+git add "$bundle" README.md
+git commit -m "make bundle $ver"
+git checkout -B master
+# Never force this to ensure coherent + sequential history
+git push origin master
