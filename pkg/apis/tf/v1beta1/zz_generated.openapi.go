@@ -1117,21 +1117,24 @@ func schema_pkg_apis_tf_v1beta1_TerraformStatus(ref common.ReferenceCallback) co
 					},
 					"phase": {
 						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
+							Description: "Phase is the current phase of the workflow",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 					"lastCompletedGeneration": {
 						SchemaProps: spec.SchemaProps{
-							Default: 0,
-							Type:    []string{"integer"},
-							Format:  "int64",
+							Description: "LastCompletedGeneration shows the generation of the last completed workflow. This is not relevant for remotely executed workflows.",
+							Default:     0,
+							Type:        []string{"integer"},
+							Format:      "int64",
 						},
 					},
 					"outputs": {
 						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
+							Description: "Outputs terraform outputs, when opt-in, will be added to this `status.outputs` field as key/value pairs",
+							Type:        []string{"object"},
 							AdditionalProperties: &spec.SchemaOrBool{
 								Allows: true,
 								Schema: &spec.Schema{
@@ -1144,28 +1147,16 @@ func schema_pkg_apis_tf_v1beta1_TerraformStatus(ref common.ReferenceCallback) co
 							},
 						},
 					},
-					"stages": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("github.com/galleybytes/terraform-operator/pkg/apis/tf/v1beta1.Stage"),
-									},
-								},
-							},
-						},
-					},
 					"stage": {
 						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("github.com/galleybytes/terraform-operator/pkg/apis/tf/v1beta1.Stage"),
+							Description: "Stage stores information about the current stage",
+							Default:     map[string]interface{}{},
+							Ref:         ref("github.com/galleybytes/terraform-operator/pkg/apis/tf/v1beta1.Stage"),
 						},
 					},
-					"plugins": {
+					"pluginsStarted": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Plugins is a list of plugins that have been executed by the controller. Will get refreshed each generation.",
+							Description: "PluginsStarted is a list of plugins that have been executed by the controller. Will get refreshed each generation.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
@@ -1179,7 +1170,7 @@ func schema_pkg_apis_tf_v1beta1_TerraformStatus(ref common.ReferenceCallback) co
 						},
 					},
 				},
-				Required: []string{"podNamePrefix", "phase", "lastCompletedGeneration", "stages", "stage"},
+				Required: []string{"podNamePrefix", "phase", "lastCompletedGeneration", "stage"},
 			},
 		},
 		Dependencies: []string{

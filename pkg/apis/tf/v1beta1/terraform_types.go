@@ -626,20 +626,28 @@ type TerraformStatus struct {
 	// Another case for the pod name prefix is when rapidly deleteing a resource
 	// and recreating it, the chance of recycling existing resources is reduced
 	// to virtually nil.
-	PodNamePrefix           string            `json:"podNamePrefix"`
-	Phase                   StatusPhase       `json:"phase"`
-	LastCompletedGeneration int64             `json:"lastCompletedGeneration"`
-	Outputs                 map[string]string `json:"outputs,omitempty"`
-	Stages                  []Stage           `json:"stages"`
-	Stage                   Stage             `json:"stage"`
+	PodNamePrefix string `json:"podNamePrefix"`
+
+	// Phase is the current phase of the workflow
+	Phase StatusPhase `json:"phase"`
+
+	// LastCompletedGeneration shows the generation of the last completed workflow. This is not relevant for remotely
+	// executed workflows.
+	LastCompletedGeneration int64 `json:"lastCompletedGeneration"`
+
+	// Outputs terraform outputs, when opt-in, will be added to this `status.outputs` field as key/value pairs
+	Outputs map[string]string `json:"outputs,omitempty"`
+
+	// Stage stores information about the current stage
+	Stage Stage `json:"stage"`
 
 	// // RerunAttempt	number is increased if a new pod is detected for the same stage.
 	// CurrentAttempt int64 `json:"currentAttempt"`
 
-	// Plugins is a list of plugins that have been executed by the controller. Will get
+	// PluginsStarted is a list of plugins that have been executed by the controller. Will get
 	// refreshed each generation.
 	// +optional
-	Plugins []TaskName `json:"plugins,omitempty"`
+	PluginsStarted []TaskName `json:"pluginsStarted,omitempty"`
 }
 
 type Exported string

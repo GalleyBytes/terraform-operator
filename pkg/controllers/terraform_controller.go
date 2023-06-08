@@ -562,7 +562,6 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			utils.TruncateResourceName(tf.Name, 220),
 			utils.StringWithCharset(8, utils.AlphaNum),
 		)
-		tf.Status.Stages = []tfv1beta1.Stage{}
 		tf.Status.LastCompletedGeneration = 0
 		tf.Status.Phase = tfv1beta1.PhaseInitializing
 
@@ -583,7 +582,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			return reconcile.Result{}, fmt.Errorf("failed to create a new stage")
 		}
 		tf.Status.Stage = *stage
-		tf.Status.Plugins = []tfv1beta1.TaskName{}
+		tf.Status.PluginsStarted = []tfv1beta1.TaskName{}
 
 		err := r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 		if err != nil {
@@ -748,7 +747,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 
 	// By now, the task pod exists and the controller has to check and update on the status of the pod.
 	for pluginTaskName, pluginConfig := range tf.Spec.Plugins {
-		if tfv1beta1.ListContainsTask(tf.Status.Plugins, pluginTaskName) {
+		if tfv1beta1.ListContainsTask(tf.Status.PluginsStarted, pluginTaskName) {
 			continue
 		}
 
@@ -862,7 +861,7 @@ func (r ReconcileTerraform) getTerraformResource(ctx context.Context, namespaced
 
 func newStage(tf *tfv1beta1.Terraform, taskType tfv1beta1.TaskName, reason string, interruptible tfv1beta1.Interruptible, stageState tfv1beta1.StageState) *tfv1beta1.Stage {
 	if reason == "GENERATION_CHANGE" {
-		tf.Status.Plugins = []tfv1beta1.TaskName{}
+		tf.Status.PluginsStarted = []tfv1beta1.TaskName{}
 		tf.Status.Phase = tfv1beta1.PhaseInitializing
 	}
 	startTime := metav1.NewTime(time.Now())
@@ -1357,7 +1356,7 @@ func (r ReconcileTerraform) createPluginPod(ctx context.Context, logger logr.Log
 			logger.Info(fmt.Sprintf("Starting the plugin job '%s'", pluginTaskName.String()))
 		}
 	}()
-	tf.Status.Plugins = append(tf.Status.Plugins, pluginTaskName)
+	tf.Status.PluginsStarted = append(tf.Status.PluginsStarted, pluginTaskName)
 	err := r.updateStatusWithRetry(ctx, tf, &tf.Status, logger)
 	if err != nil {
 		logger.V(1).Info(err.Error())
@@ -1443,8 +1442,8 @@ func (r ReconcileTerraform) updateStatusWithRetry(ctx context.Context, tf *tfv1b
 				return fmt.Errorf("failed to get latest terraform while validating status: %s", updatedResourceErr)
 			}
 
-			if !tfv1beta1.TaskListsAreEqual(tf.Status.Plugins, desiredStatus.Plugins) {
-				logger.V(7).Info(fmt.Sprintf("Failed to confirm the status update because plugins did not equal. Have %s and Want %s", tf.Status.Plugins, desiredStatus.Plugins))
+			if !tfv1beta1.TaskListsAreEqual(tf.Status.PluginsStarted, desiredStatus.PluginsStarted) {
+				logger.V(7).Info(fmt.Sprintf("Failed to confirm the status update because plugins did not equal. Have %s and Want %s", tf.Status.PluginsStarted, desiredStatus.PluginsStarted))
 
 			} else if stageItem := tf.Status.Stage.IsEqual(desiredStatus.Stage); stageItem != "" {
 				logger.V(7).Info(fmt.Sprintf("Failed to confirm the status update because stage item %s did not equal", stageItem))

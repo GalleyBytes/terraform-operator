@@ -574,16 +574,9 @@ func (in *TerraformStatus) DeepCopyInto(out *TerraformStatus) {
 			(*out)[key] = val
 		}
 	}
-	if in.Stages != nil {
-		in, out := &in.Stages, &out.Stages
-		*out = make([]Stage, len(*in))
-		for i := range *in {
-			(*in)[i].DeepCopyInto(&(*out)[i])
-		}
-	}
 	in.Stage.DeepCopyInto(&out.Stage)
-	if in.Plugins != nil {
-		in, out := &in.Plugins, &out.Plugins
+	if in.PluginsStarted != nil {
+		in, out := &in.PluginsStarted, &out.PluginsStarted
 		*out = make([]TaskName, len(*in))
 		copy(*out, *in)
 	}
