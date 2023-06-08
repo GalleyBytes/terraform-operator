@@ -19,9 +19,9 @@ limitations under the License.
 package fake
 
 import (
-	clientset "github.com/isaaguilar/terraform-operator/pkg/client/clientset/versioned"
-	tfv1alpha2 "github.com/isaaguilar/terraform-operator/pkg/client/clientset/versioned/typed/tf/v1alpha2"
-	faketfv1alpha2 "github.com/isaaguilar/terraform-operator/pkg/client/clientset/versioned/typed/tf/v1alpha2/fake"
+	clientset "github.com/galleybytes/terraform-operator/pkg/client/clientset/versioned"
+	tfv1beta1 "github.com/galleybytes/terraform-operator/pkg/client/clientset/versioned/typed/tf/v1beta1"
+	faketfv1beta1 "github.com/galleybytes/terraform-operator/pkg/client/clientset/versioned/typed/tf/v1beta1/fake"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"
@@ -74,9 +74,12 @@ func (c *Clientset) Tracker() testing.ObjectTracker {
 	return c.tracker
 }
 
-var _ clientset.Interface = &Clientset{}
+var (
+	_ clientset.Interface = &Clientset{}
+	_ testing.FakeClient  = &Clientset{}
+)
 
-// TfV1alpha2 retrieves the TfV1alpha2Client
-func (c *Clientset) TfV1alpha2() tfv1alpha2.TfV1alpha2Interface {
-	return &faketfv1alpha2.FakeTfV1alpha2{Fake: &c.Fake}
+// TfV1beta1 retrieves the TfV1beta1Client
+func (c *Clientset) TfV1beta1() tfv1beta1.TfV1beta1Interface {
+	return &faketfv1beta1.FakeTfV1beta1{Fake: &c.Fake}
 }

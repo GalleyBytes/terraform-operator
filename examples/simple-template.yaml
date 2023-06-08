@@ -1,4 +1,4 @@
-apiVersion: tf.isaaguilar.com/v1alpha2
+apiVersion: tf.galleybytes.com/v1beta1
 kind: Terraform
 metadata:
   name: simple-template-example

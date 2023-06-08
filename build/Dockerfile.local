@@ -9,3 +9,4 @@ ENTRYPOINT ["/usr/local/bin/entrypoint"]
 USER ${USER_UID}
 # install operator binary is the only layer that changes
 COPY _output/manager ${OPERATOR}
+LABEL org.opencontainers.image.source https://github.com/galleybytes/terraform-operator

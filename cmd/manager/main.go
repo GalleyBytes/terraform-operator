@@ -8,9 +8,8 @@ import (
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
-	"github.com/isaaguilar/terraform-operator/pkg/apis"
-	"github.com/isaaguilar/terraform-operator/pkg/controllers"
-	"github.com/isaaguilar/terraform-operator/pkg/webhook/admission"
+	"github.com/galleybytes/terraform-operator/pkg/apis"
+	"github.com/galleybytes/terraform-operator/pkg/controllers"
 	localcache "github.com/patrickmn/go-cache"
 	"go.uber.org/zap/zapcore"
 	corev1 "k8s.io/api/core/v1"
@@ -40,7 +39,6 @@ func main() {
 	var enableLeaderElection bool
 	var probeAddr string
 	var maxConcurrentReconciles int
-	var disableConversionWebhook bool
 	var disableReconciler bool
 	var inheritNodeSelector bool
 	var inheritAffinty bool
@@ -48,7 +46,6 @@ func main() {
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
-	flag.BoolVar(&disableConversionWebhook, "disable-conversion-webhook", false, "Set to true to disable the conversion webhook")
 	flag.BoolVar(&disableReconciler, "disable-reconciler", false, "Set to true to disable the reconcile loop controller)")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
@@ -87,7 +84,7 @@ func main() {
 		Port:                   9443,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "050c8fba.isaaguilar.com",
+		LeaderElectionID:       "050c8fba.galleybytes.com",
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -131,10 +128,6 @@ func main() {
 	if err := mgr.AddReadyzCheck("check", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
-	}
-
-	if !disableConversionWebhook {
-		mgr.GetWebhookServer().Register("/conversion", admission.NewConversionWebhook(ctrl.Log.WithName("conversion")))
 	}
 
 	setupLog.Info("starting manager")

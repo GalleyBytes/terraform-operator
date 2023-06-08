@@ -113,10 +113,11 @@ tags
 # End of https://www.gitignore.io/api/go,vim,emacs,visualstudiocode
 
 
+# my release management dir
 bin
 .builds
-# my release management dir
 .rmgmt
+old
 
 # Bundles that are dirty
 deploy/bundles/*dirty*

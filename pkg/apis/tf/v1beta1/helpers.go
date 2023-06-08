@@ -1,4 +1,4 @@
-package v1alpha2
+package v1beta1
 
 func ListContainsTask(list []TaskName, item TaskName) bool {
 	for _, i := range list {
