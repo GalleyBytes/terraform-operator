@@ -1,7 +1,7 @@
-// Package v1alpha2 contains API Schema definitions for the tf v1alpha2 API group
+// Package v1beta1 contains API Schema definitions for the tf v1beta1 API group
 // +k8s:deepcopy-gen=package,register
-// +groupName=tf.isaaguilar.com
-package v1alpha2
+// +groupName=tf.galleybytes.com
+package v1beta1
 
 import (
 	"bytes"
@@ -16,7 +16,7 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
-var pkgpath = "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2"
+var pkgpath = "github.com/galleybytes/terraform-operator/pkg/apis/tf/v1beta1"
 
 // +kubebuilder:object:generate=false
 type Definition struct {

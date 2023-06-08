@@ -26,14 +26,13 @@ spec:
         runAsUser: 1001
       containers:
       - name: terraform-operator
-        image: "isaaguilar/terraform-operator:latest"
+        image: "ghcr.io/galleybytes/terraform-operator:latest"
         imagePullPolicy: IfNotPresent
         command:
         - terraform-operator
         args:
         - --zap-log-level=debug
         - --zap-encoder=console
-        - --disable-conversion-webhook
         env:
         - name: WATCH_NAMESPACE # Leave blank to watch all namespaces
         - name: POD_NAME

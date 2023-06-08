@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/MakeNowJust/heredoc"
+	tfv1beta1 "github.com/galleybytes/terraform-operator/pkg/apis/tf/v1beta1"
+	"github.com/galleybytes/terraform-operator/pkg/utils"
 	"github.com/go-logr/logr"
 	getter "github.com/hashicorp/go-getter"
-	tfv1alpha2 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2"
-	"github.com/isaaguilar/terraform-operator/pkg/utils"
 	localcache "github.com/patrickmn/go-cache"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -35,9 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	runtimecontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 // ReconcileTerraform reconciles a Terraform object
@@ -78,7 +76,7 @@ type ReconcileTerraform struct {
 // generate a new configap and secret. The reason for this is to prevent a generation from producing a
 // different plan when is was the controller that changed options. A new generation should be forced
 // if the plan needs to change.
-func (r ReconcileTerraform) createEnvFromSources(ctx context.Context, tf *tfv1alpha2.Terraform) error {
+func (r ReconcileTerraform) createEnvFromSources(ctx context.Context, tf *tfv1beta1.Terraform) error {
 
 	resourceName := tf.Name
 	resourceNamespace := tf.Namespace
@@ -136,7 +134,7 @@ func (r ReconcileTerraform) createEnvFromSources(ctx context.Context, tf *tfv1al
 // This function will return the envFrom of the resources that should exist but does not validate that
 // they do exist. If the configmap or secret is missing, force the generation of the tfo resource to update
 // and the controller will recreate the missing resources.
-func (r ReconcileTerraform) listEnvFromSources(tf *tfv1alpha2.Terraform) []corev1.EnvFromSource {
+func (r ReconcileTerraform) listEnvFromSources(tf *tfv1beta1.Terraform) []corev1.EnvFromSource {
 	envFrom := []corev1.EnvFromSource{}
 	resourceName := tf.Name
 	name := fmt.Sprintf("%s-%s", resourceName, r.GlobalEnvSuffix)
@@ -172,13 +170,9 @@ func (r *ReconcileTerraform) SetupWithManager(mgr ctrl.Manager) error {
 		MaxConcurrentReconciles: r.MaxConcurrentReconciles,
 	}
 
-	// only listen to v1alpha2
 	err := ctrl.NewControllerManagedBy(mgr).
-		For(&tfv1alpha2.Terraform{}).
-		Watches(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForOwner{
-			IsController: true,
-			OwnerType:    &tfv1alpha2.Terraform{},
-		}).
+		For(&tfv1beta1.Terraform{}).
+		Owns(&corev1.Pod{}).
 		WithOptions(controllerOptions).
 		Complete(r)
 	if err != nil {
@@ -235,7 +229,7 @@ type TaskOptions struct {
 	annotations                         map[string]string
 	configMapSourceName                 string
 	configMapSourceKey                  string
-	credentials                         []tfv1alpha2.Credentials
+	credentials                         []tfv1beta1.Credentials
 	env                                 []corev1.EnvVar
 	envFrom                             []corev1.EnvFromSource
 	generation                          int64
@@ -255,7 +249,7 @@ type TaskOptions struct {
 	resourceLabels                      map[string]string
 	resourceName                        string
 	resourceUUID                        string
-	task                                tfv1alpha2.TaskName
+	task                                tfv1beta1.TaskName
 	saveOutputs                         bool
 	secretData                          map[string][]byte
 	serviceAccount                      string
@@ -269,7 +263,7 @@ type TaskOptions struct {
 	restartPolicy                       corev1.RestartPolicy
 }
 
-func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generation int64, globalEnvFrom []corev1.EnvFromSource, affinity *corev1.Affinity, nodeSelector map[string]string, tolerations []corev1.Toleration) TaskOptions {
+func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation int64, globalEnvFrom []corev1.EnvFromSource, affinity *corev1.Affinity, nodeSelector map[string]string, tolerations []corev1.Toleration) TaskOptions {
 	// TODO Read the tfstate and decide IF_NEW_RESOURCE based on that
 	// applyAction := false
 	resourceName := tf.Name
@@ -297,8 +291,8 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 	// TaskOptions have data for all the tasks but since we're only interested
 	// in the ones for this taskType, extract and add them to RunOptions
 	for _, taskOption := range tf.Spec.TaskOptions {
-		if tfv1alpha2.ListContainsTask(taskOption.For, task) ||
-			tfv1alpha2.ListContainsTask(taskOption.For, "*") {
+		if tfv1beta1.ListContainsTask(taskOption.For, task) ||
+			tfv1beta1.ListContainsTask(taskOption.For, "*") {
 			policyRules = append(policyRules, taskOption.PolicyRules...)
 			for key, value := range taskOption.Annotations {
 				annotations[key] = value
@@ -312,7 +306,7 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 				restartPolicy = taskOption.RestartPolicy
 			}
 		}
-		if tfv1alpha2.ListContainsTask(taskOption.For, task) {
+		if tfv1beta1.ListContainsTask(taskOption.For, task) {
 			urlSource = taskOption.Script.Source
 			if configMapSelector := taskOption.Script.ConfigMapSelector; configMapSelector != nil {
 				configMapSourceName = configMapSelector.Name
@@ -324,17 +318,17 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 	images := tf.Spec.Images
 	if images == nil {
 		// setup default images
-		images = &tfv1alpha2.Images{}
+		images = &tfv1beta1.Images{}
 	}
 
 	if images.Terraform == nil {
-		images.Terraform = &tfv1alpha2.ImageConfig{
+		images.Terraform = &tfv1beta1.ImageConfig{
 			ImagePullPolicy: corev1.PullIfNotPresent,
 		}
 	}
 
 	if images.Terraform.Image == "" {
-		images.Terraform.Image = fmt.Sprintf("%s:%s", tfv1alpha2.TerraformTaskImageRepoDefault, terraformVersion)
+		images.Terraform.Image = fmt.Sprintf("%s:%s", tfv1beta1.TerraformTaskImageRepoDefault, terraformVersion)
 	} else {
 		terraformImage := images.Terraform.Image
 		splitImage := strings.Split(images.Terraform.Image, ":")
@@ -345,67 +339,67 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 	}
 
 	if images.Setup == nil {
-		images.Setup = &tfv1alpha2.ImageConfig{
+		images.Setup = &tfv1beta1.ImageConfig{
 			ImagePullPolicy: corev1.PullIfNotPresent,
 		}
 	}
 
 	if images.Setup.Image == "" {
-		images.Setup.Image = fmt.Sprintf("%s:%s", tfv1alpha2.SetupTaskImageRepoDefault, tfv1alpha2.SetupTaskImageTagDefault)
+		images.Setup.Image = fmt.Sprintf("%s:%s", tfv1beta1.SetupTaskImageRepoDefault, tfv1beta1.SetupTaskImageTagDefault)
 	}
 
 	if images.Script == nil {
-		images.Script = &tfv1alpha2.ImageConfig{
+		images.Script = &tfv1beta1.ImageConfig{
 			ImagePullPolicy: corev1.PullIfNotPresent,
 		}
 	}
 
 	if images.Script.Image == "" {
-		images.Script.Image = fmt.Sprintf("%s:%s", tfv1alpha2.ScriptTaskImageRepoDefault, tfv1alpha2.ScriptTaskImageTagDefault)
+		images.Script.Image = fmt.Sprintf("%s:%s", tfv1beta1.ScriptTaskImageRepoDefault, tfv1beta1.ScriptTaskImageTagDefault)
 	}
 
-	terraformTasks := []tfv1alpha2.TaskName{
-		tfv1alpha2.RunInit,
-		tfv1alpha2.RunInitDelete,
-		tfv1alpha2.RunPlan,
-		tfv1alpha2.RunPlanDelete,
-		tfv1alpha2.RunApply,
-		tfv1alpha2.RunApplyDelete,
+	terraformTasks := []tfv1beta1.TaskName{
+		tfv1beta1.RunInit,
+		tfv1beta1.RunInitDelete,
+		tfv1beta1.RunPlan,
+		tfv1beta1.RunPlanDelete,
+		tfv1beta1.RunApply,
+		tfv1beta1.RunApplyDelete,
 	}
 
-	scriptTasks := []tfv1alpha2.TaskName{
-		tfv1alpha2.RunPreInit,
-		tfv1alpha2.RunPreInitDelete,
-		tfv1alpha2.RunPostInit,
-		tfv1alpha2.RunPostInitDelete,
-		tfv1alpha2.RunPrePlan,
-		tfv1alpha2.RunPrePlanDelete,
-		tfv1alpha2.RunPostPlan,
-		tfv1alpha2.RunPostPlanDelete,
-		tfv1alpha2.RunPreApply,
-		tfv1alpha2.RunPreApplyDelete,
-		tfv1alpha2.RunPostApply,
-		tfv1alpha2.RunPostApplyDelete,
+	scriptTasks := []tfv1beta1.TaskName{
+		tfv1beta1.RunPreInit,
+		tfv1beta1.RunPreInitDelete,
+		tfv1beta1.RunPostInit,
+		tfv1beta1.RunPostInitDelete,
+		tfv1beta1.RunPrePlan,
+		tfv1beta1.RunPrePlanDelete,
+		tfv1beta1.RunPostPlan,
+		tfv1beta1.RunPostPlanDelete,
+		tfv1beta1.RunPreApply,
+		tfv1beta1.RunPreApplyDelete,
+		tfv1beta1.RunPostApply,
+		tfv1beta1.RunPostApplyDelete,
 	}
 
-	setupTasks := []tfv1alpha2.TaskName{
-		tfv1alpha2.RunSetup,
-		tfv1alpha2.RunSetupDelete,
+	setupTasks := []tfv1beta1.TaskName{
+		tfv1beta1.RunSetup,
+		tfv1beta1.RunSetupDelete,
 	}
 
-	if tfv1alpha2.ListContainsTask(terraformTasks, task) {
+	if tfv1beta1.ListContainsTask(terraformTasks, task) {
 		image = images.Terraform.Image
 		imagePullPolicy = images.Terraform.ImagePullPolicy
 		if urlSource == "" {
 			urlSource = "https://raw.githubusercontent.com/GalleyBytes/terraform-operator-tasks/master/tf.sh"
 		}
-	} else if tfv1alpha2.ListContainsTask(scriptTasks, task) {
+	} else if tfv1beta1.ListContainsTask(scriptTasks, task) {
 		image = images.Script.Image
 		imagePullPolicy = images.Script.ImagePullPolicy
 		if urlSource == "" {
 			urlSource = "https://raw.githubusercontent.com/GalleyBytes/terraform-operator-tasks/master/noop.sh"
 		}
-	} else if tfv1alpha2.ListContainsTask(setupTasks, task) {
+	} else if tfv1beta1.ListContainsTask(setupTasks, task) {
 		image = images.Setup.Image
 		imagePullPolicy = images.Setup.ImagePullPolicy
 		if urlSource == "" {
@@ -443,20 +437,20 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 	}
 
 	resourceLabels := map[string]string{
-		"terraforms.tf.isaaguilar.com/generation":       fmt.Sprintf("%d", generation),
-		"terraforms.tf.isaaguilar.com/resourceName":     resourceName,
-		"terraforms.tf.isaaguilar.com/podPrefix":        prefixedName,
-		"terraforms.tf.isaaguilar.com/terraformVersion": terraformVersion,
-		"app.kubernetes.io/name":                        "terraform-operator",
-		"app.kubernetes.io/component":                   "terraform-operator-runner",
-		"app.kubernetes.io/created-by":                  "controller",
+		"terraforms.tf.galleybytes.com/generation":       fmt.Sprintf("%d", generation),
+		"terraforms.tf.galleybytes.com/resourceName":     resourceName,
+		"terraforms.tf.galleybytes.com/podPrefix":        prefixedName,
+		"terraforms.tf.galleybytes.com/terraformVersion": terraformVersion,
+		"app.kubernetes.io/name":                         "terraform-operator",
+		"app.kubernetes.io/component":                    "terraform-operator-runner",
+		"app.kubernetes.io/created-by":                   "controller",
 	}
 
 	requireApproval := tf.Spec.RequireApproval
 
 	if task.ID() == -2 {
 		// This is not one of the main tasks so it's probably an plugin
-		resourceLabels["terraforms.tf.isaaguilar.com/isPlugin"] = "true"
+		resourceLabels["terraforms.tf.galleybytes.com/isPlugin"] = "true"
 	}
 
 	return TaskOptions{
@@ -497,7 +491,7 @@ func newTaskOptions(tf *tfv1alpha2.Terraform, task tfv1alpha2.TaskName, generati
 	}
 }
 
-const terraformFinalizer = "finalizer.tf.isaaguilar.com"
+const terraformFinalizer = "finalizer.tf.galleybytes.com"
 
 // Reconcile reads that state of the cluster for a Terraform object and makes changes based on the state read
 // and what is in the Terraform.Spec
@@ -538,7 +532,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	}
 
 	// Final delete by removing finalizers
-	if tf.Status.Phase == tfv1alpha2.PhaseDeleted {
+	if tf.Status.Phase == tfv1beta1.PhaseDeleted {
 		reqLogger.Info("Remove finalizers")
 		_ = updateFinalizer(tf)
 		err := r.update(ctx, tf)
@@ -568,9 +562,9 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			utils.TruncateResourceName(tf.Name, 220),
 			utils.StringWithCharset(8, utils.AlphaNum),
 		)
-		tf.Status.Stages = []tfv1alpha2.Stage{}
+		tf.Status.Stages = []tfv1beta1.Stage{}
 		tf.Status.LastCompletedGeneration = 0
-		tf.Status.Phase = tfv1alpha2.PhaseInitializing
+		tf.Status.Phase = tfv1beta1.PhaseInitializing
 
 		err := r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 		if err != nil {
@@ -581,15 +575,15 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 
 	// Add the first stage
 	if tf.Status.Stage.Generation == 0 {
-		task := tfv1alpha2.RunSetup
-		stageState := tfv1alpha2.StateInitializing
-		interruptible := tfv1alpha2.CanNotBeInterrupt
+		task := tfv1beta1.RunSetup
+		stageState := tfv1beta1.StateInitializing
+		interruptible := tfv1beta1.CanNotBeInterrupt
 		stage := newStage(tf, task, "TF_RESOURCE_CREATED", interruptible, stageState)
 		if stage == nil {
 			return reconcile.Result{}, fmt.Errorf("failed to create a new stage")
 		}
 		tf.Status.Stage = *stage
-		tf.Status.Plugins = []tfv1alpha2.TaskName{}
+		tf.Status.Plugins = []tfv1beta1.TaskName{}
 
 		err := r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 		if err != nil {
@@ -599,15 +593,15 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	}
 
 	deletePhases := []string{
-		string(tfv1alpha2.PhaseDeleting),
-		string(tfv1alpha2.PhaseInitDelete),
-		string(tfv1alpha2.PhaseDeleted),
+		string(tfv1beta1.PhaseDeleting),
+		string(tfv1beta1.PhaseInitDelete),
+		string(tfv1beta1.PhaseDeleted),
 	}
 
 	// Check if the resource is marked to be deleted which is
 	// indicated by the deletion timestamp being set.
 	if tf.GetDeletionTimestamp() != nil && !utils.ListContainsStr(deletePhases, string(tf.Status.Phase)) {
-		tf.Status.Phase = tfv1alpha2.PhaseInitDelete
+		tf.Status.Phase = tfv1beta1.PhaseInitDelete
 	}
 
 	// // TODO Check the status on stages that have not completed
@@ -645,13 +639,13 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	affinity, nodeSelector, tolerations := r.getNodeSelectorsFromCache()
 	runOpts := newTaskOptions(tf, currentStage.TaskType, generation, globalEnvFrom, affinity, nodeSelector, tolerations)
 
-	if podType == tfv1alpha2.RunNil {
+	if podType == tfv1beta1.RunNil {
 		// podType is blank when the terraform workflow has completed for
 		// either create or delete.
 
-		if tf.Status.Phase == tfv1alpha2.PhaseRunning {
+		if tf.Status.Phase == tfv1beta1.PhaseRunning {
 			// Updates the status as "completed" on the resource
-			tf.Status.Phase = tfv1alpha2.PhaseCompleted
+			tf.Status.Phase = tfv1beta1.PhaseCompleted
 			if tf.Spec.WriteOutputsToStatus {
 				// runOpts.outputsSecetName
 				secret, err := r.loadSecret(ctx, runOpts.outputsSecretName, runOpts.namespace)
@@ -681,10 +675,10 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 				reqLogger.V(1).Info(err.Error())
 				return reconcile.Result{}, err
 			}
-		} else if tf.Status.Phase == tfv1alpha2.PhaseDeleting {
+		} else if tf.Status.Phase == tfv1beta1.PhaseDeleting {
 			// Updates the status as "deleted" which will be used to tell the
 			// controller to remove any finalizers).
-			tf.Status.Phase = tfv1alpha2.PhaseDeleted
+			tf.Status.Phase = tfv1beta1.PhaseDeleted
 			err := r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 			if err != nil {
 				reqLogger.V(1).Info(err.Error())
@@ -700,7 +694,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		"metadata.generateName": fmt.Sprintf("%s-%s-", tf.Status.PodNamePrefix+"-v"+fmt.Sprint(generation), podType),
 	}
 	labelSelector := map[string]string{
-		"terraforms.tf.isaaguilar.com/generation": fmt.Sprintf("%d", generation),
+		"terraforms.tf.galleybytes.com/generation": fmt.Sprintf("%d", generation),
 	}
 	matchingFields := client.MatchingFields(f)
 	matchingLabels := client.MatchingLabels(labelSelector)
@@ -711,11 +705,11 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		return reconcile.Result{}, nil
 	}
 
-	if len(pods.Items) == 0 && tf.Status.Stage.State == tfv1alpha2.StateInProgress {
+	if len(pods.Items) == 0 && tf.Status.Stage.State == tfv1beta1.StateInProgress {
 		// This condition is generally met when the user deletes the pod.
 		// Force the state to transition away from in-progress and then
 		// requeue.
-		tf.Status.Stage.State = tfv1alpha2.StateInitializing
+		tf.Status.Stage.State = tfv1beta1.StateInitializing
 		err = r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 		if err != nil {
 			reqLogger.V(1).Info(err.Error())
@@ -732,12 +726,12 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			reqLogger.Error(err, "")
 			return reconcile.Result{}, err
 		}
-		if tf.Status.Phase == tfv1alpha2.PhaseInitializing {
-			tf.Status.Phase = tfv1alpha2.PhaseRunning
-		} else if tf.Status.Phase == tfv1alpha2.PhaseInitDelete {
-			tf.Status.Phase = tfv1alpha2.PhaseDeleting
+		if tf.Status.Phase == tfv1beta1.PhaseInitializing {
+			tf.Status.Phase = tfv1beta1.PhaseRunning
+		} else if tf.Status.Phase == tfv1beta1.PhaseInitDelete {
+			tf.Status.Phase = tfv1beta1.PhaseDeleting
 		}
-		tf.Status.Stage.State = tfv1alpha2.StateInProgress
+		tf.Status.Stage.State = tfv1beta1.StateInProgress
 
 		// TODO because the pod is already running, is it critical that the
 		// phase and state be updated. The updateStatus function needs to retry
@@ -754,7 +748,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 
 	// By now, the task pod exists and the controller has to check and update on the status of the pod.
 	for pluginTaskName, pluginConfig := range tf.Spec.Plugins {
-		if tfv1alpha2.ListContainsTask(tf.Status.Plugins, pluginTaskName) {
+		if tfv1beta1.ListContainsTask(tf.Status.Plugins, pluginTaskName) {
 			continue
 		}
 
@@ -805,7 +799,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	// }
 
 	if realPod.Status.Phase == corev1.PodFailed {
-		tf.Status.Stage.State = tfv1alpha2.StateFailed
+		tf.Status.Stage.State = tfv1beta1.StateFailed
 		tf.Status.Stage.StopTime = metav1.NewTime(time.Now())
 		err = r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 		if err != nil {
@@ -816,7 +810,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	}
 
 	if realPod.Status.Phase == corev1.PodSucceeded {
-		tf.Status.Stage.State = tfv1alpha2.StateComplete
+		tf.Status.Stage.State = tfv1beta1.StateComplete
 		tf.Status.Stage.StopTime = metav1.NewTime(time.Now())
 		err = r.updateStatusWithRetry(ctx, tf, &tf.Status, reqLogger)
 		if err != nil {
@@ -831,7 +825,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		}
 		return reconcile.Result{}, nil
 	}
-	tf.Status.Stage.State = tfv1alpha2.StageState(realPod.Status.Phase)
+	tf.Status.Stage.State = tfv1beta1.StageState(realPod.Status.Phase)
 
 	// Finally, update any statuses that have been changed if not already saved. This is probablye
 	// for pending condition that does not require anything to be done.
@@ -847,8 +841,8 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 }
 
 // getTerraformResource fetches the terraform resource with a retry
-func (r ReconcileTerraform) getTerraformResource(ctx context.Context, namespacedName types.NamespacedName, maxRetry int, reqLogger logr.Logger) (*tfv1alpha2.Terraform, error) {
-	tf := &tfv1alpha2.Terraform{}
+func (r ReconcileTerraform) getTerraformResource(ctx context.Context, namespacedName types.NamespacedName, maxRetry int, reqLogger logr.Logger) (*tfv1beta1.Terraform, error) {
+	tf := &tfv1beta1.Terraform{}
 	for retryCount := 1; retryCount <= maxRetry; retryCount++ {
 		err := r.Client.Get(ctx, namespacedName, tf)
 		if err != nil {
@@ -866,17 +860,17 @@ func (r ReconcileTerraform) getTerraformResource(ctx context.Context, namespaced
 	return tf, nil
 }
 
-func newStage(tf *tfv1alpha2.Terraform, taskType tfv1alpha2.TaskName, reason string, interruptible tfv1alpha2.Interruptible, stageState tfv1alpha2.StageState) *tfv1alpha2.Stage {
+func newStage(tf *tfv1beta1.Terraform, taskType tfv1beta1.TaskName, reason string, interruptible tfv1beta1.Interruptible, stageState tfv1beta1.StageState) *tfv1beta1.Stage {
 	if reason == "GENERATION_CHANGE" {
-		tf.Status.Plugins = []tfv1alpha2.TaskName{}
-		tf.Status.Phase = tfv1alpha2.PhaseInitializing
+		tf.Status.Plugins = []tfv1beta1.TaskName{}
+		tf.Status.Phase = tfv1beta1.PhaseInitializing
 	}
 	startTime := metav1.NewTime(time.Now())
 	stopTime := metav1.NewTime(time.Unix(0, 0))
-	if stageState == tfv1alpha2.StateComplete {
+	if stageState == tfv1beta1.StateComplete {
 		stopTime = startTime
 	}
-	return &tfv1alpha2.Stage{
+	return &tfv1beta1.Stage{
 		Generation:    tf.Generation,
 		Interruptible: interruptible,
 		Reason:        reason,
@@ -887,16 +881,16 @@ func newStage(tf *tfv1alpha2.Terraform, taskType tfv1alpha2.TaskName, reason str
 	}
 }
 
-func getConfiguredTasks(taskOptions *[]tfv1alpha2.TaskOption) []tfv1alpha2.TaskName {
-	tasks := []tfv1alpha2.TaskName{
-		tfv1alpha2.RunSetup,
-		tfv1alpha2.RunInit,
-		tfv1alpha2.RunPlan,
-		tfv1alpha2.RunApply,
-		tfv1alpha2.RunSetupDelete,
-		tfv1alpha2.RunInitDelete,
-		tfv1alpha2.RunPlanDelete,
-		tfv1alpha2.RunApplyDelete,
+func getConfiguredTasks(taskOptions *[]tfv1beta1.TaskOption) []tfv1beta1.TaskName {
+	tasks := []tfv1beta1.TaskName{
+		tfv1beta1.RunSetup,
+		tfv1beta1.RunInit,
+		tfv1beta1.RunPlan,
+		tfv1beta1.RunApply,
+		tfv1beta1.RunSetupDelete,
+		tfv1beta1.RunInitDelete,
+		tfv1beta1.RunPlanDelete,
+		tfv1beta1.RunApplyDelete,
 	}
 	if taskOptions == nil {
 		return tasks
@@ -906,7 +900,7 @@ func getConfiguredTasks(taskOptions *[]tfv1alpha2.TaskOption) []tfv1alpha2.TaskN
 			if affected == "*" {
 				continue
 			}
-			if !tfv1alpha2.ListContainsTask(tasks, affected) {
+			if !tfv1beta1.ListContainsTask(tasks, affected) {
 				tasks = append(tasks, affected)
 			}
 		}
@@ -928,27 +922,27 @@ func getConfiguredTasks(taskOptions *[]tfv1alpha2.TaskOption) []tfv1alpha2.TaskN
 // When a stage has already triggered a pod, the only way for the pod to transition to the next stage is for
 // the pod to complete successfully. Any other pod phase will keep the pod in the current stage, or in the
 // case of the apply task, the workflow will be restarted.
-func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1alpha2.Terraform) *tfv1alpha2.Stage {
+func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1beta1.Terraform) *tfv1beta1.Stage {
 	var isNewStage bool
-	var podType tfv1alpha2.TaskName
+	var podType tfv1beta1.TaskName
 	var reason string
 	configuredTasks := getConfiguredTasks(&tf.Spec.TaskOptions)
 
 	deletePhases := []string{
-		string(tfv1alpha2.PhaseDeleted),
-		string(tfv1alpha2.PhaseInitDelete),
-		string(tfv1alpha2.PhaseDeleted),
+		string(tfv1beta1.PhaseDeleted),
+		string(tfv1beta1.PhaseInitDelete),
+		string(tfv1beta1.PhaseDeleted),
 	}
 	tfIsFinalizing := utils.ListContainsStr(deletePhases, string(tf.Status.Phase))
 	tfIsNotFinalizing := !tfIsFinalizing
-	initDelete := tf.Status.Phase == tfv1alpha2.PhaseInitDelete
-	stageState := tfv1alpha2.StateInitializing
-	interruptible := tfv1alpha2.CanBeInterrupt
+	initDelete := tf.Status.Phase == tfv1beta1.PhaseInitDelete
+	stageState := tfv1beta1.StateInitializing
+	interruptible := tfv1beta1.CanBeInterrupt
 
 	currentStage := tf.Status.Stage
 	currentStagePodType := currentStage.TaskType
-	currentStageCanNotBeInterrupted := currentStage.Interruptible == tfv1alpha2.CanNotBeInterrupt
-	currentStageIsRunning := currentStage.State == tfv1alpha2.StateInProgress
+	currentStageCanNotBeInterrupted := currentStage.Interruptible == tfv1beta1.CanNotBeInterrupt
+	currentStageIsRunning := currentStage.State == tfv1beta1.StateInProgress
 	isNewGeneration := currentStage.Generation != tf.Generation
 
 	// resource status
@@ -961,7 +955,7 @@ func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1alpha2
 		// normal terraform workflow
 		isNewStage = true
 		reason = "GENERATION_CHANGE"
-		podType = tfv1alpha2.RunSetup
+		podType = tfv1beta1.RunSetup
 
 		// } else if initDelete && !utils.ListContainsStr(deletePodTypes, string(currentStagePodType)) {
 	} else if initDelete && isNewGeneration {
@@ -969,44 +963,44 @@ func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1alpha2
 		// in the terraform destroy workflow.
 		isNewStage = true
 		reason = "TF_RESOURCE_DELETED"
-		podType = tfv1alpha2.RunSetupDelete
-		interruptible = tfv1alpha2.CanNotBeInterrupt
+		podType = tfv1beta1.RunSetupDelete
+		interruptible = tfv1beta1.CanNotBeInterrupt
 
-	} else if currentStage.State == tfv1alpha2.StateComplete {
+	} else if currentStage.State == tfv1beta1.StateComplete {
 		isNewStage = true
 		reason = fmt.Sprintf("COMPLETED_%s", strings.ToUpper(currentStage.TaskType.String()))
 
 		switch currentStagePodType {
 
-		case tfv1alpha2.RunNil:
+		case tfv1beta1.RunNil:
 			isNewStage = false
 
 		default:
 			podType = nextTask(currentStagePodType, configuredTasks)
 			interruptible = isTaskInterruptable(podType)
-			if podType == tfv1alpha2.RunNil {
-				stageState = tfv1alpha2.StateComplete
+			if podType == tfv1beta1.RunNil {
+				stageState = tfv1beta1.StateComplete
 			}
 		}
-	} else if currentStage.State == tfv1alpha2.StateFailed {
-		if currentStage.TaskType == tfv1alpha2.RunApply {
+	} else if currentStage.State == tfv1beta1.StateFailed {
+		if currentStage.TaskType == tfv1beta1.RunApply {
 
 			err := r.Client.Get(ctx, types.NamespacedName{Namespace: tf.Namespace, Name: tf.Status.Stage.PodName}, &corev1.Pod{})
 			if err != nil && errors.IsNotFound(err) {
 				// If the task failed, is of type "apply", and the pod does not exist, restart the workflow.
 				isNewStage = true
 				reason = "RESTARTED_WORKFLOW"
-				podType = nextTask(tfv1alpha2.RunPostInit, configuredTasks)
+				podType = nextTask(tfv1beta1.RunPostInit, configuredTasks)
 				interruptible = isTaskInterruptable(podType)
 			}
-		} else if currentStage.TaskType == tfv1alpha2.RunApplyDelete {
+		} else if currentStage.TaskType == tfv1beta1.RunApplyDelete {
 			pod := corev1.Pod{}
 			err := r.Client.Get(ctx, types.NamespacedName{Namespace: tf.Namespace, Name: tf.Status.Stage.PodName}, &pod)
 			if err != nil && errors.IsNotFound(err) {
 				// If the task failed, is of type "apply", and the pod does not exist, restart the workflow.
 				isNewStage = true
 				reason = "RESTARTED_DELETE_WORKFLOW"
-				podType = nextTask(tfv1alpha2.RunPostInitDelete, configuredTasks)
+				podType = nextTask(tfv1beta1.RunPostInitDelete, configuredTasks)
 				interruptible = isTaskInterruptable(podType)
 			}
 		}
@@ -1019,25 +1013,25 @@ func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1alpha2
 
 }
 
-func (r ReconcileTerraform) removeOldPlan(tf *tfv1alpha2.Terraform) error {
+func (r ReconcileTerraform) removeOldPlan(tf *tfv1beta1.Terraform) error {
 	labelSelectors := []string{
-		fmt.Sprintf("terraforms.tf.isaaguilar.com/generation==%d", tf.Generation),
-		fmt.Sprintf("terraforms.tf.isaaguilar.com/resourceName=%s", tf.Name),
+		fmt.Sprintf("terraforms.tf.galleybytes.com/generation==%d", tf.Generation),
+		fmt.Sprintf("terraforms.tf.galleybytes.com/resourceName=%s", tf.Name),
 		"app.kubernetes.io/instance",
 	}
 	if tf.Status.Stage.Reason == "RESTARTED_WORKFLOW" {
 		labelSelectors = append(labelSelectors, []string{
-			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunSetup),
-			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunPreInit),
-			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunInit),
-			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunPostInit),
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1beta1.RunSetup),
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1beta1.RunPreInit),
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1beta1.RunInit),
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1beta1.RunPostInit),
 		}...)
 	} else if tf.Status.Stage.Reason == "RESTARTED_DELETE_WORKFLOW" {
 		labelSelectors = append(labelSelectors, []string{
-			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunSetupDelete),
-			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunPreInitDelete),
-			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunInitDelete),
-			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1alpha2.RunPostInitDelete),
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1beta1.RunSetupDelete),
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1beta1.RunPreInitDelete),
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1beta1.RunInitDelete),
+			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1beta1.RunPostInitDelete),
 		}...)
 	}
 	labelSelector, err := labels.Parse(strings.Join(labelSelectors, ","))
@@ -1063,67 +1057,67 @@ func (r ReconcileTerraform) removeOldPlan(tf *tfv1alpha2.Terraform) error {
 
 // These are pods that are known to cause issues with terraform state when
 // not run to completion.
-func isTaskInterruptable(task tfv1alpha2.TaskName) tfv1alpha2.Interruptible {
-	uninterruptibleTasks := []tfv1alpha2.TaskName{
-		tfv1alpha2.RunInit,
-		tfv1alpha2.RunPlan,
-		tfv1alpha2.RunApply,
-		tfv1alpha2.RunInitDelete,
-		tfv1alpha2.RunPlanDelete,
-		tfv1alpha2.RunApplyDelete,
+func isTaskInterruptable(task tfv1beta1.TaskName) tfv1beta1.Interruptible {
+	uninterruptibleTasks := []tfv1beta1.TaskName{
+		tfv1beta1.RunInit,
+		tfv1beta1.RunPlan,
+		tfv1beta1.RunApply,
+		tfv1beta1.RunInitDelete,
+		tfv1beta1.RunPlanDelete,
+		tfv1beta1.RunApplyDelete,
 	}
-	if tfv1alpha2.ListContainsTask(uninterruptibleTasks, task) {
-		return tfv1alpha2.CanNotBeInterrupt
+	if tfv1beta1.ListContainsTask(uninterruptibleTasks, task) {
+		return tfv1beta1.CanNotBeInterrupt
 	}
-	return tfv1alpha2.CanBeInterrupt
+	return tfv1beta1.CanBeInterrupt
 }
 
-func nextTask(currentTask tfv1alpha2.TaskName, configuredTasks []tfv1alpha2.TaskName) tfv1alpha2.TaskName {
-	tasksInOrder := []tfv1alpha2.TaskName{
-		tfv1alpha2.RunSetup,
-		tfv1alpha2.RunPreInit,
-		tfv1alpha2.RunInit,
-		tfv1alpha2.RunPostInit,
-		tfv1alpha2.RunPrePlan,
-		tfv1alpha2.RunPlan,
-		tfv1alpha2.RunPostPlan,
-		tfv1alpha2.RunPreApply,
-		tfv1alpha2.RunApply,
-		tfv1alpha2.RunPostApply,
+func nextTask(currentTask tfv1beta1.TaskName, configuredTasks []tfv1beta1.TaskName) tfv1beta1.TaskName {
+	tasksInOrder := []tfv1beta1.TaskName{
+		tfv1beta1.RunSetup,
+		tfv1beta1.RunPreInit,
+		tfv1beta1.RunInit,
+		tfv1beta1.RunPostInit,
+		tfv1beta1.RunPrePlan,
+		tfv1beta1.RunPlan,
+		tfv1beta1.RunPostPlan,
+		tfv1beta1.RunPreApply,
+		tfv1beta1.RunApply,
+		tfv1beta1.RunPostApply,
 	}
-	deleteTasksInOrder := []tfv1alpha2.TaskName{
-		tfv1alpha2.RunSetupDelete,
-		tfv1alpha2.RunPreInitDelete,
-		tfv1alpha2.RunInitDelete,
-		tfv1alpha2.RunPostInitDelete,
-		tfv1alpha2.RunPrePlanDelete,
-		tfv1alpha2.RunPlanDelete,
-		tfv1alpha2.RunPostPlanDelete,
-		tfv1alpha2.RunPreApplyDelete,
-		tfv1alpha2.RunApplyDelete,
-		tfv1alpha2.RunPostApplyDelete,
+	deleteTasksInOrder := []tfv1beta1.TaskName{
+		tfv1beta1.RunSetupDelete,
+		tfv1beta1.RunPreInitDelete,
+		tfv1beta1.RunInitDelete,
+		tfv1beta1.RunPostInitDelete,
+		tfv1beta1.RunPrePlanDelete,
+		tfv1beta1.RunPlanDelete,
+		tfv1beta1.RunPostPlanDelete,
+		tfv1beta1.RunPreApplyDelete,
+		tfv1beta1.RunApplyDelete,
+		tfv1beta1.RunPostApplyDelete,
 	}
 
-	next := tfv1alpha2.RunNil
+	next := tfv1beta1.RunNil
 	isUpNext := false
-	if tfv1alpha2.ListContainsTask(tasksInOrder, currentTask) {
+	if tfv1beta1.ListContainsTask(tasksInOrder, currentTask) {
 		for _, task := range tasksInOrder {
 			if task == currentTask {
 				isUpNext = true
 				continue
 			}
-			if isUpNext && tfv1alpha2.ListContainsTask(configuredTasks, task) {
+			if isUpNext && tfv1beta1.ListContainsTask(configuredTasks, task) {
 				next = task
 				break
 			}
 		}
-	} else if tfv1alpha2.ListContainsTask(deleteTasksInOrder, currentTask) {
+	} else if tfv1beta1.ListContainsTask(deleteTasksInOrder, currentTask) {
 		for _, task := range deleteTasksInOrder {
 			if task == currentTask {
 				isUpNext = true
 				continue
 			}
-			if isUpNext && tfv1alpha2.ListContainsTask(configuredTasks, task) {
+			if isUpNext && tfv1beta1.ListContainsTask(configuredTasks, task) {
 				next = task
 				break
 			}
@@ -1132,7 +1126,7 @@ func nextTask(currentTask tfv1alpha2.TaskName, configuredTasks []tfv1alpha2.Task
 	return next
 }
 
-func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1alpha2.Terraform, attempt int) {
+func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraform, attempt int) {
 	logger := r.Log.WithName("Reaper").WithValues("Terraform", fmt.Sprintf("%s/%s", tf.Namespace, tf.Name))
 	if attempt > 20 {
 		// TODO explain what and way resources cannot be reaped
@@ -1156,11 +1150,11 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1alpha2.Terra
 	}
 
 	// The labels required are read as:
-	// 1. The terraforms.tf.isaaguilar.com/generation key MUST exist
-	// 2. The terraforms.tf.isaaguilar.com/generation value MUST match the current resource generation
-	// 3. The terraforms.tf.isaaguilar.com/resourceName key MUST exist
-	// 4. The terraforms.tf.isaaguilar.com/resourceName value MUST match the resource name
-	labelSelector, err := labels.Parse(fmt.Sprintf("terraforms.tf.isaaguilar.com/generation,terraforms.tf.isaaguilar.com/generation!=%d,terraforms.tf.isaaguilar.com/resourceName,terraforms.tf.isaaguilar.com/resourceName=%s", tf.Generation, tf.Name))
+	// 1. The terraforms.tf.galleybytes.com/generation key MUST exist
+	// 2. The terraforms.tf.galleybytes.com/generation value MUST match the current resource generation
+	// 3. The terraforms.tf.galleybytes.com/resourceName key MUST exist
+	// 4. The terraforms.tf.galleybytes.com/resourceName value MUST match the resource name
+	labelSelector, err := labels.Parse(fmt.Sprintf("terraforms.tf.galleybytes.com/generation,terraforms.tf.galleybytes.com/generation!=%d,terraforms.tf.galleybytes.com/resourceName,terraforms.tf.galleybytes.com/resourceName=%s", tf.Generation, tf.Name))
 	if err != nil {
 		logger.Error(err, "Could not parse labels")
 	}
@@ -1251,7 +1245,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1alpha2.Terra
 	}
 }
 
-func (r ReconcileTerraform) reapPlugins(tf *tfv1alpha2.Terraform, attempt int) {
+func (r ReconcileTerraform) reapPlugins(tf *tfv1beta1.Terraform, attempt int) {
 	logger := r.Log.WithName("ReaperPlugins").WithValues("Terraform", fmt.Sprintf("%s/%s", tf.Namespace, tf.Name))
 	if attempt > 20 {
 		// TODO explain what and way resources cannot be reaped
@@ -1274,7 +1268,7 @@ func (r ReconcileTerraform) reapPlugins(tf *tfv1alpha2.Terraform, attempt int) {
 	}
 
 	// Delete old plugins regardless of pod phase
-	labelSelectorForPlugins, err := labels.Parse(fmt.Sprintf("terraforms.tf.isaaguilar.com/isPlugin=true,terraforms.tf.isaaguilar.com/generation,terraforms.tf.isaaguilar.com/generation!=%d,terraforms.tf.isaaguilar.com/resourceName,terraforms.tf.isaaguilar.com/resourceName=%s", tf.Generation, tf.Name))
+	labelSelectorForPlugins, err := labels.Parse(fmt.Sprintf("terraforms.tf.galleybytes.com/isPlugin=true,terraforms.tf.galleybytes.com/generation,terraforms.tf.galleybytes.com/generation!=%d,terraforms.tf.galleybytes.com/resourceName,terraforms.tf.galleybytes.com/resourceName=%s", tf.Generation, tf.Name))
 	if err != nil {
 		logger.Error(err, "Could not parse labels")
 	}
@@ -1349,7 +1343,7 @@ func (r ReconcileTerraform) getNodeSelectorsFromCache() (*corev1.Affinity, map[s
 // createPluginPod will attempt to create the plugin pod and mark it as added in the resource's status.
 // No logic is used to determine if the plugin was successful. If the createPod function errors, a log event
 // is recorded in the controller.
-func (r ReconcileTerraform) createPluginPod(ctx context.Context, logger logr.Logger, tf *tfv1alpha2.Terraform, pluginTaskName tfv1alpha2.TaskName, pluginConfig tfv1alpha2.Plugin, globalEnvFrom []corev1.EnvFromSource) (reconcile.Result, error) {
+func (r ReconcileTerraform) createPluginPod(ctx context.Context, logger logr.Logger, tf *tfv1beta1.Terraform, pluginTaskName tfv1beta1.TaskName, pluginConfig tfv1beta1.Plugin, globalEnvFrom []corev1.EnvFromSource) (reconcile.Result, error) {
 	affinity, nodeSelector, tolerations := r.getNodeSelectorsFromCache()
 	pluginRunOpts := newTaskOptions(tf, pluginTaskName, tf.Generation, globalEnvFrom, affinity, nodeSelector, tolerations)
 	pluginRunOpts.image = pluginConfig.Image
@@ -1376,10 +1370,10 @@ func (r ReconcileTerraform) createPluginPod(ctx context.Context, logger logr.Log
 // the finalizer is added.
 //
 // The finalizer will be responsible for starting the destroy-workflow.
-func updateFinalizer(tf *tfv1alpha2.Terraform) bool {
+func updateFinalizer(tf *tfv1beta1.Terraform) bool {
 	finalizers := tf.GetFinalizers()
 
-	if tf.Status.Phase == tfv1alpha2.PhaseDeleted {
+	if tf.Status.Phase == tfv1beta1.PhaseDeleted {
 		if utils.ListContainsStr(finalizers, terraformFinalizer) {
 			tf.SetFinalizers(utils.ListRemoveStr(finalizers, terraformFinalizer))
 			return true
@@ -1402,7 +1396,7 @@ func updateFinalizer(tf *tfv1alpha2.Terraform) bool {
 	return false
 }
 
-func (r ReconcileTerraform) update(ctx context.Context, tf *tfv1alpha2.Terraform) error {
+func (r ReconcileTerraform) update(ctx context.Context, tf *tfv1beta1.Terraform) error {
 	err := r.Client.Update(ctx, tf)
 	if err != nil {
 		return fmt.Errorf("failed to update tf resource: %s", err)
@@ -1410,7 +1404,7 @@ func (r ReconcileTerraform) update(ctx context.Context, tf *tfv1alpha2.Terraform
 	return nil
 }
 
-func (r ReconcileTerraform) updateStatus(ctx context.Context, tf *tfv1alpha2.Terraform) error {
+func (r ReconcileTerraform) updateStatus(ctx context.Context, tf *tfv1beta1.Terraform) error {
 	err := r.Client.Status().Update(ctx, tf)
 	if err != nil {
 		return fmt.Errorf("failed to update tf status: %s", err)
@@ -1418,7 +1412,7 @@ func (r ReconcileTerraform) updateStatus(ctx context.Context, tf *tfv1alpha2.Ter
 	return nil
 }
 
-func (r ReconcileTerraform) updateStatusWithRetry(ctx context.Context, tf *tfv1alpha2.Terraform, desiredStatus *tfv1alpha2.TerraformStatus, logger logr.Logger) error {
+func (r ReconcileTerraform) updateStatusWithRetry(ctx context.Context, tf *tfv1beta1.Terraform, desiredStatus *tfv1beta1.TerraformStatus, logger logr.Logger) error {
 	resourceNamespacedName := types.NamespacedName{Namespace: tf.Namespace, Name: tf.Name}
 	var getResourceErr error
 	var updateErr error
@@ -1449,7 +1443,7 @@ func (r ReconcileTerraform) updateStatusWithRetry(ctx context.Context, tf *tfv1a
 				return fmt.Errorf("failed to get latest terraform while validating status: %s", updatedResourceErr)
 			}
 
-			if !tfv1alpha2.TaskListsAreEqual(tf.Status.Plugins, desiredStatus.Plugins) {
+			if !tfv1beta1.TaskListsAreEqual(tf.Status.Plugins, desiredStatus.Plugins) {
 				logger.V(7).Info(fmt.Sprintf("Failed to confirm the status update because plugins did not equal. Have %s and Want %s", tf.Status.Plugins, desiredStatus.Plugins))
 
 			} else if stageItem := tf.Status.Stage.IsEqual(desiredStatus.Stage); stageItem != "" {
@@ -1493,7 +1487,7 @@ func IsJobFinished(job *batchv1.Job) bool {
 	return job.Status.CompletionTime != nil || (job.Status.Active == 0 && BackoffLimit != nil && job.Status.Failed >= *BackoffLimit)
 }
 
-func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, tf *tfv1alpha2.Terraform, k8sclient client.Client) (map[string][]byte, error) {
+func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, tf *tfv1beta1.Terraform, k8sclient client.Client) (map[string][]byte, error) {
 	data := make(map[string]string)
 	dataAsByte := make(map[string][]byte)
 	if tf.Spec.SSHTunnel != nil {
@@ -1569,7 +1563,7 @@ func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, tf *tfv1alph
 	return dataAsByte, nil
 }
 
-func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
+func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1beta1.Terraform, runOpts TaskOptions) error {
 	reqLogger := r.Log.WithValues("Terraform", types.NamespacedName{Name: tf.Name, Namespace: tf.Namespace}.String())
 	var err error
 
@@ -1688,64 +1682,6 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1alpha2.Ter
 
 		// Override the backend.tf by inserting a custom backend
 		runOpts.mainModulePluginData["backend_override.tf"] = tf.Spec.Backend
-
-		/*
-
-
-			All the tasks will perform external fetching of the scripts to
-			execute. The downloader has yet to be determined... working on it
-
-			:)
-
-
-		*/
-		// if tf.Spec.PreInitScript != "" {
-		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreInit)] = tf.Spec.PreInitScript
-		// }
-
-		// if tf.Spec.PostInitScript != "" {
-		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostInit)] = tf.Spec.PostInitScript
-		// }
-
-		// if tf.Spec.PrePlanScript != "" {
-		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPrePlan)] = tf.Spec.PrePlanScript
-		// }
-
-		// if tf.Spec.PostPlanScript != "" {
-		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostPlan)] = tf.Spec.PostPlanScript
-		// }
-
-		// if tf.Spec.PreApplyScript != "" {
-		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreApply)] = tf.Spec.PreApplyScript
-		// }
-
-		// if tf.Spec.PostApplyScript != "" {
-		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostApply)] = tf.Spec.PostApplyScript
-		// }
-
-		// if tf.Spec.PreInitDeleteScript != "" {
-		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreInitDelete)] = tf.Spec.PreInitDeleteScript
-		// }
-
-		// if tf.Spec.PostInitDeleteScript != "" {
-		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostInitDelete)] = tf.Spec.PostInitDeleteScript
-		// }
-
-		// if tf.Spec.PrePlanDeleteScript != "" {
-		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPrePlanDelete)] = tf.Spec.PrePlanDeleteScript
-		// }
-
-		// if tf.Spec.PostPlanDeleteScript != "" {
-		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostPlanDelete)] = tf.Spec.PostPlanDeleteScript
-		// }
-
-		// if tf.Spec.PreApplyDeleteScript != "" {
-		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPreApplyDelete)] = tf.Spec.PostApplyScript
-		// }
-
-		// if tf.Spec.PostApplyDeleteScript != "" {
-		// 	runOpts.mainModuleAddonData[string(tfv1alpha1.PodPostApplyDelete)] = tf.Spec.PostApplyDeleteScript
-		// }
 	}
 
 	// RUN
@@ -1769,7 +1705,7 @@ func (r ReconcileTerraform) checkPersistentVolumeClaimExists(ctx context.Context
 	return resource, true, nil
 }
 
-func (r ReconcileTerraform) createPVC(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
+func (r ReconcileTerraform) createPVC(ctx context.Context, tf *tfv1beta1.Terraform, runOpts TaskOptions) error {
 	kind := "PersistentVolumeClaim"
 	_, found, err := r.checkPersistentVolumeClaimExists(ctx, types.NamespacedName{
 		Name:      runOpts.prefixedName,
@@ -1826,7 +1762,7 @@ func (r ReconcileTerraform) deleteConfigMapIfExists(ctx context.Context, name, n
 	return nil
 }
 
-func (r ReconcileTerraform) createConfigMap(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
+func (r ReconcileTerraform) createConfigMap(ctx context.Context, tf *tfv1beta1.Terraform, runOpts TaskOptions) error {
 	kind := "ConfigMap"
 
 	resource := runOpts.generateConfigMap()
@@ -1875,7 +1811,7 @@ func (r ReconcileTerraform) deleteSecretIfExists(ctx context.Context, name, name
 	return nil
 }
 
-func (r ReconcileTerraform) createSecret(ctx context.Context, tf *tfv1alpha2.Terraform, name, namespace string, data map[string][]byte, recreate bool, labelsToOmit []string, runOpts TaskOptions) error {
+func (r ReconcileTerraform) createSecret(ctx context.Context, tf *tfv1beta1.Terraform, name, namespace string, data map[string][]byte, recreate bool, labelsToOmit []string, runOpts TaskOptions) error {
 	kind := "Secret"
 
 	// Must make a clean map of labels since the memory address is shared
@@ -1943,7 +1879,7 @@ func (r ReconcileTerraform) deleteServiceAccountIfExists(ctx context.Context, na
 	return nil
 }
 
-func (r ReconcileTerraform) createServiceAccount(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
+func (r ReconcileTerraform) createServiceAccount(ctx context.Context, tf *tfv1beta1.Terraform, runOpts TaskOptions) error {
 	kind := "ServiceAccount"
 
 	resource := runOpts.generateServiceAccount()
@@ -1991,7 +1927,7 @@ func (r ReconcileTerraform) deleteRoleIfExists(ctx context.Context, name, namesp
 	return nil
 }
 
-func (r ReconcileTerraform) createRole(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
+func (r ReconcileTerraform) createRole(ctx context.Context, tf *tfv1beta1.Terraform, runOpts TaskOptions) error {
 	kind := "Role"
 
 	resource := runOpts.generateRole()
@@ -2039,7 +1975,7 @@ func (r ReconcileTerraform) deleteRoleBindingIfExists(ctx context.Context, name,
 	return nil
 }
 
-func (r ReconcileTerraform) createRoleBinding(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
+func (r ReconcileTerraform) createRoleBinding(ctx context.Context, tf *tfv1beta1.Terraform, runOpts TaskOptions) error {
 	kind := "RoleBinding"
 
 	resource := runOpts.generateRoleBinding()
@@ -2058,7 +1994,7 @@ func (r ReconcileTerraform) createRoleBinding(ctx context.Context, tf *tfv1alpha
 	return nil
 }
 
-func (r ReconcileTerraform) createPod(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
+func (r ReconcileTerraform) createPod(ctx context.Context, tf *tfv1beta1.Terraform, runOpts TaskOptions) error {
 	kind := "Pod"
 
 	resource := runOpts.generatePod()
@@ -2077,7 +2013,7 @@ func int32p(i int32) *int32 {
 	return &i
 }
 
-func (r ReconcileTerraform) createJob(ctx context.Context, tf *tfv1alpha2.Terraform, runOpts TaskOptions) error {
+func (r ReconcileTerraform) createJob(ctx context.Context, tf *tfv1beta1.Terraform, runOpts TaskOptions) error {
 	kind := "Job"
 
 	resource := runOpts.generateJob()
@@ -2166,7 +2102,7 @@ func (r TaskOptions) generateRole() *rbacv1.Role {
 		},
 		{
 			Verbs:         []string{"get"},
-			APIGroups:     []string{"tf.isaaguilar.com"},
+			APIGroups:     []string{"tf.galleybytes.com"},
 			Resources:     []string{"terraforms"},
 			ResourceNames: []string{r.resourceName},
 		},
@@ -2568,7 +2504,7 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 	}
 
 	for _, c := range r.credentials {
-		if (tfv1alpha2.SecretNameRef{}) != c.SecretNameRef {
+		if (tfv1beta1.SecretNameRef{}) != c.SecretNameRef {
 			envFrom = append(envFrom, []corev1.EnvFromSource{
 				{
 					SecretRef: &corev1.SecretEnvSource{
@@ -2636,7 +2572,7 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 	return pod
 }
 
-func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *tfv1alpha2.Terraform, runOpts TaskOptions, isNewGeneration, isFirstInstall bool) (err error) {
+func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *tfv1beta1.Terraform, runOpts TaskOptions, isNewGeneration, isFirstInstall bool) (err error) {
 
 	if isFirstInstall || isNewGeneration {
 		if err := r.createEnvFromSources(ctx, tf); err != nil {
@@ -2672,7 +2608,7 @@ func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *
 
 		labelsToOmit := []string{}
 		if runOpts.stripGenerationLabelOnOutputsSecret {
-			labelsToOmit = append(labelsToOmit, "terraforms.tf.isaaguilar.com/generation")
+			labelsToOmit = append(labelsToOmit, "terraforms.tf.galleybytes.com/generation")
 		}
 		if err := r.createSecret(ctx, tf, runOpts.outputsSecretName, runOpts.namespace, map[string][]byte{}, false, labelsToOmit, runOpts); err != nil {
 			return err
@@ -2739,7 +2675,7 @@ func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *
 	return nil
 }
 
-func (r ReconcileTerraform) createGitAskpass(ctx context.Context, tokenSecret tfv1alpha2.TokenSecretRef) ([]byte, error) {
+func (r ReconcileTerraform) createGitAskpass(ctx context.Context, tokenSecret tfv1beta1.TokenSecretRef) ([]byte, error) {
 	secret, err := r.loadSecret(ctx, tokenSecret.Name, tokenSecret.Namespace)
 	if err != nil {
 		return []byte{}, err

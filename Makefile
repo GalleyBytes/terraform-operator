@@ -1,5 +1,5 @@
-PKG ?= github.com/isaaguilar/terraform-operator
-DOCKER_REPO ?= isaaguilar
+PKG ?= github.com/galleybytes/terraform-operator
+DOCKER_REPO ?= ghcr.io/galleybytes
 IMAGE_NAME ?= terraform-operator
 DEPLOYMENT ?= ${IMAGE_NAME}
 NAMESPACE ?= tf-system
@@ -77,21 +77,19 @@ endif
 # rbac:roleName=manager-role
 # Generate manifests e.g. CRD, RBAC etc.
 crds: controller-gen
-	$(CONTROLLER_GEN) $(CRD_OPTIONS) paths="./..." output:crd:stdout > deploy/crds/tf.isaaguilar.com_terraforms_crd.yaml
+	$(CONTROLLER_GEN) $(CRD_OPTIONS) paths="./..." output:crd:stdout > deploy/crds/tf.galleybytes.com_terraforms_crd.yaml
 
 generate: controller-gen
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
 openapi-gen: openapi-gen-bin
-	$(OPENAPI_GEN) --logtostderr=true -o "" -i github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1 -O zz_generated.openapi -p pkg/apis/tf/v1alpha1 -h ./hack/boilerplate.go.txt -r "-"
-	$(OPENAPI_GEN) --logtostderr=true -o "" -i github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha2 -O zz_generated.openapi -p pkg/apis/tf/v1alpha2 -h ./hack/boilerplate.go.txt -r "-"
+	$(OPENAPI_GEN) --logtostderr=true -o "" -i github.com/galleybytes/terraform-operator/pkg/apis/tf/v1beta1 -O zz_generated.openapi -p pkg/apis/tf/v1beta1 -h ./hack/boilerplate.go.txt -r "-"
 
 docs:
 	/bin/bash hack/docs.sh ${VERSION}
 
 client-gen: client-gen-bin
-	$(CLIENT_GEN) -n versioned --input-base ""  --input ${PKG}/pkg/apis/tf/v1alpha1 -p ${PKG}/pkg/client/clientset -h ./hack/boilerplate.go.txt
-	$(CLIENT_GEN) -n versioned --input-base ""  --input ${PKG}/pkg/apis/tf/v1alpha2 -p ${PKG}/pkg/client/clientset -h ./hack/boilerplate.go.txt
+	$(CLIENT_GEN) -n versioned --input-base ""  --input ${PKG}/pkg/apis/tf/v1beta1 -p ${PKG}/pkg/client/clientset -h ./hack/boilerplate.go.txt
 
 k8s-gen: crds generate openapi-gen client-gen
 
@@ -123,10 +121,6 @@ docker-build-job:
 docker-push-job:
 	docker images ${DOCKER_REPO}/tfops --format '{{ .Repository }}:{{ .Tag }}'| grep -v '<none>'|xargs -n1 -t docker push
 
-GENCERT_VERSION ?= 1.0.2
-release-gencert:
-	/bin/bash hack/release-gencert.sh ${GENCERT_VERSION}
-
 deploy:
 	kubectl delete pod --selector name=${DEPLOYMENT} --namespace ${NAMESPACE} && sleep 4
 	kubectl logs -f --selector name=${DEPLOYMENT} --namespace ${NAMESPACE}
@@ -140,7 +134,7 @@ vet:
 	go vet ./...
 
 install: crds
-	kubectl apply -f deploy/crds/tf.isaaguilar.com_terraforms_crd.yaml
+	kubectl apply -f deploy/crds/tf.galleybytes.com_terraforms_crd.yaml
 
 bundle: crds
 	/bin/bash hack/bundler.sh ${VERSION}
@@ -162,7 +156,7 @@ push-all: push docker-push-job
 
 # Run against the configured Kubernetes cluster in ~/.kube/config
 run: fmt vet
-	go run cmd/manager/main.go --max-concurrent-reconciles 10 --disable-conversion-webhook --zap-log-level=5
+	go run cmd/manager/main.go --max-concurrent-reconciles 10 --zap-log-level=5
 
 install-webhook: fmt vet
 	find deploy -maxdepth 1 -type f -name 'webhook-*' -exec kubectl apply -f {} \;

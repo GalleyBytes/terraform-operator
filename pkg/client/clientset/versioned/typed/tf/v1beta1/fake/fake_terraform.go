@@ -21,10 +21,9 @@ package fake
 import (
 	"context"
 
-	v1alpha1 "github.com/isaaguilar/terraform-operator/pkg/apis/tf/v1alpha1"
+	v1beta1 "github.com/galleybytes/terraform-operator/pkg/apis/tf/v1beta1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
-	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	types "k8s.io/apimachinery/pkg/types"
 	watch "k8s.io/apimachinery/pkg/watch"
 	testing "k8s.io/client-go/testing"
@@ -32,29 +31,29 @@ import (
 
 // FakeTerraforms implements TerraformInterface
 type FakeTerraforms struct {
-	Fake *FakeTfV1alpha1
+	Fake *FakeTfV1beta1
 	ns   string
 }
 
-var terraformsResource = schema.GroupVersionResource{Group: "tf.isaaguilar.com", Version: "v1alpha1", Resource: "terraforms"}
+var terraformsResource = v1beta1.SchemeGroupVersion.WithResource("terraforms")
 
-var terraformsKind = schema.GroupVersionKind{Group: "tf.isaaguilar.com", Version: "v1alpha1", Kind: "Terraform"}
+var terraformsKind = v1beta1.SchemeGroupVersion.WithKind("Terraform")
 
 // Get takes name of the terraform, and returns the corresponding terraform object, and an error if there is any.
-func (c *FakeTerraforms) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1alpha1.Terraform, err error) {
+func (c *FakeTerraforms) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1beta1.Terraform, err error) {
 	obj, err := c.Fake.
-		Invokes(testing.NewGetAction(terraformsResource, c.ns, name), &v1alpha1.Terraform{})
+		Invokes(testing.NewGetAction(terraformsResource, c.ns, name), &v1beta1.Terraform{})
 
 	if obj == nil {
 		return nil, err
 	}
-	return obj.(*v1alpha1.Terraform), err
+	return obj.(*v1beta1.Terraform), err
 }
 
 // List takes label and field selectors, and returns the list of Terraforms that match those selectors.
-func (c *FakeTerraforms) List(ctx context.Context, opts v1.ListOptions) (result *v1alpha1.TerraformList, err error) {
+func (c *FakeTerraforms) List(ctx context.Context, opts v1.ListOptions) (result *v1beta1.TerraformList, err error) {
 	obj, err := c.Fake.
-		Invokes(testing.NewListAction(terraformsResource, terraformsKind, c.ns, opts), &v1alpha1.TerraformList{})
+		Invokes(testing.NewListAction(terraformsResource, terraformsKind, c.ns, opts), &v1beta1.TerraformList{})
 
 	if obj == nil {
 		return nil, err
@@ -64,8 +63,8 @@ func (c *FakeTerraforms) List(ctx context.Context, opts v1.ListOptions) (result 
 	if label == nil {
 		label = labels.Everything()
 	}
-	list := &v1alpha1.TerraformList{ListMeta: obj.(*v1alpha1.TerraformList).ListMeta}
-	for _, item := range obj.(*v1alpha1.TerraformList).Items {
+	list := &v1beta1.TerraformList{ListMeta: obj.(*v1beta1.TerraformList).ListMeta}
+	for _, item := range obj.(*v1beta1.TerraformList).Items {
 		if label.Matches(labels.Set(item.Labels)) {
 			list.Items = append(list.Items, item)
 		}
@@ -81,43 +80,43 @@ func (c *FakeTerraforms) Watch(ctx context.Context, opts v1.ListOptions) (watch.
 }
 
 // Create takes the representation of a terraform and creates it.  Returns the server's representation of the terraform, and an error, if there is any.
-func (c *FakeTerraforms) Create(ctx context.Context, terraform *v1alpha1.Terraform, opts v1.CreateOptions) (result *v1alpha1.Terraform, err error) {
+func (c *FakeTerraforms) Create(ctx context.Context, terraform *v1beta1.Terraform, opts v1.CreateOptions) (result *v1beta1.Terraform, err error) {
 	obj, err := c.Fake.
-		Invokes(testing.NewCreateAction(terraformsResource, c.ns, terraform), &v1alpha1.Terraform{})
+		Invokes(testing.NewCreateAction(terraformsResource, c.ns, terraform), &v1beta1.Terraform{})
 
 	if obj == nil {
 		return nil, err
 	}
-	return obj.(*v1alpha1.Terraform), err
+	return obj.(*v1beta1.Terraform), err
 }
 
 // Update takes the representation of a terraform and updates it. Returns the server's representation of the terraform, and an error, if there is any.
-func (c *FakeTerraforms) Update(ctx context.Context, terraform *v1alpha1.Terraform, opts v1.UpdateOptions) (result *v1alpha1.Terraform, err error) {
+func (c *FakeTerraforms) Update(ctx context.Context, terraform *v1beta1.Terraform, opts v1.UpdateOptions) (result *v1beta1.Terraform, err error) {
 	obj, err := c.Fake.
-		Invokes(testing.NewUpdateAction(terraformsResource, c.ns, terraform), &v1alpha1.Terraform{})
+		Invokes(testing.NewUpdateAction(terraformsResource, c.ns, terraform), &v1beta1.Terraform{})
 
 	if obj == nil {
 		return nil, err
 	}
-	return obj.(*v1alpha1.Terraform), err
+	return obj.(*v1beta1.Terraform), err
 }
 
 // UpdateStatus was generated because the type contains a Status member.
 // Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
-func (c *FakeTerraforms) UpdateStatus(ctx context.Context, terraform *v1alpha1.Terraform, opts v1.UpdateOptions) (*v1alpha1.Terraform, error) {
+func (c *FakeTerraforms) UpdateStatus(ctx context.Context, terraform *v1beta1.Terraform, opts v1.UpdateOptions) (*v1beta1.Terraform, error) {
 	obj, err := c.Fake.
-		Invokes(testing.NewUpdateSubresourceAction(terraformsResource, "status", c.ns, terraform), &v1alpha1.Terraform{})
+		Invokes(testing.NewUpdateSubresourceAction(terraformsResource, "status", c.ns, terraform), &v1beta1.Terraform{})
 
 	if obj == nil {
 		return nil, err
 	}
-	return obj.(*v1alpha1.Terraform), err
+	return obj.(*v1beta1.Terraform), err
 }
 
 // Delete takes name of the terraform and deletes it. Returns an error if one occurs.
 func (c *FakeTerraforms) Delete(ctx context.Context, name string, opts v1.DeleteOptions) error {
 	_, err := c.Fake.
-		Invokes(testing.NewDeleteAction(terraformsResource, c.ns, name), &v1alpha1.Terraform{})
+		Invokes(testing.NewDeleteActionWithOptions(terraformsResource, c.ns, name, opts), &v1beta1.Terraform{})
 
 	return err
 }
@@ -126,17 +125,17 @@ func (c *FakeTerraforms) Delete(ctx context.Context, name string, opts v1.Delete
 func (c *FakeTerraforms) DeleteCollection(ctx context.Context, opts v1.DeleteOptions, listOpts v1.ListOptions) error {
 	action := testing.NewDeleteCollectionAction(terraformsResource, c.ns, listOpts)
 
-	_, err := c.Fake.Invokes(action, &v1alpha1.TerraformList{})
+	_, err := c.Fake.Invokes(action, &v1beta1.TerraformList{})
 	return err
 }
 
 // Patch applies the patch and returns the patched terraform.
-func (c *FakeTerraforms) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *v1alpha1.Terraform, err error) {
+func (c *FakeTerraforms) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *v1beta1.Terraform, err error) {
 	obj, err := c.Fake.
-		Invokes(testing.NewPatchSubresourceAction(terraformsResource, c.ns, name, pt, data, subresources...), &v1alpha1.Terraform{})
+		Invokes(testing.NewPatchSubresourceAction(terraformsResource, c.ns, name, pt, data, subresources...), &v1beta1.Terraform{})
 
 	if obj == nil {
 		return nil, err
 	}
-	return obj.(*v1alpha1.Terraform), err
+	return obj.(*v1beta1.Terraform), err
 }
