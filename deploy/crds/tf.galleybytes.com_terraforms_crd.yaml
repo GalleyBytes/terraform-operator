@@ -797,16 +797,21 @@ spec:
             description: TerraformStatus defines the observed state of Terraform
             properties:
               lastCompletedGeneration:
+                description: LastCompletedGeneration shows the generation of the last
+                  completed workflow. This is not relevant for remotely executed workflows.
                 format: int64
                 type: integer
               outputs:
                 additionalProperties:
                   type: string
+                description: Outputs terraform outputs, when opt-in, will be added
+                  to this `status.outputs` field as key/value pairs
                 type: object
               phase:
+                description: Phase is the current phase of the workflow
                 type: string
-              plugins:
-                description: Plugins is a list of plugins that have been executed
+              pluginsStarted:
+                description: PluginsStarted is a list of plugins that have been executed
                   by the controller. Will get refreshed each generation.
                 items:
                   type: string
@@ -821,7 +826,7 @@ spec:
                   nil.
                 type: string
               stage:
-                description: Stage is the current task of the workflow.
+                description: Stage stores information about the current stage
                 properties:
                   generation:
                     description: Generation is the generation of the resource when
@@ -871,65 +876,11 @@ spec:
                 - reason
                 - state
                 type: object
-              stages:
-                items:
-                  description: Stage is the current task of the workflow.
-                  properties:
-                    generation:
-                      description: Generation is the generation of the resource when
-                        the task got started.
-                      format: int64
-                      type: integer
-                    interruptible:
-                      description: Interruptible is set to false when the pod should
-                        not be terminated such as when doing a terraform apply.
-                      type: boolean
-                    message:
-                      description: Message stores the last message displayed in the
-                        logs. It is stored and checked by the controller to reduce
-                        the noise in the logs by only displying the message once.
-                      type: string
-                    podName:
-                      description: PodName is the pod assigned to execute the stage.
-                      type: string
-                    podType:
-                      description: TaskType is which task is currently running.
-                      type: string
-                    podUID:
-                      description: PodUID is the pod uid of the pod assigned to execute
-                        the stage.
-                      type: string
-                    reason:
-                      description: Reason is a message of what is happening with the
-                        pod. The controller uses this field when certain reasons occur
-                        to make scheduling decisions.
-                      type: string
-                    startTime:
-                      description: StartTime is when the task got created by the controller,
-                        not when a pod got started.
-                      format: date-time
-                      type: string
-                    state:
-                      description: State is the phase of the task pod.
-                      type: string
-                    stopTime:
-                      description: StopTime is when the task went into a stopped phase.
-                      format: date-time
-                      type: string
-                  required:
-                  - generation
-                  - interruptible
-                  - podType
-                  - reason
-                  - state
-                  type: object
-                type: array
             required:
             - lastCompletedGeneration
             - phase
             - podNamePrefix
             - stage
-            - stages
             type: object
         type: object
     served: true
