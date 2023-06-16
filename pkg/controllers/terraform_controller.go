@@ -491,7 +491,7 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 	}
 }
 
-const terraformFinalizer = "finalizer.tf.galleybytes.com"
+const terraformFinalizer = "finalizer.tf.galleybytes.com/finalizer"
 
 // Reconcile reads that state of the cluster for a Terraform object and makes changes based on the state read
 // and what is in the Terraform.Spec
@@ -540,6 +540,10 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 			r.Recorder.Event(tf, "Warning", "ProcessingError", err.Error())
 			return reconcile.Result{}, err
 		}
+		if err := r.updateSecretFinalizer(ctx, tf); err != nil {
+			r.Recorder.Event(tf, "Warning", "ProcessingError", err.Error())
+			return reconcile.Result{}, err
+		}
 		return reconcile.Result{}, nil
 	}
 
@@ -547,6 +551,9 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	if updateFinalizer(tf) {
 		err := r.update(ctx, tf)
 		if err != nil {
+			return reconcile.Result{}, err
+		}
+		if err := r.updateSecretFinalizer(ctx, tf); err != nil {
 			return reconcile.Result{}, err
 		}
 		reqLogger.V(1).Info("Updated finalizer")
@@ -1393,6 +1400,70 @@ func updateFinalizer(tf *tfv1beta1.Terraform) bool {
 		}
 	}
 	return false
+}
+
+// updateSecretFinalizer sets and unsets finalizers on all secrets mentioned in spec.scmAuthMethods
+// to ensure terraform workflow will work properly.
+func (r ReconcileTerraform) updateSecretFinalizer(ctx context.Context, tf *tfv1beta1.Terraform) error {
+
+	updateSecret := func(updater func(ctx context.Context, name, namespace string) error) error {
+		for _, m := range tf.Spec.SCMAuthMethods {
+			if m.Git.HTTPS != nil {
+				tokenSecret := m.Git.HTTPS.TokenSecretRef
+				if tokenSecret.LockSecretDeletion {
+					if err := updater(ctx, tokenSecret.Name, tokenSecret.Namespace); err != nil {
+						return err
+					}
+				}
+			}
+			if m.Git.SSH != nil {
+				tokenSecret := m.Git.SSH.SSHKeySecretRef
+				if tokenSecret.LockSecretDeletion {
+					if err := updater(ctx, tokenSecret.Name, tokenSecret.Namespace); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	}
+
+	switch {
+	case !tf.Spec.IgnoreDelete:
+		return updateSecret(r.lockGitSecretDeletion)
+	case tf.Status.Phase == tfv1beta1.PhaseDeleted:
+		return updateSecret(r.unlockGitSecretDeletion)
+	default:
+		return updateSecret(r.unlockGitSecretDeletion)
+	}
+}
+
+func (r ReconcileTerraform) lockGitSecretDeletion(ctx context.Context, name, namespace string) error {
+	secret, err := r.loadSecret(ctx, name, namespace)
+	if err != nil {
+		return err
+	}
+	if !controllerutil.ContainsFinalizer(secret, terraformFinalizer) {
+		controllerutil.AddFinalizer(secret, terraformFinalizer)
+		if err := r.Client.Update(ctx, secret); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r ReconcileTerraform) unlockGitSecretDeletion(ctx context.Context, name, namespace string) error {
+	secret, err := r.loadSecret(ctx, name, namespace)
+	if err != nil {
+		return err
+	}
+	if controllerutil.ContainsFinalizer(secret, terraformFinalizer) {
+		controllerutil.RemoveFinalizer(secret, terraformFinalizer)
+		if err := r.Client.Update(ctx, secret); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r ReconcileTerraform) update(ctx context.Context, tf *tfv1beta1.Terraform) error {
