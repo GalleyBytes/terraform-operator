@@ -518,6 +518,9 @@ type SSHKeySecretRef struct {
 	Namespace string `json:"namespace,omitempty"`
 	// Key in the secret ref. Default to `id_rsa`
 	Key string `json:"key,omitempty"`
+	// Set finalizer from controller on the secret to prevent delete flow breaking
+	// Works only with spec.ignoreDelete = true
+	LockSecretDeletion bool `json:"lockSecretDeletion,omitempty"`
 }
 
 // TokenSecretRef defines the token or password that can be used to log into a system (eg git)
@@ -529,6 +532,9 @@ type TokenSecretRef struct {
 	Namespace string `json:"namespace,omitempty"`
 	// Key in the secret ref. Default to `token`
 	Key string `json:"key,omitempty"`
+	// Set finalizer from controller on the secret to prevent delete flow breaking
+	// Works only with spec.ignoreDelete = true
+	LockSecretDeletion bool `json:"lockSecretDeletion,omitempty"`
 }
 
 // Credentials are used for adding credentials for terraform providers.

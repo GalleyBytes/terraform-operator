@@ -3,7 +3,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.12.0
+    controller-gen.kubebuilder.io/version: v0.9.2
+  creationTimestamp: null
   name: terraforms.tf.galleybytes.com
 spec:
   group: tf.galleybytes.com
@@ -287,6 +288,10 @@ spec:
                                 key:
                                   description: Key in the secret ref. Default to `token`
                                   type: string
+                                lockSecretDeletion:
+                                  description: Set finalizer from controller on the
+                                    secret
+                                  type: boolean
                                 name:
                                   description: Name the secret name that has the token
                                     or password
@@ -314,6 +319,10 @@ spec:
                                 key:
                                   description: Key in the secret ref. Default to `id_rsa`
                                   type: string
+                                lockSecretDeletion:
+                                  description: Set finalizer from controller on the
+                                    secret
+                                  type: boolean
                                 name:
                                   description: Name the secret name that has the SSH
                                     key
@@ -392,6 +401,9 @@ spec:
                       key:
                         description: Key in the secret ref. Default to `id_rsa`
                         type: string
+                      lockSecretDeletion:
+                        description: Set finalizer from controller on the secret
+                        type: boolean
                       name:
                         description: Name the secret name that has the SSH key
                         type: string
