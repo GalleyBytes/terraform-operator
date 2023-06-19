@@ -534,13 +534,13 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	// Final delete by removing finalizers
 	if tf.Status.Phase == tfv1beta1.PhaseDeleted {
 		reqLogger.Info("Remove finalizers")
-		_ = updateFinalizer(tf)
-		err := r.update(ctx, tf)
-		if err != nil {
+		if err := r.updateSecretFinalizer(ctx, tf); err != nil {
 			r.Recorder.Event(tf, "Warning", "ProcessingError", err.Error())
 			return reconcile.Result{}, err
 		}
-		if err := r.updateSecretFinalizer(ctx, tf); err != nil {
+		_ = updateFinalizer(tf)
+		err := r.update(ctx, tf)
+		if err != nil {
 			r.Recorder.Event(tf, "Warning", "ProcessingError", err.Error())
 			return reconcile.Result{}, err
 		}
@@ -1429,10 +1429,10 @@ func (r ReconcileTerraform) updateSecretFinalizer(ctx context.Context, tf *tfv1b
 	}
 
 	switch {
-	case !tf.Spec.IgnoreDelete:
-		return updateSecret(r.lockGitSecretDeletion)
 	case tf.Status.Phase == tfv1beta1.PhaseDeleted:
 		return updateSecret(r.unlockGitSecretDeletion)
+	case !tf.Spec.IgnoreDelete:
+		return updateSecret(r.lockGitSecretDeletion)
 	default:
 		return updateSecret(r.unlockGitSecretDeletion)
 	}
