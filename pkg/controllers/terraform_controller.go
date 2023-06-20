@@ -1819,7 +1819,6 @@ func (r ReconcileTerraform) createSecret(ctx context.Context, tf *tfv1beta1.Terr
 	for key, value := range runOpts.resourceLabels {
 		labels[key] = value
 	}
-	labels["tfo-api.galleybytes.com/sync"] = "1"
 	for _, labelKey := range labelsToOmit {
 		delete(labels, labelKey)
 	}
@@ -2583,7 +2582,7 @@ func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *
 			return err
 		}
 
-		if err := r.createSecret(ctx, tf, runOpts.versionedName, runOpts.namespace, runOpts.secretData, true, []string{"tfo-api.galleybytes.com/sync"}, runOpts); err != nil {
+		if err := r.createSecret(ctx, tf, runOpts.versionedName, runOpts.namespace, runOpts.secretData, true, []string{}, runOpts); err != nil {
 			return err
 		}
 
@@ -2800,17 +2799,11 @@ func (r ReconcileTerraform) cacheNodeSelectors(ctx context.Context, logger logr.
 }
 
 func (r TaskOptions) generateSecret(name, namespace string, data map[string][]byte, labels map[string]string) *corev1.Secret {
-	annotations := map[string]string{}
-
-	if _, found := labels["tfo-api.galleybytes.com/sync"]; found {
-		annotations["tfo-api.galleybytes.com/sync-upon-completion-of"] = "- " + r.resourceName
-	}
 	secretObject := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        name,
-			Namespace:   namespace,
-			Labels:      labels,
-			Annotations: annotations,
+			Name:      name,
+			Namespace: namespace,
+			Labels:    labels,
 		},
 		Data: data,
 		Type: corev1.SecretTypeOpaque,
