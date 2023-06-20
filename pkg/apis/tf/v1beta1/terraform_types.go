@@ -1,6 +1,8 @@
 package v1beta1
 
 import (
+	"encoding/json"
+
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -751,6 +753,73 @@ const (
 	CanNotBeInterrupt Interruptible = false
 	CanBeInterrupt    Interruptible = true
 )
+
+// This function implements the Marshaler interface for boolean values. It always returns a JSON representation
+// of the boolean value, even if it is false. This is different from the default json package, which omits false
+// values when marshalling. This behavior is useful for sending JSON data over HTTP, where false values need to
+// be explicitly included to avoid being ignored in patches.
+func (s TerraformSpec) MarshalJSON() ([]byte, error) {
+	type Alias TerraformSpec
+	return json.Marshal(&struct {
+		*Alias
+		KeepLatestPodsOnly   bool `json:"keepLatestPodsOnly"`
+		KeepCompletedPods    bool `json:"keepCompletedPods"`
+		WriteOutputsToStatus bool `json:"writeOutputsToStatus"`
+		IgnoreDelete         bool `json:"ignoreDelete"`
+		RequireApproval      bool `json:"requireApproval"`
+	}{
+		Alias:                (*Alias)(&s),
+		KeepLatestPodsOnly:   s.KeepLatestPodsOnly,
+		KeepCompletedPods:    s.KeepCompletedPods,
+		WriteOutputsToStatus: s.WriteOutputsToStatus,
+		IgnoreDelete:         s.IgnoreDelete,
+		RequireApproval:      s.RequireApproval,
+	})
+}
+
+func (s Setup) MarshalJSON() ([]byte, error) {
+	type Alias Setup
+	return json.Marshal(&struct {
+		*Alias
+		CleanupDisk bool `json:"cleanupDisk"`
+	}{
+		Alias:       (*Alias)(&s),
+		CleanupDisk: s.CleanupDisk,
+	})
+}
+
+func (s GitSSH) MarshalJSON() ([]byte, error) {
+	type Alias GitSSH
+	return json.Marshal(&struct {
+		*Alias
+		RequireProxy bool `json:"requireProxy"`
+	}{
+		Alias:        (*Alias)(&s),
+		RequireProxy: s.RequireProxy,
+	})
+}
+
+func (s GitHTTPS) MarshalJSON() ([]byte, error) {
+	type Alias GitHTTPS
+	return json.Marshal(&struct {
+		*Alias
+		RequireProxy bool `json:"requireProxy"`
+	}{
+		Alias:        (*Alias)(&s),
+		RequireProxy: s.RequireProxy,
+	})
+}
+
+func (s ResourceDownload) MarshalJSON() ([]byte, error) {
+	type Alias ResourceDownload
+	return json.Marshal(&struct {
+		*Alias
+		UseAsVar bool `json:"useAsVar"`
+	}{
+		Alias:    (*Alias)(&s),
+		UseAsVar: s.UseAsVar,
+	})
+}
 
 func init() {
 	SchemeBuilder.Register(&Terraform{}, &TerraformList{})
