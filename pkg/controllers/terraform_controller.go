@@ -547,13 +547,15 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		return reconcile.Result{}, nil
 	}
 
+	// Secret finalizers
+	if err := r.updateSecretFinalizer(ctx, tf); err != nil {
+		return reconcile.Result{}, err
+	}
+
 	// Finalizers
 	if updateFinalizer(tf) {
 		err := r.update(ctx, tf)
 		if err != nil {
-			return reconcile.Result{}, err
-		}
-		if err := r.updateSecretFinalizer(ctx, tf); err != nil {
 			return reconcile.Result{}, err
 		}
 		reqLogger.V(1).Info("Updated finalizer")
@@ -1402,40 +1404,54 @@ func updateFinalizer(tf *tfv1beta1.Terraform) bool {
 	return false
 }
 
+// Here we determine if secret in SCMAuthMethods array should be locked via finalizer or not
+
+type gitSecret struct {
+	name          string
+	namespace     string
+	shoudBeLocked bool
+}
+
+func (r ReconcileTerraform) getGitSecrets(tf *tfv1beta1.Terraform) []gitSecret {
+	secrets := []gitSecret{}
+	for _, m := range tf.Spec.SCMAuthMethods {
+		if m.Git.HTTPS != nil {
+			ref := m.Git.HTTPS.TokenSecretRef
+			secrets = append(secrets, gitSecret{
+				name:          ref.Name,
+				namespace:     ref.Namespace,
+				shoudBeLocked: ref.LockSecretDeletion && !tf.Spec.IgnoreDelete,
+			})
+		}
+		if m.Git.SSH != nil {
+			ref := m.Git.SSH.SSHKeySecretRef
+			secrets = append(secrets, gitSecret{
+				name:          ref.Name,
+				namespace:     ref.Namespace,
+				shoudBeLocked: ref.LockSecretDeletion && !tf.Spec.IgnoreDelete,
+			})
+		}
+	}
+	return secrets
+}
+
 // updateSecretFinalizer sets and unsets finalizers on all secrets mentioned in spec.scmAuthMethods
 // to ensure terraform workflow will work properly.
-func (r ReconcileTerraform) updateSecretFinalizer(ctx context.Context, tf *tfv1beta1.Terraform) error {
 
-	updateSecret := func(updater func(ctx context.Context, name, namespace string) error) error {
-		for _, m := range tf.Spec.SCMAuthMethods {
-			if m.Git.HTTPS != nil {
-				tokenSecret := m.Git.HTTPS.TokenSecretRef
-				if tokenSecret.LockSecretDeletion {
-					if err := updater(ctx, tokenSecret.Name, tokenSecret.Namespace); err != nil {
-						return err
-					}
-				}
+func (r ReconcileTerraform) updateSecretFinalizer(ctx context.Context, tf *tfv1beta1.Terraform) error {
+	secrets := r.getGitSecrets(tf)
+	for _, m := range secrets {
+		if m.shoudBeLocked {
+			if err := r.lockGitSecretDeletion(ctx, m.name, m.namespace); err != nil {
+				return err
 			}
-			if m.Git.SSH != nil {
-				tokenSecret := m.Git.SSH.SSHKeySecretRef
-				if tokenSecret.LockSecretDeletion {
-					if err := updater(ctx, tokenSecret.Name, tokenSecret.Namespace); err != nil {
-						return err
-					}
-				}
+		} else {
+			if err := r.unlockGitSecretDeletion(ctx, m.name, m.namespace); err != nil {
+				return err
 			}
 		}
-		return nil
 	}
-
-	switch {
-	case tf.Status.Phase == tfv1beta1.PhaseDeleted:
-		return updateSecret(r.unlockGitSecretDeletion)
-	case !tf.Spec.IgnoreDelete:
-		return updateSecret(r.lockGitSecretDeletion)
-	default:
-		return updateSecret(r.unlockGitSecretDeletion)
-	}
+	return nil
 }
 
 func (r ReconcileTerraform) lockGitSecretDeletion(ctx context.Context, name, namespace string) error {
