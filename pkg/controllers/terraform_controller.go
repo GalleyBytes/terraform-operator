@@ -1441,7 +1441,7 @@ func (r ReconcileTerraform) getGitSecrets(tf *tfv1beta1.Terraform) []gitSecret {
 func (r ReconcileTerraform) updateSecretFinalizer(ctx context.Context, tf *tfv1beta1.Terraform) error {
 	secrets := r.getGitSecrets(tf)
 	for _, m := range secrets {
-		if m.shoudBeLocked {
+		if m.shoudBeLocked && tf.Status.Phase != tfv1beta1.PhaseDeleted {
 			if err := r.lockGitSecretDeletion(ctx, m.name, m.namespace); err != nil {
 				return err
 			}
