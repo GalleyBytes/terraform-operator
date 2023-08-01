@@ -12,11 +12,11 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 const (
 	SetupTaskImageRepoDefault     = "ghcr.io/galleybytes/terraform-operator-setup"
-	SetupTaskImageTagDefault      = "1.1.2"
-	TerraformTaskImageRepoDefault = "ghcr.io/galleybytes/terraform-operator-tftaskv1.1.0"
+	SetupTaskImageTagDefault      = "1.2.0"
+	TerraformTaskImageRepoDefault = "ghcr.io/galleybytes/terraform-operator-tftaskv1.1.1"
 	TerraformTaskImageTagDefault  = ""
 	ScriptTaskImageRepoDefault    = "ghcr.io/galleybytes/terraform-operator-script"
-	ScriptTaskImageTagDefault     = "1.1.3"
+	ScriptTaskImageTagDefault     = "1.2.1"
 )
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
