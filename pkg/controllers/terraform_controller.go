@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -37,6 +38,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
+
+//go:embed scripts/tf.sh
+var defaultInlineTerraformTaskExecutionFile string
+
+//go:embed scripts/setup.sh
+var defaultInlineSetupTaskExecutionFile string
+
+//go:embed scripts/noop.sh
+var defaultInlineNoOpExecutionFile string
 
 // ReconcileTerraform reconciles a Terraform object
 type ReconcileTerraform struct {
@@ -181,6 +191,41 @@ func (r *ReconcileTerraform) SetupWithManager(mgr ctrl.Manager) error {
 	return nil
 }
 
+func terraformTaskList() []tfv1beta1.TaskName {
+	return []tfv1beta1.TaskName{
+		tfv1beta1.RunInit,
+		tfv1beta1.RunInitDelete,
+		tfv1beta1.RunPlan,
+		tfv1beta1.RunPlanDelete,
+		tfv1beta1.RunApply,
+		tfv1beta1.RunApplyDelete,
+	}
+}
+
+func scriptTaskList() []tfv1beta1.TaskName {
+	return []tfv1beta1.TaskName{
+		tfv1beta1.RunPreInit,
+		tfv1beta1.RunPreInitDelete,
+		tfv1beta1.RunPostInit,
+		tfv1beta1.RunPostInitDelete,
+		tfv1beta1.RunPrePlan,
+		tfv1beta1.RunPrePlanDelete,
+		tfv1beta1.RunPostPlan,
+		tfv1beta1.RunPostPlanDelete,
+		tfv1beta1.RunPreApply,
+		tfv1beta1.RunPreApplyDelete,
+		tfv1beta1.RunPostApply,
+		tfv1beta1.RunPostApplyDelete,
+	}
+}
+
+func setupTaskList() []tfv1beta1.TaskName {
+	return []tfv1beta1.TaskName{
+		tfv1beta1.RunSetup,
+		tfv1beta1.RunSetupDelete,
+	}
+}
+
 // ParsedAddress uses go-getter's detect mechanism to get the parsed url
 // TODO ParsedAddress can be moved into it's own package
 type ParsedAddress struct {
@@ -226,18 +271,29 @@ type ParsedAddress struct {
 }
 
 type TaskOptions struct {
-	annotations                         map[string]string
-	configMapSourceName                 string
-	configMapSourceKey                  string
-	credentials                         []tfv1beta1.Credentials
-	env                                 []corev1.EnvVar
-	envFrom                             []corev1.EnvFromSource
-	generation                          int64
-	image                               string
-	imagePullPolicy                     corev1.PullPolicy
-	inheritedAffinity                   *corev1.Affinity
-	inheritedNodeSelector               map[string]string
-	inheritedTolerations                []corev1.Toleration
+	annotations map[string]string
+
+	// configMapSourceName (and configMapSourceKey) is used to populate an environment variable of the task pod.
+	// When not empty should be understood by the task to use the configmap as the execution script
+	configMapSourceName string
+	// configMapSourceKey (and configMapSourceName) is used to populate an environment variable of the task pod.
+	// When not empty should be understood by the task to use the configmap as the execution script
+	configMapSourceKey string
+
+	credentials           []tfv1beta1.Credentials
+	env                   []corev1.EnvVar
+	envFrom               []corev1.EnvFromSource
+	generation            int64
+	image                 string
+	imagePullPolicy       corev1.PullPolicy
+	inheritedAffinity     *corev1.Affinity
+	inheritedNodeSelector map[string]string
+	inheritedTolerations  []corev1.Toleration
+
+	// inlineTaskExecutionFile is used to populate an environment variable of the task pod. When not empty the
+	// task should use this filename which should exist from a configmap mount in the pod.
+	inlineTaskExecutionFile string
+
 	labels                              map[string]string
 	mainModulePluginData                map[string]string
 	namespace                           string
@@ -257,10 +313,14 @@ type TaskOptions struct {
 	stripGenerationLabelOnOutputsSecret bool
 	terraformModuleParsed               ParsedAddress
 	terraformVersion                    string
-	urlSource                           string
-	versionedName                       string
-	requireApproval                     bool
-	restartPolicy                       corev1.RestartPolicy
+
+	// urlSource is used to populate an environment variable of the task pod. When not empty is used by the task
+	// as the download location for the script to execute in the task.
+	urlSource string
+
+	versionedName   string
+	requireApproval bool
+	restartPolicy   corev1.RestartPolicy
 }
 
 func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation int64, globalEnvFrom []corev1.EnvFromSource, affinity *corev1.Affinity, nodeSelector map[string]string, tolerations []corev1.Toleration) TaskOptions {
@@ -287,12 +347,16 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 	configMapSourceName := ""
 	configMapSourceKey := ""
 	restartPolicy := corev1.RestartPolicyNever
+	inlineTaskExecutionFile := ""
+	useDefaultInlineTaskExecutionFile := false
 
 	// TaskOptions have data for all the tasks but since we're only interested
 	// in the ones for this taskType, extract and add them to RunOptions
 	for _, taskOption := range tf.Spec.TaskOptions {
 		if tfv1beta1.ListContainsTask(taskOption.For, task) ||
 			tfv1beta1.ListContainsTask(taskOption.For, "*") {
+
+			// This statement finds taskOptions that match this current task OR *
 			policyRules = append(policyRules, taskOption.PolicyRules...)
 			for key, value := range taskOption.Annotations {
 				annotations[key] = value
@@ -307,10 +371,14 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 			}
 		}
 		if tfv1beta1.ListContainsTask(taskOption.For, task) {
+			// This statement only matches taskOptions that match this current task only
 			urlSource = taskOption.Script.Source
 			if configMapSelector := taskOption.Script.ConfigMapSelector; configMapSelector != nil {
 				configMapSourceName = configMapSelector.Name
 				configMapSourceKey = configMapSelector.Key
+			}
+			if inlineScript := taskOption.Script.Inline; inlineScript != "" {
+				inlineTaskExecutionFile = fmt.Sprintf("inline-%s.sh", task)
 			}
 		}
 	}
@@ -358,52 +426,26 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 		images.Script.Image = fmt.Sprintf("%s:%s", tfv1beta1.ScriptTaskImageRepoDefault, tfv1beta1.ScriptTaskImageTagDefault)
 	}
 
-	terraformTasks := []tfv1beta1.TaskName{
-		tfv1beta1.RunInit,
-		tfv1beta1.RunInitDelete,
-		tfv1beta1.RunPlan,
-		tfv1beta1.RunPlanDelete,
-		tfv1beta1.RunApply,
-		tfv1beta1.RunApplyDelete,
+	if inlineTaskExecutionFile == "" && urlSource == "" && (configMapSourceKey == "" || configMapSourceName == "") {
+		useDefaultInlineTaskExecutionFile = true
 	}
-
-	scriptTasks := []tfv1beta1.TaskName{
-		tfv1beta1.RunPreInit,
-		tfv1beta1.RunPreInitDelete,
-		tfv1beta1.RunPostInit,
-		tfv1beta1.RunPostInitDelete,
-		tfv1beta1.RunPrePlan,
-		tfv1beta1.RunPrePlanDelete,
-		tfv1beta1.RunPostPlan,
-		tfv1beta1.RunPostPlanDelete,
-		tfv1beta1.RunPreApply,
-		tfv1beta1.RunPreApplyDelete,
-		tfv1beta1.RunPostApply,
-		tfv1beta1.RunPostApplyDelete,
-	}
-
-	setupTasks := []tfv1beta1.TaskName{
-		tfv1beta1.RunSetup,
-		tfv1beta1.RunSetupDelete,
-	}
-
-	if tfv1beta1.ListContainsTask(terraformTasks, task) {
+	if tfv1beta1.ListContainsTask(terraformTaskList(), task) {
 		image = images.Terraform.Image
 		imagePullPolicy = images.Terraform.ImagePullPolicy
-		if urlSource == "" {
-			urlSource = "https://raw.githubusercontent.com/GalleyBytes/terraform-operator-tasks/master/tf.sh"
+		if useDefaultInlineTaskExecutionFile {
+			inlineTaskExecutionFile = "default-terraform.sh"
 		}
-	} else if tfv1beta1.ListContainsTask(scriptTasks, task) {
+	} else if tfv1beta1.ListContainsTask(scriptTaskList(), task) {
 		image = images.Script.Image
 		imagePullPolicy = images.Script.ImagePullPolicy
-		if urlSource == "" {
-			urlSource = "https://raw.githubusercontent.com/GalleyBytes/terraform-operator-tasks/master/noop.sh"
+		if useDefaultInlineTaskExecutionFile {
+			inlineTaskExecutionFile = "default-noop.sh"
 		}
-	} else if tfv1beta1.ListContainsTask(setupTasks, task) {
+	} else if tfv1beta1.ListContainsTask(setupTaskList(), task) {
 		image = images.Setup.Image
 		imagePullPolicy = images.Setup.ImagePullPolicy
-		if urlSource == "" {
-			urlSource = "https://raw.githubusercontent.com/GalleyBytes/terraform-operator-tasks/master/setup.sh"
+		if useDefaultInlineTaskExecutionFile {
+			inlineTaskExecutionFile = "default-setup.sh"
 		}
 	}
 
@@ -466,6 +508,7 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 		inheritedAffinity:                   affinity,
 		inheritedNodeSelector:               nodeSelector,
 		inheritedTolerations:                tolerations,
+		inlineTaskExecutionFile:             inlineTaskExecutionFile,
 		namespace:                           tf.Namespace,
 		resourceName:                        resourceName,
 		prefixedName:                        prefixedName,
@@ -1693,13 +1736,21 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1beta1.Terr
 
 		go r.reapPlugins(tf, 0)
 
+		// Add all default inine files
+		runOpts.mainModulePluginData["default-terraform.sh"] = defaultInlineTerraformTaskExecutionFile
+		runOpts.mainModulePluginData["default-setup.sh"] = defaultInlineSetupTaskExecutionFile
+		runOpts.mainModulePluginData["default-noop.sh"] = defaultInlineNoOpExecutionFile
+
 		for _, taskOption := range tf.Spec.TaskOptions {
 			if inlineScript := taskOption.Script.Inline; inlineScript != "" {
 				for _, affected := range taskOption.For {
 					if affected.String() == "*" {
 						continue
 					}
+					// This adds all the inline scripts found in taskOptions into a configmap. The configmap is not changed
+					// for the generation of the workflow.
 					runOpts.mainModulePluginData[fmt.Sprintf("inline-%s.sh", affected)] = inlineScript
+
 				}
 			}
 		}
@@ -2327,6 +2378,10 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 		{
 			Name:  "TFO_TASK_EXEC_CONFIGMAP_SOURCE_KEY",
 			Value: r.configMapSourceKey,
+		},
+		{
+			Name:  "TFO_TASK_EXEC_INLINE_SOURCE_FILE",
+			Value: r.inlineTaskExecutionFile,
 		},
 		{
 			Name:  "TFO_RESOURCE",
