@@ -982,10 +982,9 @@ func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1beta1.
 	deletePhases := []string{
 		string(tfv1beta1.PhaseDeleted),
 		string(tfv1beta1.PhaseInitDelete),
-		string(tfv1beta1.PhaseDeleted),
+		string(tfv1beta1.PhaseDeleting),
 	}
-	tfIsFinalizing := utils.ListContainsStr(deletePhases, string(tf.Status.Phase))
-	tfIsNotFinalizing := !tfIsFinalizing
+	isToBeDeletedOrIsDeleting := utils.ListContainsStr(deletePhases, string(tf.Status.Phase))
 	initDelete := tf.Status.Phase == tfv1beta1.PhaseInitDelete
 	stageState := tfv1beta1.StateInitializing
 	interruptible := tfv1beta1.CanBeInterrupt
@@ -1001,7 +1000,7 @@ func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1beta1.
 		// Cannot change to the next stage because the current stage cannot be
 		// interrupted and is currently running
 		isNewStage = false
-	} else if isNewGeneration && tfIsNotFinalizing {
+	} else if isNewGeneration && !isToBeDeletedOrIsDeleting {
 		// The current generation has changed and this is the first pod in the
 		// normal terraform workflow
 		isNewStage = true
@@ -1009,14 +1008,19 @@ func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1beta1.
 		podType = tfv1beta1.RunSetup
 
 		// } else if initDelete && !utils.ListContainsStr(deletePodTypes, string(currentStagePodType)) {
-	} else if initDelete && isNewGeneration {
+	} else if isNewGeneration && initDelete {
 		// The tf resource is marked for deletion and this is the first pod
 		// in the terraform destroy workflow.
 		isNewStage = true
 		reason = "TF_RESOURCE_DELETED"
 		podType = tfv1beta1.RunSetupDelete
 		interruptible = tfv1beta1.CanNotBeInterrupt
-
+	} else if isNewGeneration && isToBeDeletedOrIsDeleting {
+		// The tf resource is marked for deletion but got updated. It is still going to be deleted but starts
+		// a new terraform destroy workflow.
+		isNewStage = true
+		reason = "TF_RESOURCE_DELETED"
+		podType = tfv1beta1.RunSetupDelete
 	} else if currentStage.State == tfv1beta1.StateComplete {
 		isNewStage = true
 		reason = fmt.Sprintf("COMPLETED_%s", strings.ToUpper(currentStage.TaskType.String()))
