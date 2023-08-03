@@ -520,8 +520,8 @@ type SSHKeySecretRef struct {
 	Namespace string `json:"namespace,omitempty"`
 	// Key in the secret ref. Default to `id_rsa`
 	Key string `json:"key,omitempty"`
-	// Set finalizer from controller on the secret to prevent delete flow breaking
-	// Works only with spec.ignoreDelete = true
+	// Set finalizer from controller on the secret to prevent delete flow breaking.
+	// Works only with `spec.ignoreDelete = true`.
 	LockSecretDeletion bool `json:"lockSecretDeletion,omitempty"`
 }
 
