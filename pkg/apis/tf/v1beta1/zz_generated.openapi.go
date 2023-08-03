@@ -513,7 +513,7 @@ func schema_pkg_apis_tf_v1beta1_SSHKeySecretRef(ref common.ReferenceCallback) co
 					},
 					"lockSecretDeletion": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Set finalizer from controller on the secret to prevent delete flow breaking Works only with spec.ignoreDelete = true",
+							Description: "Set finalizer from controller on the secret to prevent delete flow breaking. Works only with `spec.ignoreDelete = true`.",
 							Type:        []string{"boolean"},
 							Format:      "",
 						},

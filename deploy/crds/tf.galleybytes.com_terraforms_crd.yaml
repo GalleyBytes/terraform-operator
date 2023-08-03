@@ -321,8 +321,8 @@ spec:
                                   type: string
                                 lockSecretDeletion:
                                   description: Set finalizer from controller on the
-                                    secret to prevent delete flow breaking Works only
-                                    with spec.ignoreDelete = true
+                                    secret to prevent delete flow breaking. Works
+                                    only with `spec.ignoreDelete = true`.
                                   type: boolean
                                 name:
                                   description: Name the secret name that has the SSH
@@ -404,8 +404,8 @@ spec:
                         type: string
                       lockSecretDeletion:
                         description: Set finalizer from controller on the secret to
-                          prevent delete flow breaking Works only with spec.ignoreDelete
-                          = true
+                          prevent delete flow breaking. Works only with `spec.ignoreDelete
+                          = true`.
                         type: boolean
                       name:
                         description: Name the secret name that has the SSH key
