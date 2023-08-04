@@ -606,7 +606,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		// Must trucate at 220 chars of original name to ensure room for the
 		// suffixes that will be added (and possible future suffix expansion)
 		tf.Status.PodNamePrefix = fmt.Sprintf("%s-%s",
-			utils.TruncateResourceName(tf.Name, 220),
+			utils.TruncateResourceName(tf.Name, 54),
 			utils.StringWithCharset(8, utils.AlphaNum),
 		)
 		tf.Status.LastCompletedGeneration = 0
