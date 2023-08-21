@@ -1,4 +1,5 @@
 #!/bin/bash -e
+set -o errexit
 
 function fixssh {
   mkdir -p "$TFO_ROOT_PATH"/.ssh/

@@ -1,4 +1,5 @@
 #!/bin/bash -e
+set -o errexit
 
 # Setup SSH
 mkdir -p "$TFO_ROOT_PATH"/.ssh/
