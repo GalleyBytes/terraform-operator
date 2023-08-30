@@ -1459,17 +1459,25 @@ func (r ReconcileTerraform) getGitSecrets(tf *tfv1beta1.Terraform) []gitSecret {
 	for _, m := range tf.Spec.SCMAuthMethods {
 		if m.Git.HTTPS != nil {
 			ref := m.Git.HTTPS.TokenSecretRef
+			namespace := ref.Namespace
+			if ref.Namespace == "" {
+				namespace = tf.Namespace
+			}
 			secrets = append(secrets, gitSecret{
 				name:          ref.Name,
-				namespace:     ref.Namespace,
+				namespace:     namespace,
 				shoudBeLocked: ref.LockSecretDeletion && !tf.Spec.IgnoreDelete,
 			})
 		}
 		if m.Git.SSH != nil {
 			ref := m.Git.SSH.SSHKeySecretRef
+			namespace := ref.Namespace
+			if ref.Namespace == "" {
+				namespace = tf.Namespace
+			}
 			secrets = append(secrets, gitSecret{
 				name:          ref.Name,
-				namespace:     ref.Namespace,
+				namespace:     namespace,
 				shoudBeLocked: ref.LockSecretDeletion && !tf.Spec.IgnoreDelete,
 			})
 		}
