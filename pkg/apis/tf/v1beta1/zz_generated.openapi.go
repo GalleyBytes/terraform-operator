@@ -362,7 +362,7 @@ func schema_pkg_apis_tf_v1beta1_Plugin(ref common.ReferenceCallback) common.Open
 					},
 					"when": {
 						SchemaProps: spec.SchemaProps{
-							Description: "When is a keyword of a two-part selector of when the plugin gets run in the workflow. The value must be one of\n\n- <code>At</code> to run at the same time as the defined task\n\n- <code>After</code> to run after the defined task has completed.",
+							Description: "When is a keyword of a two-part selector of when the plugin gets run in the workflow. The value must be one of\n\n- <code>At</code> to run at the same time as the defined task\n\n- <code>After</code> to run after the defined task has completed.\n\n- <code>Sidecar</code> to run as a sidecar for the given task.",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",

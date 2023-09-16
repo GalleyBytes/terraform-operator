@@ -357,6 +357,8 @@ type Plugin struct {
 	// - <code>At</code> to run at the same time as the defined task
 	//
 	// - <code>After</code> to run after the defined task has completed.
+	//
+	// - <code>Sidecar</code> to run as a sidecar for the given task.
 	When string `json:"when"`
 
 	// Task is the second part of a two-part selector of when the plugin gets run in the workflow. This

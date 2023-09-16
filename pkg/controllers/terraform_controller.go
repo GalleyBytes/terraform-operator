@@ -324,6 +324,9 @@ type TaskOptions struct {
 
 	volumes      []corev1.Volume
 	volumeMounts []corev1.VolumeMount
+
+	// When a plugin is defined to run as a sidecar, this field will be filled in and attached to current task
+	sidecarPlugin *corev1.Pod
 }
 
 func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation int64, globalEnvFrom []corev1.EnvFromSource, affinity *corev1.Affinity, nodeSelector map[string]string, tolerations []corev1.Toleration) TaskOptions {
@@ -539,9 +542,9 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 		urlSource:                           urlSource,
 		requireApproval:                     requireApproval,
 		restartPolicy:                       restartPolicy,
-
-		volumes:      volumes,
-		volumeMounts: volumeMounts,
+		volumes:                             volumes,
+		volumeMounts:                        volumeMounts,
+		sidecarPlugin:                       nil,
 	}
 }
 
@@ -777,6 +780,29 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 
 	if len(pods.Items) == 0 {
 		// Trigger a new pod when no pods are found for current stage
+		for pluginTaskName, pluginConfig := range tf.Spec.Plugins {
+			if tfv1beta1.ListContainsTask(tf.Status.PluginsStarted, pluginTaskName) {
+				continue
+			}
+
+			when := pluginConfig.When
+			whenTask := pluginConfig.Task
+			switch when {
+			case "After":
+				if whenTask.ID() < podType.ID() {
+					defer r.createPluginJob(ctx, reqLogger, tf, pluginTaskName, pluginConfig, globalEnvFrom)
+				}
+			case "At":
+				if whenTask.ID() == podType.ID() {
+					defer r.createPluginJob(ctx, reqLogger, tf, pluginTaskName, pluginConfig, globalEnvFrom)
+				}
+			case "Sidecar":
+				if whenTask.ID() == podType.ID() {
+					runOpts.sidecarPlugin = r.getPluginSidecarPod(ctx, reqLogger, tf, pluginTaskName, pluginConfig, globalEnvFrom)
+				}
+			}
+		}
+
 		reqLogger.V(1).Info(fmt.Sprintf("Setting up the '%s' pod", podType))
 		err := r.setupAndRun(ctx, tf, runOpts)
 		if err != nil {
@@ -801,26 +827,6 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		// When the pod is created, don't requeue. The pod's status changes
 		// will trigger tfo to reconcile.
 		return reconcile.Result{}, nil
-	}
-
-	// By now, the task pod exists and the controller has to check and update on the status of the pod.
-	for pluginTaskName, pluginConfig := range tf.Spec.Plugins {
-		if tfv1beta1.ListContainsTask(tf.Status.PluginsStarted, pluginTaskName) {
-			continue
-		}
-
-		when := pluginConfig.When
-		whenTask := pluginConfig.Task
-		switch when {
-		case "After":
-			if whenTask.ID() < podType.ID() {
-				return r.createPluginPod(ctx, reqLogger, tf, pluginTaskName, pluginConfig, globalEnvFrom)
-			}
-		case "At":
-			if whenTask.ID() == podType.ID() {
-				return r.createPluginPod(ctx, reqLogger, tf, pluginTaskName, pluginConfig, globalEnvFrom)
-			}
-		}
 	}
 
 	// At this point, a pod is found for the current stage. We can check the
@@ -1401,14 +1407,24 @@ func (r ReconcileTerraform) getNodeSelectorsFromCache() (*corev1.Affinity, map[s
 	return affinity, nodeSelector, tolerations
 }
 
-// createPluginPod will attempt to create the plugin pod and mark it as added in the resource's status.
-// No logic is used to determine if the plugin was successful. If the createPod function errors, a log event
-// is recorded in the controller.
-func (r ReconcileTerraform) createPluginPod(ctx context.Context, logger logr.Logger, tf *tfv1beta1.Terraform, pluginTaskName tfv1beta1.TaskName, pluginConfig tfv1beta1.Plugin, globalEnvFrom []corev1.EnvFromSource) (reconcile.Result, error) {
+// Define a set of TaskOptions specific for the plugin task
+func (r ReconcileTerraform) getPluginRunOpts(tf *tfv1beta1.Terraform, pluginTaskName tfv1beta1.TaskName, pluginConfig tfv1beta1.Plugin, globalEnvFrom []corev1.EnvFromSource) TaskOptions {
 	affinity, nodeSelector, tolerations := r.getNodeSelectorsFromCache()
 	pluginRunOpts := newTaskOptions(tf, pluginTaskName, tf.Generation, globalEnvFrom, affinity, nodeSelector, tolerations)
 	pluginRunOpts.image = pluginConfig.Image
 	pluginRunOpts.imagePullPolicy = pluginConfig.ImagePullPolicy
+	return pluginRunOpts
+}
+
+func (r ReconcileTerraform) getPluginSidecarPod(ctx context.Context, logger logr.Logger, tf *tfv1beta1.Terraform, pluginTaskName tfv1beta1.TaskName, pluginConfig tfv1beta1.Plugin, globalEnvFrom []corev1.EnvFromSource) *corev1.Pod {
+	return r.getPluginRunOpts(tf, pluginTaskName, pluginConfig, globalEnvFrom).generatePod()
+}
+
+// createPluginJob will attempt to create the plugin pod and mark it as added in the resource's status.
+// No logic is used to determine if the plugin was successful. If the createPod function errors, a log event
+// is recorded in the controller.
+func (r ReconcileTerraform) createPluginJob(ctx context.Context, logger logr.Logger, tf *tfv1beta1.Terraform, pluginTaskName tfv1beta1.TaskName, pluginConfig tfv1beta1.Plugin, globalEnvFrom []corev1.EnvFromSource) (reconcile.Result, error) {
+	pluginRunOpts := r.getPluginRunOpts(tf, pluginTaskName, pluginConfig, globalEnvFrom)
 
 	go func() {
 		err := r.createJob(ctx, tf, pluginRunOpts)
@@ -2750,9 +2766,14 @@ func (r TaskOptions) generatePod() (*corev1.Pod, error) {
 	}
 	restartPolicy := r.restartPolicy
 
+	containerName := "task"
+	if r.task.ID() == -2 {
+		containerName = string(r.task)
+	}
+
 	containers := []corev1.Container{}
 	containers = append(containers, corev1.Container{
-		Name:            "task",
+		Name:            containerName,
 		SecurityContext: securityContext,
 		Image:           r.image,
 		ImagePullPolicy: r.imagePullPolicy,
@@ -2760,6 +2781,23 @@ func (r TaskOptions) generatePod() (*corev1.Pod, error) {
 		Env:             envs,
 		VolumeMounts:    volumeMounts,
 	})
+
+	if r.sidecarPlugin != nil {
+		spec := r.sidecarPlugin.Spec
+		// Updates with sidecar container info when found
+		containers = append(containers, spec.Containers...)
+
+		volumeList := []string{}
+		for _, volume := range volumes {
+			volumeList = append(volumeList, volume.Name)
+		}
+
+		for _, volume := range spec.Volumes {
+			if !utils.ListContainsStr(volumeList, volume.Name) {
+				volumes = append(volumes, volume)
+			}
+		}
+	}
 
 	podSecurityContext := corev1.PodSecurityContext{
 		FSGroup: &user,

@@ -233,7 +233,8 @@ spec:
                         the plugin gets run in the workflow. The value must be one
                         of \n - <code>At</code> to run at the same time as the defined
                         task \n - <code>After</code> to run after the defined task
-                        has completed."
+                        has completed. \n - <code>Sidecar</code> to run as a sidecar
+                        for the given task."
                       type: string
                   required:
                   - image
