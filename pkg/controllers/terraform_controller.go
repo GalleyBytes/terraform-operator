@@ -321,7 +321,7 @@ type TaskOptions struct {
 	versionedName   string
 	requireApproval bool
 	restartPolicy   corev1.RestartPolicy
-	// kepiukik
+
 	volumes      []corev1.Volume
 	volumeMounts []corev1.VolumeMount
 }
@@ -352,7 +352,6 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 	restartPolicy := corev1.RestartPolicyNever
 	inlineTaskExecutionFile := ""
 	useDefaultInlineTaskExecutionFile := false
-	//kepiukik
 	volumes := []corev1.Volume{}
 	volumeMounts := []corev1.VolumeMount{}
 
@@ -375,7 +374,7 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 			if taskOption.RestartPolicy != "" {
 				restartPolicy = taskOption.RestartPolicy
 			}
-			// kepiukik
+
 			volumes = append(volumes, taskOption.Volumes...)
 			volumeMounts = append(volumeMounts, taskOption.VolumeMounts...)
 		}
@@ -540,7 +539,7 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 		urlSource:                           urlSource,
 		requireApproval:                     requireApproval,
 		restartPolicy:                       restartPolicy,
-		// kepiukik
+
 		volumes:      volumes,
 		volumeMounts: volumeMounts,
 	}
@@ -2489,7 +2488,7 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 			},
 		},
 	}
-	// kepiukik
+
 	volumes = append(volumes, r.volumes...)
 	volumeMounts := []corev1.VolumeMount{
 		{
