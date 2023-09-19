@@ -321,6 +321,9 @@ type TaskOptions struct {
 	versionedName   string
 	requireApproval bool
 	restartPolicy   corev1.RestartPolicy
+	// kepiukik
+	volumes      []corev1.Volume
+	volumeMounts []corev1.VolumeMount
 }
 
 func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation int64, globalEnvFrom []corev1.EnvFromSource, affinity *corev1.Affinity, nodeSelector map[string]string, tolerations []corev1.Toleration) TaskOptions {
@@ -349,6 +352,9 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 	restartPolicy := corev1.RestartPolicyNever
 	inlineTaskExecutionFile := ""
 	useDefaultInlineTaskExecutionFile := false
+	//kepiukik
+	volumes := []corev1.Volume{}
+	volumeMounts := []corev1.VolumeMount{}
 
 	// TaskOptions have data for all the tasks but since we're only interested
 	// in the ones for this taskType, extract and add them to RunOptions
@@ -369,6 +375,9 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 			if taskOption.RestartPolicy != "" {
 				restartPolicy = taskOption.RestartPolicy
 			}
+			// kepiukik
+			volumes = append(volumes, taskOption.Volumes...)
+			volumeMounts = append(volumeMounts, taskOption.VolumeMounts...)
 		}
 		if tfv1beta1.ListContainsTask(taskOption.For, task) {
 			// This statement only matches taskOptions that match this current task only
@@ -531,6 +540,9 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 		urlSource:                           urlSource,
 		requireApproval:                     requireApproval,
 		restartPolicy:                       restartPolicy,
+		// kepiukik
+		volumes:      volumes,
+		volumeMounts: volumeMounts,
 	}
 }
 
@@ -2477,6 +2489,8 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 			},
 		},
 	}
+	// kepiukik
+	volumes = append(volumes, r.volumes...)
 	volumeMounts := []corev1.VolumeMount{
 		{
 			Name:      "tfohome",
@@ -2484,6 +2498,7 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 			ReadOnly:  false,
 		},
 	}
+	volumeMounts = append(volumeMounts, r.volumeMounts...)
 	envs = append(envs, corev1.EnvVar{
 		Name:  "TFO_ROOT_PATH",
 		Value: home,

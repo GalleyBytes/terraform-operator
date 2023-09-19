@@ -416,6 +416,14 @@ type TaskOption struct {
 	//
 	// If no policy is specified, the restart policy is set to "Never".
 	RestartPolicy corev1.RestartPolicy `json:"restartPolicy,omitempty"`
+
+	// Extra volumes for task pod
+	// +optional
+	Volumes []corev1.Volume `json:"volumes,omitempty"`
+
+	//Extra volumeMounts for task pod
+	// +optional
+	VolumeMounts []corev1.VolumeMount `json:"volumeMounts,omitempty"`
 }
 
 // StageScript defines the different ways of sourcing execution scripts of tasks. There is an order of
