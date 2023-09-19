@@ -845,12 +845,40 @@ func schema_pkg_apis_tf_v1beta1_TaskOption(ref common.ReferenceCallback) common.
 							Format:      "",
 						},
 					},
+					"volumes": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Extra volumes for task pod",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("k8s.io/api/core/v1.Volume"),
+									},
+								},
+							},
+						},
+					},
+					"volumeMounts": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Extra volumeMounts for task pod",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("k8s.io/api/core/v1.VolumeMount"),
+									},
+								},
+							},
+						},
+					},
 				},
 				Required: []string{"for"},
 			},
 		},
 		Dependencies: []string{
-			"github.com/galleybytes/terraform-operator/pkg/apis/tf/v1beta1.StageScript", "k8s.io/api/core/v1.EnvFromSource", "k8s.io/api/core/v1.EnvVar", "k8s.io/api/core/v1.ResourceRequirements", "k8s.io/api/rbac/v1.PolicyRule"},
+			"github.com/galleybytes/terraform-operator/pkg/apis/tf/v1beta1.StageScript", "k8s.io/api/core/v1.EnvFromSource", "k8s.io/api/core/v1.EnvVar", "k8s.io/api/core/v1.ResourceRequirements", "k8s.io/api/core/v1.Volume", "k8s.io/api/core/v1.VolumeMount", "k8s.io/api/rbac/v1.PolicyRule"},
 	}
 }
 
