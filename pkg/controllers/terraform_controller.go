@@ -2157,10 +2157,15 @@ func (r ReconcileTerraform) createRoleBinding(ctx context.Context, tf *tfv1beta1
 func (r ReconcileTerraform) createPod(ctx context.Context, tf *tfv1beta1.Terraform, runOpts TaskOptions) error {
 	kind := "Pod"
 
-	resource := runOpts.generatePod()
+	resource, err := runOpts.generatePod()
+	if err != nil {
+		r.Recorder.Event(tf, "Warning", fmt.Sprintf("%sCreateError", kind), fmt.Sprintf("%s", err))
+		return err
+	}
+
 	controllerutil.SetControllerReference(tf, resource, r.Scheme)
 
-	err := r.Client.Create(ctx, resource)
+	err = r.Client.Create(ctx, resource)
 	if err != nil {
 		r.Recorder.Event(tf, "Warning", fmt.Sprintf("%sCreateError", kind), fmt.Sprintf("Could not create %s %v", kind, err))
 		return err
@@ -2189,7 +2194,7 @@ func (r ReconcileTerraform) createJob(ctx context.Context, tf *tfv1beta1.Terrafo
 }
 
 func (r TaskOptions) generateJob() *batchv1.Job {
-	pod := r.generatePod()
+	pod, _ := r.generatePod()
 
 	// In a job, pod's can only have OnFailure or Never restart policies
 	if pod.Spec.RestartPolicy == corev1.RestartPolicyAlways || pod.Spec.RestartPolicy == corev1.RestartPolicyOnFailure {
@@ -2357,9 +2362,49 @@ func (r TaskOptions) generatePVC(size resource.Quantity, storageClassName *strin
 	}
 }
 
+func (r TaskOptions) validateVolume() error {
+	prohibitedNames := map[string]string{
+		"tfohome":            "",
+		"config-map-source":  "",
+		"main-module-addons": "",
+		"gitaskpass":         "",
+		"ssh":                "",
+	}
+	mounts := map[string]string{}
+	volumes := map[string]string{}
+
+	for _, v := range r.volumeMounts {
+		mounts[v.Name] = ""
+	}
+
+	for _, v := range r.volumes {
+		// check if any system volume name is defined in task volumes
+		_, ok := prohibitedNames[v.Name]
+		if ok {
+			return fmt.Errorf("task '%s' is misconfigured: volume name '%s' is reserved by tf-operator", r.task, v.Name)
+		}
+		// check if volume name has his own volumeMount
+		_, ok = mounts[v.Name]
+		if !ok {
+			return fmt.Errorf("task '%s' is misconfigured: volume: '%s' doesn't have corresponding volumeMount", r.task, v.Name)
+		}
+		volumes[v.Name] = ""
+	}
+
+	for _, v := range r.volumeMounts {
+		// check if volumeMount refers to existing volume
+		_, ok := volumes[v.Name]
+		if !ok {
+			return fmt.Errorf("task '%s' is misconfigured: volumeMount: '%s' doesn't have corresponding volume", r.task, v.Name)
+		}
+	}
+
+	return nil
+}
+
 // generatePod puts together all the contents required to execute the taskType.
 // Although most of the tasks use similar.... (TODO EDIT ME)
-func (r TaskOptions) generatePod() *corev1.Pod {
+func (r TaskOptions) generatePod() (*corev1.Pod, error) {
 
 	home := "/home/tfo-runner"
 	generateName := r.versionedName + "-" + r.task.String() + "-"
@@ -2489,6 +2534,9 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 		},
 	}
 
+	if err := r.validateVolume(); err != nil {
+		return nil, err
+	}
 	volumes = append(volumes, r.volumes...)
 	volumeMounts := []corev1.VolumeMount{
 		{
@@ -2736,7 +2784,7 @@ func (r TaskOptions) generatePod() *corev1.Pod {
 		},
 	}
 
-	return pod
+	return pod, nil
 }
 
 func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *tfv1beta1.Terraform, runOpts TaskOptions, isNewGeneration, isFirstInstall bool) (err error) {
