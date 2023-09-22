@@ -326,7 +326,7 @@ type TaskOptions struct {
 	volumeMounts []corev1.VolumeMount
 
 	// When a plugin is defined to run as a sidecar, this field will be filled in and attached to current task
-	sidecarPlugin *corev1.Pod
+	sidecarPlugins []corev1.Pod
 }
 
 func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation int64, globalEnvFrom []corev1.EnvFromSource, affinity *corev1.Affinity, nodeSelector map[string]string, tolerations []corev1.Toleration) TaskOptions {
@@ -544,7 +544,7 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 		restartPolicy:                       restartPolicy,
 		volumes:                             volumes,
 		volumeMounts:                        volumeMounts,
-		sidecarPlugin:                       nil,
+		sidecarPlugins:                      nil,
 	}
 }
 
@@ -798,7 +798,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 				}
 			case "Sidecar":
 				if whenTask.ID() == podType.ID() {
-					runOpts.sidecarPlugin = r.getPluginSidecarPod(ctx, reqLogger, tf, pluginTaskName, pluginConfig, globalEnvFrom)
+					runOpts.sidecarPlugins = append(runOpts.sidecarPlugins, *r.getPluginSidecarPod(ctx, reqLogger, tf, pluginTaskName, pluginConfig, globalEnvFrom))
 				}
 			}
 		}
@@ -2782,19 +2782,21 @@ func (r TaskOptions) generatePod() (*corev1.Pod, error) {
 		VolumeMounts:    volumeMounts,
 	})
 
-	if r.sidecarPlugin != nil {
-		spec := r.sidecarPlugin.Spec
-		// Updates with sidecar container info when found
-		containers = append(containers, spec.Containers...)
+	if r.sidecarPlugins != nil {
+		for _, sidecarPlugin := range r.sidecarPlugins {
+			spec := sidecarPlugin.Spec
+			// Updates with sidecar container info when found
+			containers = append(containers, spec.Containers...)
 
-		volumeList := []string{}
-		for _, volume := range volumes {
-			volumeList = append(volumeList, volume.Name)
-		}
+			volumeList := []string{}
+			for _, volume := range volumes {
+				volumeList = append(volumeList, volume.Name)
+			}
 
-		for _, volume := range spec.Volumes {
-			if !utils.ListContainsStr(volumeList, volume.Name) {
-				volumes = append(volumes, volume)
+			for _, volume := range spec.Volumes {
+				if !utils.ListContainsStr(volumeList, volume.Name) {
+					volumes = append(volumes, volume)
+				}
 			}
 		}
 	}
