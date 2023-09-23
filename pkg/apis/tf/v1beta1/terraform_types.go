@@ -358,12 +358,19 @@ type Plugin struct {
 	//
 	// - <code>After</code> to run after the defined task has completed.
 	//
-	// - <code>Sidecar</code> to run as a sidecar for the given task.
+	// - <code>Sidecar</code> to run as a sidecar for the given task. Since sidecars run
+	// in the same pod as a "main workflow" task, failed sidecars will cause a failure in the workflow.
 	When string `json:"when"`
 
 	// Task is the second part of a two-part selector of when the plugin gets run in the workflow. This
 	// should correspond to one of the tfo task names.
 	Task TaskName `json:"task"`
+
+	// Must is short for "must succeed to generate sidecar spec". Generation of spec does not guarantee
+	// correctness. Must will only be applied to sidecars.
+	//
+	// If must is false and the sidecar spec fails to generate, the sidecar addition will be omitted.
+	Must bool `json:"must,omitempty"`
 }
 
 // TaskOption are different configuration options to be injected into task pods. Can apply to
@@ -423,7 +430,7 @@ type TaskOption struct {
 	// +optional
 	Volumes []corev1.Volume `json:"volumes,omitempty"`
 
-	//Extra volumeMounts for task pod
+	// Extra volumeMounts for task pod
 	// +optional
 	VolumeMounts []corev1.VolumeMount `json:"volumeMounts,omitempty"`
 }
@@ -778,11 +785,12 @@ func (s TerraformSpec) MarshalJSON() ([]byte, error) {
 	type Alias TerraformSpec
 	return json.Marshal(&struct {
 		*Alias
-		KeepLatestPodsOnly   bool `json:"keepLatestPodsOnly"`
-		KeepCompletedPods    bool `json:"keepCompletedPods"`
-		WriteOutputsToStatus bool `json:"writeOutputsToStatus"`
-		IgnoreDelete         bool `json:"ignoreDelete"`
-		RequireApproval      bool `json:"requireApproval"`
+		KeepLatestPodsOnly   bool         `json:"keepLatestPodsOnly"`
+		KeepCompletedPods    bool         `json:"keepCompletedPods"`
+		WriteOutputsToStatus bool         `json:"writeOutputsToStatus"`
+		IgnoreDelete         bool         `json:"ignoreDelete"`
+		RequireApproval      bool         `json:"requireApproval"`
+		TaskOptions          []TaskOption `json:"taskOptions"`
 	}{
 		Alias:                (*Alias)(&s),
 		KeepLatestPodsOnly:   s.KeepLatestPodsOnly,
@@ -790,6 +798,7 @@ func (s TerraformSpec) MarshalJSON() ([]byte, error) {
 		WriteOutputsToStatus: s.WriteOutputsToStatus,
 		IgnoreDelete:         s.IgnoreDelete,
 		RequireApproval:      s.RequireApproval,
+		TaskOptions:          s.TaskOptions,
 	})
 }
 
@@ -834,6 +843,17 @@ func (s ResourceDownload) MarshalJSON() ([]byte, error) {
 	}{
 		Alias:    (*Alias)(&s),
 		UseAsVar: s.UseAsVar,
+	})
+}
+
+func (s Plugin) MarshalJSON() ([]byte, error) {
+	type Alias Plugin
+	return json.Marshal(&struct {
+		*Alias
+		Must bool `json:"must"`
+	}{
+		Alias: (*Alias)(&s),
+		Must:  s.Must,
 	})
 }
 

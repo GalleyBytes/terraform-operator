@@ -362,7 +362,7 @@ func schema_pkg_apis_tf_v1beta1_Plugin(ref common.ReferenceCallback) common.Open
 					},
 					"when": {
 						SchemaProps: spec.SchemaProps{
-							Description: "When is a keyword of a two-part selector of when the plugin gets run in the workflow. The value must be one of\n\n- <code>At</code> to run at the same time as the defined task\n\n- <code>After</code> to run after the defined task has completed.\n\n- <code>Sidecar</code> to run as a sidecar for the given task.",
+							Description: "When is a keyword of a two-part selector of when the plugin gets run in the workflow. The value must be one of\n\n- <code>At</code> to run at the same time as the defined task\n\n- <code>After</code> to run after the defined task has completed.\n\n- <code>Sidecar</code> to run as a sidecar for the given task. Since sidecars run in the same pod as a \"main workflow\" task, failed sidecars will cause a failure in the workflow.",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
@@ -373,6 +373,13 @@ func schema_pkg_apis_tf_v1beta1_Plugin(ref common.ReferenceCallback) common.Open
 							Description: "Task is the second part of a two-part selector of when the plugin gets run in the workflow. This should correspond to one of the tfo task names.",
 							Default:     "",
 							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"must": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Must is short for \"must succeed to generate sidecar spec\". Generation of spec does not guarantee correctness. Must will only be applied to sidecars.\n\nIf must is false and the sidecar spec fails to generate, the sidecar addition will be omitted.",
+							Type:        []string{"boolean"},
 							Format:      "",
 						},
 					},
