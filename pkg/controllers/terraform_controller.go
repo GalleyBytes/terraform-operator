@@ -798,7 +798,16 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 				}
 			case "Sidecar":
 				if whenTask.ID() == podType.ID() {
-					runOpts.sidecarPlugins = append(runOpts.sidecarPlugins, *r.getPluginSidecarPod(ctx, reqLogger, tf, pluginTaskName, pluginConfig, globalEnvFrom))
+					pluginSidecarPod, err := r.getPluginSidecarPod(ctx, reqLogger, tf, pluginTaskName, pluginConfig, globalEnvFrom)
+					if err != nil {
+						if pluginConfig.Must {
+							reqLogger.V(1).Info(err.Error())
+							return reconcile.Result{Requeue: true}, nil
+						}
+						reqLogger.V(1).Info("Error adding sidecar plugin: %s", err.Error())
+						continue
+					}
+					runOpts.sidecarPlugins = append(runOpts.sidecarPlugins, *pluginSidecarPod)
 				}
 			}
 		}
@@ -1416,7 +1425,7 @@ func (r ReconcileTerraform) getPluginRunOpts(tf *tfv1beta1.Terraform, pluginTask
 	return pluginRunOpts
 }
 
-func (r ReconcileTerraform) getPluginSidecarPod(ctx context.Context, logger logr.Logger, tf *tfv1beta1.Terraform, pluginTaskName tfv1beta1.TaskName, pluginConfig tfv1beta1.Plugin, globalEnvFrom []corev1.EnvFromSource) *corev1.Pod {
+func (r ReconcileTerraform) getPluginSidecarPod(ctx context.Context, logger logr.Logger, tf *tfv1beta1.Terraform, pluginTaskName tfv1beta1.TaskName, pluginConfig tfv1beta1.Plugin, globalEnvFrom []corev1.EnvFromSource) (*corev1.Pod, error) {
 	return r.getPluginRunOpts(tf, pluginTaskName, pluginConfig, globalEnvFrom).generatePod()
 }
 

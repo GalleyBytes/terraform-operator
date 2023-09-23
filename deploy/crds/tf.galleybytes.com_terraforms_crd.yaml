@@ -3,8 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.9.2
-  creationTimestamp: null
+    controller-gen.kubebuilder.io/version: v0.12.0
   name: terraforms.tf.galleybytes.com
 spec:
   group: tf.galleybytes.com
@@ -223,6 +222,13 @@ spec:
                         Defaults to Always if :latest tag is specified, or IfNotPresent
                         otherwise. Cannot be updated. More info: https://kubernetes.io/docs/concepts/containers/images#updating-images'
                       type: string
+                    must:
+                      description: "Must is short for \"must succeed to generate sidecar
+                        spec\". Generation of spec does not guarantee correctness.
+                        Must will only be applied to sidecars. \n If must is false
+                        and the sidecar spec fails to generate, the sidecar addition
+                        will be omitted."
+                      type: boolean
                     task:
                       description: Task is the second part of a two-part selector
                         of when the plugin gets run in the workflow. This should correspond
@@ -234,7 +240,9 @@ spec:
                         of \n - <code>At</code> to run at the same time as the defined
                         task \n - <code>After</code> to run after the defined task
                         has completed. \n - <code>Sidecar</code> to run as a sidecar
-                        for the given task."
+                        for the given task. Since sidecars run in the same pod as
+                        a \"main workflow\" task, failed sidecars will cause a failure
+                        in the workflow."
                       type: string
                   required:
                   - image
