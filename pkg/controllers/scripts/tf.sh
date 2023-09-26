@@ -2,10 +2,10 @@
 set -o errexit
 
 function fixssh {
-  mkdir -p "$TFO_ROOT_PATH"/.ssh/
+  mkdir -p /tmp/.ssh/
   if stat "$TFO_SSH"/* >/dev/null 2>/dev/null; then
-  cp -Lr "$TFO_SSH"/* "$TFO_ROOT_PATH"/.ssh/
-  chmod -R 0600 "$TFO_ROOT_PATH"/.ssh/*
+    cp -Lr "$TFO_SSH"/* /tmp/.ssh/
+    chmod -R 0600 /tmp/.ssh/*
   fi
 }
 

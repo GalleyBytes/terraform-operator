@@ -1,12 +1,14 @@
 #!/bin/bash -e
 set -o errexit
 
+# Expects all scripts configure ssh in /tmp/.ssh
+rm -rf ~/.ssh
+ln -s /tmp/.ssh ~/.ssh
 # Setup SSH
-mkdir -p "$TFO_ROOT_PATH"/.ssh/
-chmod 755 "$TFO_ROOT_PATH"/.ssh/ # Allow write
+mkdir -p /tmp/.ssh/
 if stat "$TFO_SSH"/* >/dev/null 2>/dev/null; then
-cp -Lr "$TFO_SSH"/* "$TFO_ROOT_PATH"/.ssh/
-chmod -R 0600 "$TFO_ROOT_PATH"/.ssh/*
+    cp -Lr "$TFO_SSH"/* /tmp/.ssh/
+    chmod -R 0600 /tmp/.ssh/*
 fi
 
 out="$TFO_ROOT_PATH"/generations/$TFO_GENERATION
