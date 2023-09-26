@@ -2,7 +2,7 @@
 set -o errexit
 
 # Expects all scripts configure ssh in /tmp/.ssh
-rm -rf ~/.ssh
+rm -rf ~/.ssh || true
 ln -s /tmp/.ssh ~/.ssh
 # Setup SSH
 mkdir -p /tmp/.ssh/
@@ -14,13 +14,13 @@ fi
 out="$TFO_ROOT_PATH"/generations/$TFO_GENERATION
 vardir="$out/tfvars"
 if [[ "$TFO_CLEANUP_DISK" == "true" ]]; then
-    rm -rf "$TFO_ROOT_PATH"/generations/*
+    rm -rf "$TFO_ROOT_PATH"/generations/* || true
 fi
 mkdir -p "$out"
 mkdir -p "$vardir"
 
 if [[ -d "$TFO_MAIN_MODULE" ]]; then
-    rm -rf "$TFO_MAIN_MODULE"
+    rm -rf "$TFO_MAIN_MODULE" || true
 fi
 
 if [[ ! -s "$TFO_MAIN_MODULE_ADDONS/inline-module.tf" ]]; then
