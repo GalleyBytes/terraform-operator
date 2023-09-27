@@ -257,7 +257,10 @@ type Module struct {
 	//
 	// If a key is defined, the value is used as the module else the entirety of the data objects will be
 	// loaded as files.
-	ConfigMapSelector *ConfigMapSelector `json:"configMapSeclector,omitempty"`
+	ConfigMapSelector *ConfigMapSelector `json:"configMapSelector,omitempty"`
+
+	// Typoed form of configMapSelector
+	ConfigMapSeclector_x *ConfigMapSelector `json:"configMapSeclector,omitempty"`
 
 	// Inline used to define an entire terraform module inline and then mounted in the TFO_MAIN_MODULE path.
 	Inline string `json:"inline,omitempty"`

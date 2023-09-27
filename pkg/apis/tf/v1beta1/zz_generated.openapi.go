@@ -317,9 +317,15 @@ func schema_pkg_apis_tf_v1beta1_Module(ref common.ReferenceCallback) common.Open
 							Format:      "",
 						},
 					},
-					"configMapSeclector": {
+					"configMapSelector": {
 						SchemaProps: spec.SchemaProps{
 							Description: "ConfigMapSelector is an option that points to an existing configmap on the executing cluster. The configmap is expected to contains has the terraform module (ie keys ending with .tf). The configmap would need to live in the same namespace as the tfo resource.\n\nThe configmap is mounted as a volume and put into the TFO_MAIN_MODULE path by the setup task.\n\nIf a key is defined, the value is used as the module else the entirety of the data objects will be loaded as files.",
+							Ref:         ref("github.com/galleybytes/terraform-operator/pkg/apis/tf/v1beta1.ConfigMapSelector"),
+						},
+					},
+					"configMapSeclector": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Typoed form of configMapSelector",
 							Ref:         ref("github.com/galleybytes/terraform-operator/pkg/apis/tf/v1beta1.ConfigMapSelector"),
 						},
 					},
