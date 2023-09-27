@@ -1796,6 +1796,12 @@ func (r *ReconcileTerraform) setupAndRun(ctx context.Context, tf *tfv1beta1.Terr
 		// Add add inline to configmap and instruct the pod to fetch the
 		// configmap as the main module
 		runOpts.mainModulePluginData["inline-module.tf"] = tf.Spec.TerraformModule.Inline
+	} else if tf.Spec.TerraformModule.ConfigMapSeclector_x != nil {
+		b, err := json.Marshal(tf.Spec.TerraformModule.ConfigMapSeclector_x)
+		if err != nil {
+			return err
+		}
+		runOpts.mainModulePluginData[".__TFO__ConfigMapModule.json"] = string(b)
 	} else if tf.Spec.TerraformModule.ConfigMapSelector != nil {
 		// Instruct the setup pod to fetch the configmap as the main module
 		b, err := json.Marshal(tf.Spec.TerraformModule.ConfigMapSelector)

@@ -2472,6 +2472,16 @@ spec:
                   terraform module.
                 properties:
                   configMapSeclector:
+                    description: Typoed form of configMapSelector
+                    properties:
+                      key:
+                        type: string
+                      name:
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  configMapSelector:
                     description: "ConfigMapSelector is an option that points to an
                       existing configmap on the executing cluster. The configmap is
                       expected to contains has the terraform module (ie keys ending
