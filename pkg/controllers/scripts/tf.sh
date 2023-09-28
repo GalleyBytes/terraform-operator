@@ -72,16 +72,6 @@ esac
 status=${PIPESTATUS[0]}
 if [[ $status -gt 0 ]];then exit $status;fi
 
-if [[ "$TFO_TASK" == "plan" ]] && [[ "$TFO_REQUIRE_APPROVAL" == "true" ]]; then
-  printf "Waiting for approval\n"
-  until stat "${TFO_GENERATION_PATH}/_approved_${POD_UID}" 2>/dev/null >/dev/null ||\
-        stat "${TFO_GENERATION_PATH}/_canceled_${POD_UID}" 2>/dev/null >/dev/null; do
-          sleep 1;
-  done
-  if stat "${TFO_GENERATION_PATH}/_canceled_${POD_UID}" 2>/dev/null >/dev/null; then exit 2;fi
-  if stat "${TFO_GENERATION_PATH}/_approved_${POD_UID}" 2>/dev/null >/dev/null; then exit 0;fi
-fi
-
 if [[ "$TFO_TASK" == "apply" ]] && [[ "$TFO_SAVE_OUTPUTS" == "true" ]]; then
   # On sccessful apply, save outputs as k8s-secret
   data=$(mktemp)

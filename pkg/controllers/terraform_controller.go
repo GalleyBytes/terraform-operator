@@ -780,6 +780,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 
 	if len(pods.Items) == 0 {
 		// Trigger a new pod when no pods are found for current stage
+		sidecarNames := []string{}
 		for pluginTaskName, pluginConfig := range tf.Spec.Plugins {
 			if tfv1beta1.ListContainsTask(tf.Status.PluginsStarted, pluginTaskName) {
 				continue
@@ -807,8 +808,43 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 						reqLogger.V(1).Info("Error adding sidecar plugin: %s", err.Error())
 						continue
 					}
-					runOpts.sidecarPlugins = append(runOpts.sidecarPlugins, *pluginSidecarPod)
+
+					exists := false
+					for _, c := range pluginSidecarPod.Spec.Containers {
+						if utils.ListContainsStr(sidecarNames, c.Name) {
+							exists = true
+						}
+					}
+					if !exists {
+						sidecarNames = append(sidecarNames, getContainerNames(pluginSidecarPod)...)
+						runOpts.sidecarPlugins = append(runOpts.sidecarPlugins, *pluginSidecarPod)
+					}
 				}
+			}
+		}
+
+		if (podType == tfv1beta1.RunPlan || podType == tfv1beta1.RunPlanDelete) && runOpts.requireApproval {
+			requireApprovalSidecarPlugin := tfv1beta1.Plugin{
+				ImageConfig: tfv1beta1.ImageConfig{
+					Image:           "ghcr.io/galleybytes/require-approval:0.1.0",
+					ImagePullPolicy: corev1.PullIfNotPresent,
+				},
+				Must: true,
+			}
+			pluginSidecarPod, err := r.getPluginSidecarPod(ctx, reqLogger, tf, tfv1beta1.TaskName("require-approval"), requireApprovalSidecarPlugin, globalEnvFrom)
+			if err != nil {
+				reqLogger.V(1).Info("Error adding require-approval plugin: %s", err.Error())
+				return reconcile.Result{Requeue: true}, nil
+			}
+
+			exists := false
+			for _, c := range pluginSidecarPod.Spec.Containers {
+				if utils.ListContainsStr(sidecarNames, c.Name) {
+					exists = true
+				}
+			}
+			if !exists {
+				runOpts.sidecarPlugins = append(runOpts.sidecarPlugins, *pluginSidecarPod)
 			}
 		}
 
@@ -2520,10 +2556,6 @@ func (r TaskOptions) generatePod() (*corev1.Pod, error) {
 			Name:  "TFO_OUTPUTS_TO_OMIT",
 			Value: strings.Join(r.outputsToOmit, ","),
 		},
-		{
-			Name:  "TFO_REQUIRE_APPROVAL",
-			Value: strconv.FormatBool(r.requireApproval),
-		},
 	}...)
 
 	if r.cleanupDisk {
@@ -3241,4 +3273,12 @@ func getParsedAddress(address, path string, useAsVar bool, scmMap map[string]scm
 		Repo:           strings.Split(parsedURL.String(), "?")[0],
 	}
 	return p, nil
+}
+
+func getContainerNames(pod *corev1.Pod) []string {
+	s := []string{}
+	for _, container := range pod.Spec.Containers {
+		s = append(s, container.Name)
+	}
+	return s
 }
