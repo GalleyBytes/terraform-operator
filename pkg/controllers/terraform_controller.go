@@ -826,7 +826,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		if (podType == tfv1beta1.RunPlan || podType == tfv1beta1.RunPlanDelete) && runOpts.requireApproval {
 			requireApprovalSidecarPlugin := tfv1beta1.Plugin{
 				ImageConfig: tfv1beta1.ImageConfig{
-					Image:           "ghcr.io/galleybytes/require-approval:0.1.0",
+					Image:           "ghcr.io/galleybytes/require-approval:0.1.1",
 					ImagePullPolicy: corev1.PullIfNotPresent,
 				},
 				Must: true,
