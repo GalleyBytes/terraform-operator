@@ -44,35 +44,35 @@ if [[ ! -s "$TFO_MAIN_MODULE_ADDONS/inline-module.tf" ]]; then
             if [[ "$key" != *".tf" ]] || [[ "$key" != *".json" ]]; then
                 suffix=".tf" # select tf as default
             fi
-            jq -r --arg key "$key" '.data[$key]' <<< $configmap_json > "${TFO_MAIN_MODULE}/${key}${suffix}"
+            jq -r --arg key "$key" '.data[$key]' <<<$configmap_json >"${TFO_MAIN_MODULE}/${key}${suffix}"
         else
-            for key in $(jq -r '.data | keys[]' <<< $configmap_json); do
+            for key in $(jq -r '.data | keys[]' <<<$configmap_json); do
                 # No assumptions about the file types are made here. The user
                 # should create keys that are properly suffixed for terraform.
-                jq -r --arg key "$key" '.data[$key]' <<< $configmap_json > "${TFO_MAIN_MODULE}/${key}"
+                jq -r --arg key "$key" '.data[$key]' <<<$configmap_json >"${TFO_MAIN_MODULE}/${key}"
             done
         fi
     # Check if this is a source directory instead of a git repo
     elif [[ "$TFO_MAIN_MODULE_REPO" == file://* ]]; then
-      local_module_path="${TFO_MAIN_MODULE_REPO#"file://"}"
-      if [[ -d "$local_module_path" ]]; then
-        cp -r "$local_module_path" "$TFO_MAIN_MODULE"
-      else
-        echo "terraform module file source: $local_module_path, does not exist"
-        exit 1
-      fi
+        local_module_path="${TFO_MAIN_MODULE_REPO#"file://"}"
+        if [[ -d "$local_module_path" ]]; then
+            cp -r "$local_module_path" "$TFO_MAIN_MODULE"
+        else
+            echo "terraform module file source: $local_module_path, does not exist"
+            exit 1
+        fi
     else
         # The terraform module is a repo that must be downloaded
-        MAIN_MODULE_TMP=`mktemp -d`
-        cd "$MAIN_MODULE_TMP"
-        git clone "$TFO_MAIN_MODULE_REPO" 2>&1  | tee .out
+        cd $(mktemp -d)
+        git clone "$TFO_MAIN_MODULE_REPO" 2>&1 | tee .out
         exit_code=${PIPESTATUS[0]}
         if [ $exit_code -ne 0 ]; then
-            exit $exit_code;
+            exit $exit_code
         fi
-        reponame=$(sed  -n "s/.*'\([^']*\)'.*/\1/p" .out)
+        reponame=$(sed -n "s/.*'\([^']*\)'.*/\1/p" .out)
         cd "$reponame"
         git checkout "$TFO_MAIN_MODULE_REPO_REF"
+        echo "Setting up module for $reponame/$TFO_MAIN_MODULE_REPO_SUBDIR"
         cp -r "$TFO_MAIN_MODULE_REPO_SUBDIR" "$TFO_MAIN_MODULE"
     fi
 fi
@@ -91,24 +91,24 @@ if stat backend_override.tf >/dev/null 2>/dev/null; then
 else
     echo "Loading hashicorp backend"
     set -x
-    envsubst < /backend.tf > "$TFO_ROOT_PATH/backend_override.tf"
+    envsubst </backend.tf >"$TFO_ROOT_PATH/backend_override.tf"
     mv "$TFO_ROOT_PATH/backend_override.tf" .
 fi
 
 function join_by {
-    local d="$1" f=${2:-$(</dev/stdin)};
+    local d="$1" f=${2:-$(</dev/stdin)}
     if [[ -z "$f" ]]; then return 1; fi
     if shift 2; then
         printf %s "$f" "${@/#/$d}"
     else
-    join_by "$d" $f
+        join_by "$d" $f
     fi
 }
 
 function add_file_as_next_index {
     dir="$1"
     file="$2"
-    idx=$(ls "$dir"|wc -l)
+    idx=$(ls "$dir" | wc -l)
     cp "$file" "$dir/${idx}_$(basename $2)"
 }
 
@@ -120,9 +120,9 @@ function fetch_git {
     tfvar="$4"
     branch="$5"
     path="$TFO_MAIN_MODULE/$relpath"
-    if [[ "$files" == "." ]] && ( [[ "$relpath" == "." ]] || [[ "$relpath" == "" ]] ); then
-    a=$(basename $repo)
-    path="$TFO_MAIN_MODULE/${a%.*}"
+    if [[ "$files" == "." ]] && ([[ "$relpath" == "." ]] || [[ "$relpath" == "" ]]); then
+        a=$(basename $repo)
+        path="$TFO_MAIN_MODULE/${a%.*}"
     fi
     # printf -- 'mkdir -p "'$path'"\n'
     mkdir -p "$path"
@@ -136,10 +136,10 @@ function fetch_git {
 
     if [[ "$tfvar" == "true" ]]; then
         for file in $files; do
-        if [[ -f "$file" ]]; then
-            # printf 'add_file_as_next_index "'$vardir'" "'$file'"'
-            add_file_as_next_index "$vardir" "$file"
-        fi
+            if [[ -f "$file" ]]; then
+                # printf 'add_file_as_next_index "'$vardir'" "'$file'"'
+                add_file_as_next_index "$vardir" "$file"
+            fi
         done
     fi
     echo done
@@ -150,14 +150,14 @@ LENGTH=$(jq '.|length' $FILE)
 
 for i in $(seq 0 $((LENGTH - 1))); do
     DATA=$(mktemp)
-    jq --argjson i $i '.[$i]' $FILE > $DATA
+    jq --argjson i $i '.[$i]' $FILE >$DATA
     fetchtype=$(jq -r '.detect' $DATA)
     repo=$(jq -r '.repo' $DATA)
     files=$(jq -r '.files[]' $DATA | join_by "  ")
     path=$(jq -r '.path' $DATA)
     tfvar=$(jq -r '.useAsVar' $DATA)
     branch=$(jq -r '.hash' $DATA)
-    if [[ "$fetchtype" == "git" ]];then
+    if [[ "$fetchtype" == "git" ]]; then
         fetch_git "$repo" "$path" "$files" "$tfvar" "$branch"
     fi
 done
