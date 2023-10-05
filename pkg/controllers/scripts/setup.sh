@@ -64,8 +64,14 @@ if [[ ! -s "$TFO_MAIN_MODULE_ADDONS/inline-module.tf" ]]; then
     else
         # The terraform module is a repo that must be downloaded
         MAIN_MODULE_TMP=`mktemp -d`
-        git clone "$TFO_MAIN_MODULE_REPO" "$MAIN_MODULE_TMP/stack" || exit $?
-        cd "$MAIN_MODULE_TMP/stack"
+        cd "$MAIN_MODULE_TMP"
+        git clone "$TFO_MAIN_MODULE_REPO" 2>&1  | tee .out
+        exit_code=${PIPESTATUS[0]}
+        if [ $exit_code -ne 0 ]; then
+            exit $exit_code;
+        fi
+        reponame=$(sed  -n "s/.*'\([^']*\)'.*/\1/p" .out)
+        cd "$reponame"
         git checkout "$TFO_MAIN_MODULE_REPO_REF"
         cp -r "$TFO_MAIN_MODULE_REPO_SUBDIR" "$TFO_MAIN_MODULE"
     fi
