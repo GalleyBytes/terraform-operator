@@ -675,6 +675,21 @@ type TerraformStatus struct {
 	// refreshed each generation.
 	// +optional
 	PluginsStarted []TaskName `json:"pluginsStarted,omitempty"`
+
+	// RetryEventReason copies the value of the resource label for 'kubernetes.io/change-cause'.
+	// When '.setup' is is the suffix of the value, the pipeline will retry from the setup task.
+	//
+	// Example of starting from setup:
+	//
+	// ```yaml
+	// metadata:
+	//   labels:
+	//     kubernetes.io/change-cause: triggered-by-isa_aguilar-20231025T011600.setup
+	// ```
+	//
+	// A default retry will start from the init task otherwise.
+	RetryEventReason *string      `json:"retryEventReson,omitempty"`
+	RetryTimestamp   *metav1.Time `json:"retryTimestamp,omitempty"`
 }
 
 type Exported string

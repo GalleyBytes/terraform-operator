@@ -3,7 +3,8 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.12.0
+    controller-gen.kubebuilder.io/version: v0.9.2
+  creationTimestamp: null
   name: terraforms.tf.galleybytes.com
 spec:
   group: tf.galleybytes.com
@@ -2562,6 +2563,17 @@ spec:
                   name prefix is when rapidly deleteing a resource and recreating
                   it, the chance of recycling existing resources is reduced to virtually
                   nil.
+                type: string
+              retryEventReson:
+                description: "RetryEventReason copies the value of the resource label
+                  for 'kubernetes.io/change-cause'. When '.setup' is is the suffix
+                  of the value, the pipeline will retry from the setup task. \n Example
+                  of starting from setup: \n ```yaml metadata: labels: kubernetes.io/change-cause:
+                  triggered-by-isa_aguilar-20231025T011600.setup ``` \n A default
+                  retry will start from the init task otherwise."
+                type: string
+              retryTimestamp:
+                format: date-time
                 type: string
               stage:
                 description: Stage stores information about the current stage

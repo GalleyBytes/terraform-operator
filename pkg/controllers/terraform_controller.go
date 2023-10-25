@@ -670,14 +670,41 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	//
 	// 	}
 	// }
-	stage := r.checkSetNewStage(ctx, tf)
+
+	retry := false
+	if tf.Labels != nil {
+		if label, found := tf.Labels["kubernetes.io/change-cause"]; found {
+
+			if tf.Status.RetryEventReason == nil {
+				retry = true
+			} else if *tf.Status.RetryEventReason != label {
+				retry = true
+			}
+
+			if retry {
+				// Once a single retry is triggered via the change-cause label method,
+				// the retry* status entries will persist for the lifetime of
+				// the resource. This doesn't affect workflows, but it's a little annoying to see the
+				// status long after the retry has occurred. In the future, see if there is a way to clean
+				// up the status.
+				// As of today, attempting to clean the retry* status when the change-cause label still exists
+				// causes the controller to skip new generation steps like creating configmaps, secrets, etc.
+				// TODO clean retry* status
+				now := metav1.Now()
+				tf.Status.RetryEventReason = &label // saved via updateStatusWithRetry
+				tf.Status.RetryTimestamp = &now     // saved via updateStatusWithRetry
+			}
+		}
+	}
+
+	stage := r.checkSetNewStage(ctx, tf, retry)
 	if stage != nil {
-		tf.Status.Stage = *stage
 		if stage.Reason == "RESTARTED_WORKFLOW" || stage.Reason == "RESTARTED_DELETE_WORKFLOW" {
-			_ = r.removeOldPlan(tf)
+			_ = r.removeOldPlan(tf.Namespace, tf.Name, tf.Status.Stage.Reason, tf.Generation)
 			// TODO what to do if the remove old plan function fails
 		}
 		reqLogger.V(2).Info(fmt.Sprintf("Stage moving from '%s' -> '%s'", tf.Status.Stage.TaskType, stage.TaskType))
+		tf.Status.Stage = *stage
 		desiredStatus := tf.Status
 		err := r.updateStatusWithRetry(ctx, tf, &desiredStatus, reqLogger)
 		if err != nil {
@@ -763,6 +790,16 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	if err != nil {
 		reqLogger.Error(err, "")
 		return reconcile.Result{}, nil
+	}
+
+	if tf.Status.RetryTimestamp != nil {
+		podSlice := []corev1.Pod{}
+		for _, pod := range pods.Items {
+			if pod.CreationTimestamp.IsZero() || !pod.CreationTimestamp.Before(tf.Status.RetryTimestamp) {
+				podSlice = append(podSlice, pod)
+			}
+		}
+		pods.Items = podSlice
 	}
 
 	if len(pods.Items) == 0 && tf.Status.Stage.State == tfv1beta1.StateInProgress {
@@ -851,7 +888,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		reqLogger.V(1).Info(fmt.Sprintf("Setting up the '%s' pod", podType))
 		err := r.setupAndRun(ctx, tf, runOpts)
 		if err != nil {
-			reqLogger.Error(err, "")
+			reqLogger.Error(err, err.Error())
 			return reconcile.Result{}, err
 		}
 		if tf.Status.Phase == tfv1beta1.PhaseInitializing {
@@ -1030,7 +1067,7 @@ func getConfiguredTasks(taskOptions *[]tfv1beta1.TaskOption) []tfv1beta1.TaskNam
 // When a stage has already triggered a pod, the only way for the pod to transition to the next stage is for
 // the pod to complete successfully. Any other pod phase will keep the pod in the current stage, or in the
 // case of the apply task, the workflow will be restarted.
-func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1beta1.Terraform) *tfv1beta1.Stage {
+func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1beta1.Terraform, isRetry bool) *tfv1beta1.Stage {
 	var isNewStage bool
 	var podType tfv1beta1.TaskName
 	var reason string
@@ -1052,8 +1089,23 @@ func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1beta1.
 	currentStageIsRunning := currentStage.State == tfv1beta1.StateInProgress
 	isNewGeneration := currentStage.Generation != tf.Generation
 
-	// resource status
-	if currentStageCanNotBeInterrupted && currentStageIsRunning {
+	if isRetry && !isToBeDeletedOrIsDeleting && !isNewGeneration {
+		isNewStage = true
+		reason = *tf.Status.RetryEventReason
+		podType = tfv1beta1.RunInit
+		if strings.HasSuffix(reason, ".setup") {
+			podType = tfv1beta1.RunSetup
+		}
+		interruptible = isTaskInterruptable(podType)
+	} else if isRetry && isToBeDeletedOrIsDeleting && !isNewGeneration {
+		isNewStage = true
+		reason = *tf.Status.RetryEventReason
+		podType = tfv1beta1.RunInitDelete
+		if strings.HasSuffix(reason, ".setup") {
+			podType = tfv1beta1.RunSetupDelete
+		}
+		interruptible = isTaskInterruptable(podType)
+	} else if currentStageCanNotBeInterrupted && currentStageIsRunning {
 		// Cannot change to the next stage because the current stage cannot be
 		// interrupted and is currently running
 		isNewStage = false
@@ -1125,20 +1177,20 @@ func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1beta1.
 
 }
 
-func (r ReconcileTerraform) removeOldPlan(tf *tfv1beta1.Terraform) error {
+func (r ReconcileTerraform) removeOldPlan(namespace, name, reason string, generation int64) error {
 	labelSelectors := []string{
-		fmt.Sprintf("terraforms.tf.galleybytes.com/generation==%d", tf.Generation),
-		fmt.Sprintf("terraforms.tf.galleybytes.com/resourceName=%s", tf.Name),
+		fmt.Sprintf("terraforms.tf.galleybytes.com/generation==%d", generation),
+		fmt.Sprintf("terraforms.tf.galleybytes.com/resourceName=%s", name),
 		"app.kubernetes.io/instance",
 	}
-	if tf.Status.Stage.Reason == "RESTARTED_WORKFLOW" {
+	if reason == "RESTARTED_WORKFLOW" {
 		labelSelectors = append(labelSelectors, []string{
 			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1beta1.RunSetup),
 			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1beta1.RunPreInit),
 			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1beta1.RunInit),
 			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1beta1.RunPostInit),
 		}...)
-	} else if tf.Status.Stage.Reason == "RESTARTED_DELETE_WORKFLOW" {
+	} else if reason == "RESTARTED_DELETE_WORKFLOW" {
 		labelSelectors = append(labelSelectors, []string{
 			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1beta1.RunSetupDelete),
 			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1beta1.RunPreInitDelete),
@@ -1157,7 +1209,7 @@ func (r ReconcileTerraform) removeOldPlan(tf *tfv1beta1.Terraform) error {
 	err = r.Client.DeleteAllOf(context.TODO(), &corev1.Pod{}, &client.DeleteAllOfOptions{
 		ListOptions: client.ListOptions{
 			LabelSelector: labelSelector,
-			Namespace:     tf.Namespace,
+			Namespace:     namespace,
 			FieldSelector: fieldSelector,
 		},
 	})
