@@ -1217,12 +1217,24 @@ func schema_pkg_apis_tf_v1beta1_TerraformStatus(ref common.ReferenceCallback) co
 							},
 						},
 					},
+					"retryEventReson": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RetryEventReason copies the value of the resource label for 'kubernetes.io/change-cause'. When '.setup' is is the suffix of the value, the pipeline will retry from the setup task.\n\nExample of starting from setup:\n\n```yaml metadata:\n  labels:\n    kubernetes.io/change-cause: triggered-by-isa_aguilar-20231025T011600.setup\n```\n\nA default retry will start from the init task otherwise.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"retryTimestamp": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+						},
+					},
 				},
 				Required: []string{"podNamePrefix", "phase", "lastCompletedGeneration", "stage"},
 			},
 		},
 		Dependencies: []string{
-			"github.com/galleybytes/terraform-operator/pkg/apis/tf/v1beta1.Stage"},
+			"github.com/galleybytes/terraform-operator/pkg/apis/tf/v1beta1.Stage", "k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
 	}
 }
 
