@@ -69,7 +69,7 @@ if [[ ! -s "$TFO_MAIN_MODULE_ADDONS/inline-module.tf" ]]; then
         if [ $exit_code -ne 0 ]; then
             exit $exit_code
         fi
-        reponame=$(sed -n "s/.*'\([^']*\)'.*/\1/p" .out)
+        reponame=$(sed -n "s/.*'\([^']*\)'.*/\1/p" .out | head -n1)
         cd "$reponame"
         git checkout "$TFO_MAIN_MODULE_REPO_REF"
         echo "Setting up module for $reponame/$TFO_MAIN_MODULE_REPO_SUBDIR"
