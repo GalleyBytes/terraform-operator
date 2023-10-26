@@ -693,6 +693,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 				now := metav1.Now()
 				tf.Status.RetryEventReason = &label // saved via updateStatusWithRetry
 				tf.Status.RetryTimestamp = &now     // saved via updateStatusWithRetry
+				tf.Status.Phase = tfv1beta1.PhaseInitializing
 			}
 		}
 	}
