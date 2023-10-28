@@ -1,6 +1,12 @@
 name: Build Terraform Operator Container Image
 
-on: [push]
+on:
+  pull_request:
+    branches:
+    - master
+  push:
+    tags:
+    - '*'
 
 jobs:
   Terraform-Operator-AMD_x86_64:

@@ -2564,7 +2564,7 @@ spec:
                   it, the chance of recycling existing resources is reduced to virtually
                   nil.
                 type: string
-              retryEventReson:
+              retryEventReason:
                 description: "RetryEventReason copies the value of the resource label
                   for 'kubernetes.io/change-cause'. When '.setup' is is the suffix
                   of the value, the pipeline will retry from the setup task. \n Example

@@ -688,7 +688,7 @@ type TerraformStatus struct {
 	// ```
 	//
 	// A default retry will start from the init task otherwise.
-	RetryEventReason *string      `json:"retryEventReson,omitempty"`
+	RetryEventReason *string      `json:"retryEventReason,omitempty"`
 	RetryTimestamp   *metav1.Time `json:"retryTimestamp,omitempty"`
 }
 
