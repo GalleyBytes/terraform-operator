@@ -1322,10 +1322,12 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 	labelSelector, err := labels.Parse(fmt.Sprintf("terraforms.tf.galleybytes.com/generation,terraforms.tf.galleybytes.com/generation!=%d,terraforms.tf.galleybytes.com/resourceName,terraforms.tf.galleybytes.com/resourceName=%s", tf.Generation, tf.Name))
 	if err != nil {
 		logger.Error(err, "Could not parse labels")
+		return
 	}
 	fieldSelector, err := fields.ParseSelector("status.phase!=Running")
 	if err != nil {
 		logger.Error(err, "Could not parse fields")
+		return
 	}
 
 	err = r.Client.DeleteAllOf(context.TODO(), &corev1.Pod{}, &client.DeleteAllOfOptions{
@@ -1337,6 +1339,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 	})
 	if err != nil {
 		logger.Error(err, "Could not reap old generation pods")
+		return
 	}
 
 	// Wait for all the pods of the previous generations to be gone. Only after
@@ -1349,6 +1352,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 	})
 	if err != nil {
 		logger.Error(err, "Could not list pods to reap")
+		return
 	}
 	if len(podList.Items) > 0 {
 		// There are still some pods from a previous generation hanging around
@@ -1366,6 +1370,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 		})
 		if err != nil {
 			logger.Error(err, "Could not reap old generation configmaps")
+			return
 		}
 
 		err = r.Client.DeleteAllOf(context.TODO(), &corev1.Secret{}, &client.DeleteAllOfOptions{
@@ -1376,6 +1381,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 		})
 		if err != nil {
 			logger.Error(err, "Could not reap old generation secrets")
+			return
 		}
 
 		err = r.Client.DeleteAllOf(context.TODO(), &rbacv1.Role{}, &client.DeleteAllOfOptions{
@@ -1386,6 +1392,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 		})
 		if err != nil {
 			logger.Error(err, "Could not reap old generation roles")
+			return
 		}
 
 		err = r.Client.DeleteAllOf(context.TODO(), &rbacv1.RoleBinding{}, &client.DeleteAllOfOptions{
@@ -1396,6 +1403,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 		})
 		if err != nil {
 			logger.Error(err, "Could not reap old generation roleBindings")
+			return
 		}
 
 		err = r.Client.DeleteAllOf(context.TODO(), &corev1.ServiceAccount{}, &client.DeleteAllOfOptions{
@@ -1406,6 +1414,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 		})
 		if err != nil {
 			logger.Error(err, "Could not reap old generation serviceAccounts")
+			return
 		}
 	}
 }
