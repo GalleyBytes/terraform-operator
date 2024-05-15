@@ -2,6 +2,8 @@ package utils
 
 import (
 	"bytes"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -162,6 +164,15 @@ func TruncateResourceName(s string, i int) string {
 		name = strings.TrimRight(name, ".")
 	}
 	return name
+}
+
+// AutoHashLabeler When a label value is too long ( > 63 chars), send a hash of the string instead
+func AutoHashLabeler(s string) string {
+	if len(s) > 63 {
+		hash := md5.Sum([]byte(s))
+		return hex.EncodeToString(hash[:])
+	}
+	return s
 }
 
 func IsSeq(arr []int, start *int) bool {
