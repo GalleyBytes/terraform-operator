@@ -491,7 +491,7 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 
 	resourceLabels := map[string]string{
 		"terraforms.tf.galleybytes.com/generation":       fmt.Sprintf("%d", generation),
-		"terraforms.tf.galleybytes.com/resourceName":     resourceName,
+		"terraforms.tf.galleybytes.com/resourceName":     utils.AutoHashLabeler(resourceName),
 		"terraforms.tf.galleybytes.com/podPrefix":        prefixedName,
 		"terraforms.tf.galleybytes.com/terraformVersion": terraformVersion,
 		"app.kubernetes.io/name":                         "terraform-operator",
@@ -1179,9 +1179,10 @@ func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1beta1.
 }
 
 func (r ReconcileTerraform) removeOldPlan(namespace, name, reason string, generation int64) error {
+
 	labelSelectors := []string{
 		fmt.Sprintf("terraforms.tf.galleybytes.com/generation==%d", generation),
-		fmt.Sprintf("terraforms.tf.galleybytes.com/resourceName=%s", name),
+		fmt.Sprintf("terraforms.tf.galleybytes.com/resourceName=%s", utils.AutoHashLabeler(name)),
 		"app.kubernetes.io/instance",
 	}
 	if reason == "RESTARTED_WORKFLOW" {
@@ -1319,7 +1320,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 	// 2. The terraforms.tf.galleybytes.com/generation value MUST match the current resource generation
 	// 3. The terraforms.tf.galleybytes.com/resourceName key MUST exist
 	// 4. The terraforms.tf.galleybytes.com/resourceName value MUST match the resource name
-	labelSelector, err := labels.Parse(fmt.Sprintf("terraforms.tf.galleybytes.com/generation,terraforms.tf.galleybytes.com/generation!=%d,terraforms.tf.galleybytes.com/resourceName,terraforms.tf.galleybytes.com/resourceName=%s", tf.Generation, tf.Name))
+	labelSelector, err := labels.Parse(fmt.Sprintf("terraforms.tf.galleybytes.com/generation,terraforms.tf.galleybytes.com/generation!=%d,terraforms.tf.galleybytes.com/resourceName,terraforms.tf.galleybytes.com/resourceName=%s", tf.Generation, utils.AutoHashLabeler(tf.Name)))
 	if err != nil {
 		logger.Error(err, "Could not parse labels")
 		return
@@ -1442,7 +1443,7 @@ func (r ReconcileTerraform) reapPlugins(tf *tfv1beta1.Terraform, attempt int) {
 	}
 
 	// Delete old plugins regardless of pod phase
-	labelSelectorForPlugins, err := labels.Parse(fmt.Sprintf("terraforms.tf.galleybytes.com/isPlugin=true,terraforms.tf.galleybytes.com/generation,terraforms.tf.galleybytes.com/generation!=%d,terraforms.tf.galleybytes.com/resourceName,terraforms.tf.galleybytes.com/resourceName=%s", tf.Generation, tf.Name))
+	labelSelectorForPlugins, err := labels.Parse(fmt.Sprintf("terraforms.tf.galleybytes.com/isPlugin=true,terraforms.tf.galleybytes.com/generation,terraforms.tf.galleybytes.com/generation!=%d,terraforms.tf.galleybytes.com/resourceName,terraforms.tf.galleybytes.com/resourceName=%s", tf.Generation, utils.AutoHashLabeler(tf.Name)))
 	if err != nil {
 		logger.Error(err, "Could not parse labels")
 	}
