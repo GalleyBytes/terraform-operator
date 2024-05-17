@@ -77,6 +77,12 @@ type ReconcileTerraform struct {
 	// Value of this field will come from the owning deployment and cached.
 	InheritTolerations  bool
 	TolerationsCacheKey string
+
+	// When requireApproval is true, the require-approval plugin is injected into the plan pod
+	// when generating the pod manifest. The require-approval image is not modifiable via the Terraform
+	// Resource in order to ensure the highest compatibility with the other TFO projects (like
+	// terraform-operator-api and terraform-operator-dashboard).
+	RequireApprovalImage string
 }
 
 // createEnvFromSources adds any of the global environment vars defined at the controller scope
@@ -318,9 +324,10 @@ type TaskOptions struct {
 	// as the download location for the script to execute in the task.
 	urlSource string
 
-	versionedName   string
-	requireApproval bool
-	restartPolicy   corev1.RestartPolicy
+	versionedName        string
+	requireApproval      bool
+	requireApprovalImage string
+	restartPolicy        corev1.RestartPolicy
 
 	volumes      []corev1.Volume
 	volumeMounts []corev1.VolumeMount
@@ -329,7 +336,7 @@ type TaskOptions struct {
 	sidecarPlugins []corev1.Pod
 }
 
-func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation int64, globalEnvFrom []corev1.EnvFromSource, affinity *corev1.Affinity, nodeSelector map[string]string, tolerations []corev1.Toleration) TaskOptions {
+func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation int64, globalEnvFrom []corev1.EnvFromSource, affinity *corev1.Affinity, nodeSelector map[string]string, tolerations []corev1.Toleration, requireApprovalImage string) TaskOptions {
 	// TODO Read the tfstate and decide IF_NEW_RESOURCE based on that
 	// applyAction := false
 	resourceName := tf.Name
@@ -541,6 +548,7 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 		outputsToOmit:                       outputsToOmit,
 		urlSource:                           urlSource,
 		requireApproval:                     requireApproval,
+		requireApprovalImage:                requireApprovalImage,
 		restartPolicy:                       restartPolicy,
 		volumes:                             volumes,
 		volumeMounts:                        volumeMounts,
@@ -725,7 +733,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	podType := currentStage.TaskType
 	generation := currentStage.Generation
 	affinity, nodeSelector, tolerations := r.getNodeSelectorsFromCache()
-	runOpts := newTaskOptions(tf, currentStage.TaskType, generation, globalEnvFrom, affinity, nodeSelector, tolerations)
+	runOpts := newTaskOptions(tf, currentStage.TaskType, generation, globalEnvFrom, affinity, nodeSelector, tolerations, r.RequireApprovalImage)
 
 	if podType == tfv1beta1.RunNil {
 		// podType is blank when the terraform workflow has completed for
@@ -864,7 +872,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 		if (podType == tfv1beta1.RunPlan || podType == tfv1beta1.RunPlanDelete) && runOpts.requireApproval {
 			requireApprovalSidecarPlugin := tfv1beta1.Plugin{
 				ImageConfig: tfv1beta1.ImageConfig{
-					Image:           "ghcr.io/galleybytes/require-approval:0.1.1",
+					Image:           runOpts.requireApprovalImage,
 					ImagePullPolicy: corev1.PullIfNotPresent,
 				},
 				Must: true,
@@ -1518,7 +1526,7 @@ func (r ReconcileTerraform) getNodeSelectorsFromCache() (*corev1.Affinity, map[s
 // Define a set of TaskOptions specific for the plugin task
 func (r ReconcileTerraform) getPluginRunOpts(tf *tfv1beta1.Terraform, pluginTaskName tfv1beta1.TaskName, pluginConfig tfv1beta1.Plugin, globalEnvFrom []corev1.EnvFromSource) TaskOptions {
 	affinity, nodeSelector, tolerations := r.getNodeSelectorsFromCache()
-	pluginRunOpts := newTaskOptions(tf, pluginTaskName, tf.Generation, globalEnvFrom, affinity, nodeSelector, tolerations)
+	pluginRunOpts := newTaskOptions(tf, pluginTaskName, tf.Generation, globalEnvFrom, affinity, nodeSelector, tolerations, r.RequireApprovalImage)
 	pluginRunOpts.image = pluginConfig.Image
 	pluginRunOpts.imagePullPolicy = pluginConfig.ImagePullPolicy
 	return pluginRunOpts

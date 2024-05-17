@@ -43,6 +43,7 @@ func main() {
 	var inheritNodeSelector bool
 	var inheritAffinty bool
 	var inheritTolerations bool
+	var requireApprovalImage string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -54,6 +55,7 @@ func main() {
 	flag.BoolVar(&inheritNodeSelector, "inherit-node-selector", false, "Use the controller's nodeSelector for every task created by the controller")
 	flag.BoolVar(&inheritAffinty, "inherit-affinity", false, "Use the controller's affinity rules for every task created by the controller")
 	flag.BoolVar(&inheritTolerations, "inherit-tolerations", false, "Use the controller's tolerations for every task created by the controller")
+	flag.StringVar(&requireApprovalImage, "require-approval-image", "ghcr.io/galleybytes/require-approval:0.2.0", "Plugin image for require-approval")
 	opts := zap.Options{
 		Development: true,
 		Level:       zapcore.DebugLevel,
@@ -108,6 +110,7 @@ func main() {
 			NodeSelectorCacheKey:       "inherited_nodeselector",
 			InheritTolerations:         inheritTolerations,
 			TolerationsCacheKey:        "inherited_tolerations",
+			RequireApprovalImage:       requireApprovalImage,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "Cluster")
 			os.Exit(1)
