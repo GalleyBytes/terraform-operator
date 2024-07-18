@@ -33,9 +33,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	runtimecontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -85,6 +88,15 @@ type ReconcileTerraform struct {
 	RequireApprovalImage string
 }
 
+// getNamespace returns the namespace to create Terraform task pods and related resources in.
+func getNamespace(tf *tfv1beta1.Terraform) string {
+	podNamespace := os.Getenv("POD_NAMESPACE")
+	if podNamespace != "" && os.Getenv("USE_CONTROLLER_NAMESPACE") == "true" {
+		return podNamespace
+	}
+	return tf.Namespace
+}
+
 // createEnvFromSources adds any of the global environment vars defined at the controller scope
 // and generates a configmap or secret that will be loaded into the resource Task pods.
 //
@@ -95,7 +107,7 @@ type ReconcileTerraform struct {
 func (r ReconcileTerraform) createEnvFromSources(ctx context.Context, tf *tfv1beta1.Terraform) error {
 
 	resourceName := tf.Name
-	resourceNamespace := tf.Namespace
+	resourceNamespace := getNamespace(tf)
 	name := fmt.Sprintf("%s-%s", resourceName, r.GlobalEnvSuffix)
 	if len(r.GlobalEnvFromConfigmapData) > 0 {
 		configMap := corev1.ConfigMap{
@@ -180,15 +192,33 @@ func (r ReconcileTerraform) listEnvFromSources(tf *tfv1beta1.Terraform) []corev1
 	return envFrom
 }
 
+const labelPrefix = "terraforms.tf.galleybytes.com/"
+
+// podToTerraformResource returns the Terraform resource associated with a
+// Terraform task pod as a reconciliation request.
+func podToTerraformResource(_ context.Context, obj client.Object) []reconcile.Request {
+	annotations := obj.GetAnnotations()
+	if resourceName, ok := annotations[labelPrefix+"resourceName"]; ok {
+		if resourceNamespace, ok := annotations[labelPrefix+"resourceNamespace"]; ok {
+			return []reconcile.Request{{
+				NamespacedName: types.NamespacedName{Name: resourceName, Namespace: resourceNamespace},
+			}}
+		}
+	}
+	return []reconcile.Request{}
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *ReconcileTerraform) SetupWithManager(mgr ctrl.Manager) error {
 	controllerOptions := runtimecontroller.Options{
 		MaxConcurrentReconciles: r.MaxConcurrentReconciles,
 	}
-
 	err := ctrl.NewControllerManagedBy(mgr).
 		For(&tfv1beta1.Terraform{}).
 		Owns(&corev1.Pod{}).
+		Watches(&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(podToTerraformResource),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{})).
 		WithOptions(controllerOptions).
 		Complete(r)
 	if err != nil {
@@ -497,20 +527,24 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 	}
 
 	resourceLabels := map[string]string{
-		"terraforms.tf.galleybytes.com/generation":       fmt.Sprintf("%d", generation),
-		"terraforms.tf.galleybytes.com/resourceName":     utils.AutoHashLabeler(resourceName),
-		"terraforms.tf.galleybytes.com/podPrefix":        prefixedName,
-		"terraforms.tf.galleybytes.com/terraformVersion": terraformVersion,
-		"app.kubernetes.io/name":                         "terraform-operator",
-		"app.kubernetes.io/component":                    "terraform-operator-runner",
-		"app.kubernetes.io/created-by":                   "controller",
+		labelPrefix + "generation":        fmt.Sprintf("%d", generation),
+		labelPrefix + "resourceName":      utils.AutoHashLabeler(resourceName),
+		labelPrefix + "resourceNamespace": utils.AutoHashLabeler(tf.Namespace),
+		labelPrefix + "podPrefix":         prefixedName,
+		labelPrefix + "terraformVersion":  terraformVersion,
+		"app.kubernetes.io/name":          "terraform-operator",
+		"app.kubernetes.io/component":     "terraform-operator-runner",
+		"app.kubernetes.io/created-by":    "controller",
 	}
+	// Add the full resource name and namespace to the annotations
+	annotations[labelPrefix+"resourceName"] = resourceName
+	annotations[labelPrefix+"resourceNamespace"] = tf.Namespace
 
 	requireApproval := tf.Spec.RequireApproval
 
 	if task.ID() == -2 {
 		// This is not one of the main tasks so it's probably an plugin
-		resourceLabels["terraforms.tf.galleybytes.com/isPlugin"] = "true"
+		resourceLabels[labelPrefix+"isPlugin"] = "true"
 	}
 
 	return TaskOptions{
@@ -527,7 +561,7 @@ func newTaskOptions(tf *tfv1beta1.Terraform, task tfv1beta1.TaskName, generation
 		inheritedNodeSelector:               nodeSelector,
 		inheritedTolerations:                tolerations,
 		inlineTaskExecutionFile:             inlineTaskExecutionFile,
-		namespace:                           tf.Namespace,
+		namespace:                           getNamespace(tf),
 		resourceName:                        resourceName,
 		prefixedName:                        prefixedName,
 		versionedName:                       versionedName,
@@ -709,7 +743,7 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	stage := r.checkSetNewStage(ctx, tf, retry)
 	if stage != nil {
 		if stage.Reason == "RESTARTED_WORKFLOW" || stage.Reason == "RESTARTED_DELETE_WORKFLOW" {
-			_ = r.removeOldPlan(tf.Namespace, tf.Name, tf.Status.Stage.Reason, tf.Generation)
+			_ = r.removeOldPlan(tf)
 			// TODO what to do if the remove old plan function fails
 		}
 		reqLogger.V(2).Info(fmt.Sprintf("Stage moving from '%s' -> '%s'", tf.Status.Stage.TaskType, stage.TaskType))
@@ -785,12 +819,12 @@ func (r *ReconcileTerraform) Reconcile(ctx context.Context, request reconcile.Re
 	}
 
 	// Check for the current stage pod
-	inNamespace := client.InNamespace(tf.Namespace)
+	inNamespace := client.InNamespace(getNamespace(tf))
 	f := fields.Set{
 		"metadata.generateName": fmt.Sprintf("%s-%s-", tf.Status.PodNamePrefix+"-v"+fmt.Sprint(generation), podType),
 	}
 	labelSelector := map[string]string{
-		"terraforms.tf.galleybytes.com/generation": fmt.Sprintf("%d", generation),
+		labelPrefix + "generation": fmt.Sprintf("%d", generation),
 	}
 	matchingFields := client.MatchingFields(f)
 	matchingLabels := client.MatchingLabels(labelSelector)
@@ -1158,7 +1192,7 @@ func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1beta1.
 	} else if currentStage.State == tfv1beta1.StateFailed {
 		if currentStage.TaskType == tfv1beta1.RunApply {
 
-			err := r.Client.Get(ctx, types.NamespacedName{Namespace: tf.Namespace, Name: tf.Status.Stage.PodName}, &corev1.Pod{})
+			err := r.Client.Get(ctx, types.NamespacedName{Namespace: getNamespace(tf), Name: tf.Status.Stage.PodName}, &corev1.Pod{})
 			if err != nil && errors.IsNotFound(err) {
 				// If the task failed, is of type "apply", and the pod does not exist, restart the workflow.
 				isNewStage = true
@@ -1168,7 +1202,7 @@ func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1beta1.
 			}
 		} else if currentStage.TaskType == tfv1beta1.RunApplyDelete {
 			pod := corev1.Pod{}
-			err := r.Client.Get(ctx, types.NamespacedName{Namespace: tf.Namespace, Name: tf.Status.Stage.PodName}, &pod)
+			err := r.Client.Get(ctx, types.NamespacedName{Namespace: getNamespace(tf), Name: tf.Status.Stage.PodName}, &pod)
 			if err != nil && errors.IsNotFound(err) {
 				// If the task failed, is of type "apply", and the pod does not exist, restart the workflow.
 				isNewStage = true
@@ -1186,13 +1220,10 @@ func (r ReconcileTerraform) checkSetNewStage(ctx context.Context, tf *tfv1beta1.
 
 }
 
-func (r ReconcileTerraform) removeOldPlan(namespace, name, reason string, generation int64) error {
-
-	labelSelectors := []string{
-		fmt.Sprintf("terraforms.tf.galleybytes.com/generation==%d", generation),
-		fmt.Sprintf("terraforms.tf.galleybytes.com/resourceName=%s", utils.AutoHashLabeler(name)),
-		"app.kubernetes.io/instance",
-	}
+func (r ReconcileTerraform) removeOldPlan(tf *tfv1beta1.Terraform) error {
+	reason := tf.Status.Stage.Reason
+	labelSelectors := getCurrentGenerationLabelSelectors(tf)
+	labelSelectors = append(labelSelectors, "app.kubernetes.io/instance")
 	if reason == "RESTARTED_WORKFLOW" {
 		labelSelectors = append(labelSelectors, []string{
 			fmt.Sprintf("app.kubernetes.io/instance!=%s", tfv1beta1.RunSetup),
@@ -1219,7 +1250,7 @@ func (r ReconcileTerraform) removeOldPlan(namespace, name, reason string, genera
 	err = r.Client.DeleteAllOf(context.TODO(), &corev1.Pod{}, &client.DeleteAllOfOptions{
 		ListOptions: client.ListOptions{
 			LabelSelector: labelSelector,
-			Namespace:     namespace,
+			Namespace:     getNamespace(tf),
 			FieldSelector: fieldSelector,
 		},
 	})
@@ -1300,6 +1331,38 @@ func nextTask(currentTask tfv1beta1.TaskName, configuredTasks []tfv1beta1.TaskNa
 	return next
 }
 
+func getOldGenerationLabelSelectorString(tf *tfv1beta1.Terraform) string {
+	return strings.Join(getOldGenerationLabelSelectors(tf), ",")
+}
+
+// getOldGenerationLabelSelectors returns the label requirements used to filter
+// pods and other resources for generation other than the current one.
+func getOldGenerationLabelSelectors(tf *tfv1beta1.Terraform) []string {
+	// 1. The terraforms.tf.galleybytes.com/generation key MUST exist
+	// 2. The terraforms.tf.galleybytes.com/generation value MUST NOT match the current resource generation
+	// 3. The terraforms.tf.galleybytes.com/resourceName value MUST match the resource name
+	// 4. The terraforms.tf.galleybytes.com/resourceNamespace value MUST match the resource namespace
+	return []string{
+		labelPrefix + "generation",
+		labelPrefix + "generation!=" + fmt.Sprintf("%d", tf.Generation),
+		labelPrefix + "resourceName=" + utils.AutoHashLabeler(tf.Name),
+		labelPrefix + "resourceNamespace=" + utils.AutoHashLabeler(tf.Namespace),
+	}
+}
+
+// getCurrentGenerationLabelSelectors returns the label requirements used to
+// filter pods and other resources for the current generation.
+func getCurrentGenerationLabelSelectors(tf *tfv1beta1.Terraform) []string {
+	// 1. The terraforms.tf.galleybytes.com/generation value MUST match the current resource generation
+	// 2. The terraforms.tf.galleybytes.com/resourceName value MUST match the resource name
+	// 3. The terraforms.tf.galleybytes.com/resourceNamespace value MUST match the resource namespace
+	return []string{
+		labelPrefix + "generation=" + fmt.Sprintf("%d", tf.Generation),
+		labelPrefix + "resourceName=" + utils.AutoHashLabeler(tf.Name),
+		labelPrefix + "resourceNamespace=" + utils.AutoHashLabeler(tf.Namespace),
+	}
+}
+
 func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraform, attempt int) {
 	logger := r.Log.WithName("Reaper").WithValues("Terraform", fmt.Sprintf("%s/%s", tf.Namespace, tf.Name))
 	if attempt > 20 {
@@ -1323,12 +1386,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 		return
 	}
 
-	// The labels required are read as:
-	// 1. The terraforms.tf.galleybytes.com/generation key MUST exist
-	// 2. The terraforms.tf.galleybytes.com/generation value MUST match the current resource generation
-	// 3. The terraforms.tf.galleybytes.com/resourceName key MUST exist
-	// 4. The terraforms.tf.galleybytes.com/resourceName value MUST match the resource name
-	labelSelector, err := labels.Parse(fmt.Sprintf("terraforms.tf.galleybytes.com/generation,terraforms.tf.galleybytes.com/generation!=%d,terraforms.tf.galleybytes.com/resourceName,terraforms.tf.galleybytes.com/resourceName=%s", tf.Generation, utils.AutoHashLabeler(tf.Name)))
+	labelSelector, err := labels.Parse(getOldGenerationLabelSelectorString(tf))
 	if err != nil {
 		logger.Error(err, "Could not parse labels")
 		return
@@ -1342,7 +1400,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 	err = r.Client.DeleteAllOf(context.TODO(), &corev1.Pod{}, &client.DeleteAllOfOptions{
 		ListOptions: client.ListOptions{
 			LabelSelector: labelSelector,
-			Namespace:     tf.Namespace,
+			Namespace:     getNamespace(tf),
 			FieldSelector: fieldSelector,
 		},
 	})
@@ -1357,7 +1415,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 	podList := corev1.PodList{}
 	err = r.Client.List(context.TODO(), &podList, &client.ListOptions{
 		LabelSelector: labelSelector,
-		Namespace:     tf.Namespace,
+		Namespace:     getNamespace(tf),
 	})
 	if err != nil {
 		logger.Error(err, "Could not list pods to reap")
@@ -1374,7 +1432,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 		err = r.Client.DeleteAllOf(context.TODO(), &corev1.ConfigMap{}, &client.DeleteAllOfOptions{
 			ListOptions: client.ListOptions{
 				LabelSelector: labelSelector,
-				Namespace:     tf.Namespace,
+				Namespace:     getNamespace(tf),
 			},
 		})
 		if err != nil {
@@ -1385,7 +1443,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 		err = r.Client.DeleteAllOf(context.TODO(), &corev1.Secret{}, &client.DeleteAllOfOptions{
 			ListOptions: client.ListOptions{
 				LabelSelector: labelSelector,
-				Namespace:     tf.Namespace,
+				Namespace:     getNamespace(tf),
 			},
 		})
 		if err != nil {
@@ -1396,7 +1454,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 		err = r.Client.DeleteAllOf(context.TODO(), &rbacv1.Role{}, &client.DeleteAllOfOptions{
 			ListOptions: client.ListOptions{
 				LabelSelector: labelSelector,
-				Namespace:     tf.Namespace,
+				Namespace:     getNamespace(tf),
 			},
 		})
 		if err != nil {
@@ -1407,7 +1465,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 		err = r.Client.DeleteAllOf(context.TODO(), &rbacv1.RoleBinding{}, &client.DeleteAllOfOptions{
 			ListOptions: client.ListOptions{
 				LabelSelector: labelSelector,
-				Namespace:     tf.Namespace,
+				Namespace:     getNamespace(tf),
 			},
 		})
 		if err != nil {
@@ -1418,7 +1476,7 @@ func (r ReconcileTerraform) backgroundReapOldGenerationPods(tf *tfv1beta1.Terraf
 		err = r.Client.DeleteAllOf(context.TODO(), &corev1.ServiceAccount{}, &client.DeleteAllOfOptions{
 			ListOptions: client.ListOptions{
 				LabelSelector: labelSelector,
-				Namespace:     tf.Namespace,
+				Namespace:     getNamespace(tf),
 			},
 		})
 		if err != nil {
@@ -1451,16 +1509,17 @@ func (r ReconcileTerraform) reapPlugins(tf *tfv1beta1.Terraform, attempt int) {
 	}
 
 	// Delete old plugins regardless of pod phase
-	labelSelectorForPlugins, err := labels.Parse(fmt.Sprintf("terraforms.tf.galleybytes.com/isPlugin=true,terraforms.tf.galleybytes.com/generation,terraforms.tf.galleybytes.com/generation!=%d,terraforms.tf.galleybytes.com/resourceName,terraforms.tf.galleybytes.com/resourceName=%s", tf.Generation, utils.AutoHashLabeler(tf.Name)))
+	labelSelectorForPlugins, err := labels.Parse(labelPrefix + "isPlugin=true," + getOldGenerationLabelSelectorString(tf))
 	if err != nil {
 		logger.Error(err, "Could not parse labels")
+		return
 	}
 
 	deleteProppagationBackground := metav1.DeletePropagationBackground
 	err = r.Client.DeleteAllOf(context.TODO(), &batchv1.Job{}, &client.DeleteAllOfOptions{
 		ListOptions: client.ListOptions{
 			LabelSelector: labelSelectorForPlugins,
-			Namespace:     tf.Namespace,
+			Namespace:     getNamespace(tf),
 		},
 		DeleteOptions: client.DeleteOptions{
 			PropagationPolicy: &deleteProppagationBackground,
@@ -1473,7 +1532,7 @@ func (r ReconcileTerraform) reapPlugins(tf *tfv1beta1.Terraform, attempt int) {
 	err = r.Client.DeleteAllOf(context.TODO(), &corev1.Pod{}, &client.DeleteAllOfOptions{
 		ListOptions: client.ListOptions{
 			LabelSelector: labelSelectorForPlugins,
-			Namespace:     tf.Namespace,
+			Namespace:     getNamespace(tf),
 		},
 	})
 	if err != nil {
@@ -1486,7 +1545,7 @@ func (r ReconcileTerraform) reapPlugins(tf *tfv1beta1.Terraform, attempt int) {
 	podList := corev1.PodList{}
 	err = r.Client.List(context.TODO(), &podList, &client.ListOptions{
 		LabelSelector: labelSelectorForPlugins,
-		Namespace:     tf.Namespace,
+		Namespace:     getNamespace(tf),
 	})
 	if err != nil {
 		logger.Error(err, "Could not list pods to reap")
@@ -1604,7 +1663,7 @@ func (r ReconcileTerraform) getGitSecrets(tf *tfv1beta1.Terraform) []gitSecret {
 			ref := m.Git.HTTPS.TokenSecretRef
 			namespace := ref.Namespace
 			if ref.Namespace == "" {
-				namespace = tf.Namespace
+				namespace = getNamespace(tf)
 			}
 			secrets = append(secrets, gitSecret{
 				name:          ref.Name,
@@ -1616,7 +1675,7 @@ func (r ReconcileTerraform) getGitSecrets(tf *tfv1beta1.Terraform) []gitSecret {
 			ref := m.Git.SSH.SSHKeySecretRef
 			namespace := ref.Namespace
 			if ref.Namespace == "" {
-				namespace = tf.Namespace
+				namespace = getNamespace(tf)
 			}
 			secrets = append(secrets, gitSecret{
 				name:          ref.Name,
@@ -1785,7 +1844,7 @@ func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, tf *tfv1beta
 		}
 		ns := tf.Spec.SSHTunnel.SSHKeySecretRef.Namespace
 		if ns == "" {
-			ns = tf.Namespace
+			ns = getNamespace(tf)
 		}
 
 		key, err := loadPassword(ctx, k8sclient, k, tf.Spec.SSHTunnel.SSHKeySecretRef.Name, ns)
@@ -1826,7 +1885,7 @@ func formatJobSSHConfig(ctx context.Context, reqLogger logr.Logger, tf *tfv1beta
 			}
 			ns := m.Git.SSH.SSHKeySecretRef.Namespace
 			if ns == "" {
-				ns = tf.Namespace
+				ns = getNamespace(tf)
 			}
 			key, err := loadPassword(ctx, k8sclient, k, m.Git.SSH.SSHKeySecretRef.Name, ns)
 			if err != nil {
@@ -2981,7 +3040,7 @@ func (r ReconcileTerraform) run(ctx context.Context, reqLogger logr.Logger, tf *
 
 		labelsToOmit := []string{}
 		if runOpts.stripGenerationLabelOnOutputsSecret {
-			labelsToOmit = append(labelsToOmit, "terraforms.tf.galleybytes.com/generation")
+			labelsToOmit = append(labelsToOmit, labelPrefix+"generation")
 		}
 		if err := r.createSecret(ctx, tf, runOpts.outputsSecretName, runOpts.namespace, map[string][]byte{}, false, labelsToOmit, runOpts); err != nil {
 			return err
